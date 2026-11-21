@@ -1,0 +1,13 @@
+{
+  "display_name": "BattleTale — 턴제 전투 엔진",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "BattleTale",
+  "version": "0.12.0",
+  "homePage": "",
+  "auto_update": false,
+  "generate_interceptor": "battleTaleInterceptor"
+}
