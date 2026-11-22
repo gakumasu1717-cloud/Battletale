@@ -3,7 +3,7 @@ import * as E from '../engine.js';
 import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, inferItem, typeName, typeIn, typesFor } from '../catalog.js';
 import { escapeHtml as h, pct, norm, clamp } from '../util.js';
 import { splitBody, autoGrade, seededRng, timingFor, matchWord, fxHtml, aiLevelOf } from './shared.js';
-import { vf, mapOf, skillCard, fxLine } from '../pkui.js';
+import { vf, mapOf, skillCard, fxLine, skillItem } from '../pkui.js';
 import { josa } from '../narrate.js';
 
 const profile_sp = ctx => ctx?.spLabel ?? 'SP';
@@ -16,6 +16,34 @@ const WORDS = {
 };
 
 export const playerOf = b => b.fighters.find(f => f.isPlayer) ?? b.fighters.find(f => f.side === 'ally' && f.persistent);
+
+/** Battlefield label: icon + target + one number. The full sentence goes in the tooltip. */
+function intentShort(b, f) {
+  const it = b.intents?.[f.id];
+  if (!it) return '';
+  const lvl = f.intel ?? 1;
+  const tgt = it.target ? E.byId(b, it.target) : null;
+  const sk = it.skill ? E.findSkill(f, it.skill) : null;
+  const est = sk && tgt ? Math.round(E.estimate(b, f, tgt, sk)) : it.type === 'attack' && tgt ? Math.round(E.estimate(b, f, tgt, E.basicAttack(f))) : null;
+  const nm = n => (n.length > 5 ? `${n.slice(0, 4)}…` : n);
+  const to = tgt && lvl >= 1 ? ` ${nm(tgt.name)}` : '';
+  const num = lvl >= 2 && est ? ` ~${est}` : '';
+  switch (it.type) {
+    case 'surprised': return '😵 무방비';
+    case 'stagger': return '💫 비틀';
+    case 'charge': return `⚡ 충전${to}`;
+    case 'release': { const thr = f.charging ? f.charging.threshold - f.charging.taken : null; return `⚡⚡${to}${num}${thr ? ` ⛔${thr}` : ''}`; }
+    case 'defend': return '🛡 방어';
+    case 'swap': return '↔ 이동';
+    case 'attack': return `🗡${to}${num}`;
+    case 'skill': {
+      const k = sk?.kind ?? 'physical';
+      const icon = { heal: '✚', buff: '✨', debuff: '☠', guard: '🛡' }[k] ?? '🗡';
+      return lvl === 0 ? `${icon} ?` : `${icon}${to}${num}`;
+    }
+    default: return '';
+  }
+}
 
 function intentOf(b, f, lang = 'ko') {
   const it = b.intents?.[f.id];
@@ -280,14 +308,17 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
       </div>`;
   },
 
+  intentText: (b, f) => intentOf(b, f, 'ko') ?? '',
+
   /** Pokémon-style scene description. */
   view(b, profile, ctx) {
     const sys = b.typeSystem;
     const actor = this.actorOf(b, ctx.ui);
     const tgt = ctx.ui.target;
     const foes = b.fighters.filter(f => f.side === 'enemy').map(f => {
-      const it = E.active(f) ? intentOf(b, f, 'ko') : '';
-      return vf(f, { side: 'enemy', intel: f.intel ?? 1, typeSystem: sys, note: it, noteCls: b.intents?.[f.id]?.type ?? '', selected: f.name === tgt });
+      const it = E.active(f) ? intentShort(b, f) : '';
+      const full = E.active(f) ? intentOf(b, f, 'ko') ?? '' : '';
+      return { ...vf(f, { side: 'enemy', intel: f.intel ?? 1, typeSystem: sys, note: it, noteCls: b.intents?.[f.id]?.type ?? '', selected: f.name === tgt }), noteTitle: full };
     });
     const allies = b.fighters.filter(f => f.side === 'ally').map(f => vf(f, { side: 'ally', typeSystem: sys, selected: actor?.id === f.id && this.controlled(b).length > 1, note: f.row === 'back' ? '후열' : '' }));
     const names = b.fighters.filter(f => f.side === 'enemy').map(f => f.name);
@@ -347,20 +378,20 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     const foes = s => E.reachable(b, actor, s).map(f => f.name);
     const allyNames = b.fighters.filter(f => f.side === 'ally' && E.active(f)).map(f => f.name);
     const items = (ctx.inventory ?? []).filter(i => i.count > 0);
-    if (page === 'fight') {
-      const list = actor.skills.map(k => {
-        const cd = actor.cds?.[k.name] ?? 0;
-        const single = k.target === 'enemy' ? foes(k) : k.target === 'ally' ? allyNames : null;
-        const t = k.element && !['none', 'physical'].includes(k.element) ? typeIn(k.element, sys) : 'normal';
-        const pctCost = Math.round((k.cost / Math.max(1, actor.maxSp)) * 100);
+    // Main screen = the acting character's skills right away, plus a fixed mini bar.
+    const main = () => [
+      ...actor.skills.map(k => {
         const tgtF = ['physical', 'magic'].includes(k.kind) ? (b.fighters.find(f => f.name === ctx.ui.target && E.active(f) && f.side === 'enemy' && E.reachable(b, actor, k).includes(f)) ?? E.reachable(b, actor, k)[0]) : null;
-        const est = tgtF ? Math.min(100, Math.round((E.estimate(b, actor, tgtF, k) / Math.max(1, tgtF.hp)) * 100)) : null;
-        return { label: k.name, meta: k.cost ? `${profile_sp(ctx)} ${k.cost} · ${pctCost}%` : '무료', sub: `${t !== 'normal' || k.element === 'normal' ? typeName(k.element, sys) + ' · ' : ''}${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''}${cd ? ` · ⏳${cd}` : ''}`,
-          fx: k.cost > actor.sp ? `⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)` : [est != null ? `${tgtF.name.slice(0, 6)} 체력의 ≈${est}%` : '', fxLine(k, sys)].filter(Boolean).join(' · '), cls: `t-${t}${k.cost > actor.sp ? ' over' : ''}`, disabled: cd > 0 || !!(k.once && actor.used?.[k.name]), act: 'm:skill', v: k.name, target: single };
-      });
-      return [...list, { label: '공격', sub: '기본 공격', cls: 't-normal', act: 'm:basic', target: foes(E.basicAttack(actor)) },
-        { label: '방어', sub: '피해 반감 · 기력 +5%', cls: 'plain', act: 'm:defend' }, { label: '휴식', sub: `기력 +20% (${actor.sp}/${actor.maxSp})`, cls: 'plain', act: 'm:rest' }, { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
-    }
+        return skillItem(k, { actor, b, sys, foe: tgtF, cd: actor.cds?.[k.name] ?? 0, used: !!(k.once && actor.used?.[k.name]), target: k.target === 'enemy' ? foes(k) : k.target === 'ally' ? allyNames : null });
+      }),
+      { bar: true, label: '⚔ 공격', act: 'm:basic', target: foes(E.basicAttack(actor)), title: '기본 공격 (무료)' },
+      { bar: true, label: '🛡 방어', act: 'm:defend', title: '피해 반감 · 기력 +5%' },
+      { bar: true, label: '😮‍💨 휴식', act: 'm:rest', title: `기력 +20% (${actor.sp}/${actor.maxSp})` },
+      { bar: true, sep: true, label: '🎒 가방', page: 'bag', disabled: !items.length },
+      { bar: true, label: '👥 동료·위치', page: 'party', title: '명령할 동료 고르기 · 전열/후열 이동 · 관찰' },
+      { bar: true, label: '🏃 도망', act: 'm:flee', disabled: !b.flee },
+    ];
+    if (page === 'fight') return main();
     if (page === 'bag') {
       return [...items.map(i => { const sp = i.spec ?? inferItem(i.name); const friendly = !sp || ['heal', 'sp', 'full', 'cure', 'revive', 'buff'].includes(sp.kind);
         return { label: i.name, meta: `×${i.count}`, sub: sp ? ({ heal: 'HP 회복', sp: '기력 회복', full: '완전 회복', cure: '상태이상 회복', revive: '부활', damage: '공격', buff: '강화' }[sp.kind]) : '효과 불명', cls: 'plain', act: 'm:item', v: i.name, target: friendly ? (allyNames.length > 1 ? allyNames : null) : foes({ range: 'ranged' }) }; }),
@@ -376,8 +407,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
       return [{ label: `⚡ ${actor.charging.skill} 발동!`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' },
         { label: '동료', sub: '다른 동료에게 명령', cls: 'm-party', page: 'party' }];
     }
-    return [{ label: '싸운다', cls: 'm-fight', page: 'fight' }, { label: '가방', cls: 'm-bag', page: 'bag', disabled: !items.length },
-      { label: '동료', cls: 'm-party', page: 'party' }, { label: '도망친다', cls: 'm-run', act: 'm:flee', disabled: !b.flee }];
+    return main();
   },
 
   /** Panel action → { body, cmd } (cmd is the parsed command, used for timing). */

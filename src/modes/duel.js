@@ -6,11 +6,11 @@ import * as E from '../engine.js';
 import { STATUS, inferItem, typeName, typeIn, typesFor } from '../catalog.js';
 import { norm, hashStr } from '../util.js';
 import { splitBody, matchWord, aiLevelOf } from './shared.js';
-import { vf, mapOf, skillCard, fxLine } from '../pkui.js';
+import { vf, mapOf, skillCard, fxLine, skillItem } from '../pkui.js';
 import { josa } from '../narrate.js';
 
 const KIND_KO = { physical: '물리', magic: '특수', heal: '회복', buff: '변화', debuff: '변화', guard: '방어', revive: '부활', cleanse: '회복' };
-const WORDS = { attack: ['attack', '공격', '기본공격'], flee: ['flee', 'run', '도주', '도망', '도망친다'], switch: ['switch', '교체'], rest: ['rest', '휴식', '숨고르기'] };
+const WORDS = { attack: ['attack', '공격', '기본공격'], flee: ['flee', 'run', '도주', '도망', '도망친다'], switch: ['switch', '교체'], rest: ['rest', '휴식', '숨고르기'], defend: ['defend', 'guard', '방어', '가드'] };
 
 const field = (b, side) => b.fighters.find(f => f.side === side && E.onField(f));
 const team = (b, side) => b.fighters.filter(f => f.side === side);
@@ -196,22 +196,21 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const mate = f => ({ label: f.name, meta: `${f.hp}/${f.maxHp}`, sub: `${typesFor(f, sys).map(t => typeName(t, sys)).join('/') || '-'}${f.statuses?.length ? ` · ${f.statuses.map(s => STATUS[s.id]?.ko).join(' ')}` : ''}`, cls: 'plain', act: 'm:switch', v: f.name });
     if (b.needSwitch) return bench.map(mate);
     if (!me) return [];
-    if (page === 'fight') {
-      return [...me.skills.map(k => {
-        const t = k.element && !['none', 'physical'].includes(k.element) ? typeIn(k.element, sys) : 'normal';
-        const cd = me.cds?.[k.name] ?? 0;
-        const foe = field(b, 'enemy');
-        const dmg = ['physical', 'magic'].includes(k.kind) && foe ? E.elementMul(foe, k.element, b).mul : null;
-        const effTxt = dmg == null ? '' : dmg === 0 ? '효과 없음' : dmg >= 2 ? `효과 굉장 ×${dmg}` : dmg < 1 ? `별로 ×${dmg}` : '';
-        const est = dmg && foe ? Math.min(100, Math.round((E.estimate(b, me, foe, k) / Math.max(1, foe.hp)) * 100)) : null;
-        return { fx: k.cost > me.sp ? '⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)' : [est != null ? `≈${est}%` : '', effTxt, fxLine(k, sys)].filter(Boolean).join(' · '), label: k.name, meta: k.cost ? `${ctx?.spLabel ?? 'SP'} ${k.cost} · ${Math.round((k.cost / Math.max(1, me.maxSp)) * 100)}%` : '무료', sub: `${typeName(k.element && !['physical', 'none'].includes(k.element) ? k.element : 'normal', sys)} · ${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''}${cd ? ` · ⏳${cd}` : ''}`, cls: `t-${t}`, disabled: cd > 0 || !!(k.once && me.used?.[k.name]), act: 'm:skill', v: k.name };
-      }), { label: '공격', sub: '노말 · 기본 공격', cls: 't-normal', act: 'm:basic' }, { label: '휴식', sub: `기력 +20% (${me.sp}/${me.maxSp})`, cls: 'plain', act: 'm:rest' }, { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
-    }
+    const foe = field(b, 'enemy');
+    const main = () => [
+      ...me.skills.map(k => skillItem(k, { actor: me, b, sys, foe, cd: me.cds?.[k.name] ?? 0, used: !!(k.once && me.used?.[k.name]) })),
+      { bar: true, label: '⚔ 공격', act: 'm:basic', title: '노말 · 기본 공격 (무료)' },
+      { bar: true, label: '🛡 방어', act: 'm:defend', title: '받는 피해 ½ · 기력 +5%' },
+      { bar: true, label: '😮‍💨 휴식', act: 'm:rest', title: `기력 +20% (${me.sp}/${me.maxSp})` },
+      { bar: true, sep: true, label: '🎒 가방', page: 'bag', disabled: !items.length },
+      { bar: true, label: '🔄 교체', page: 'switch', disabled: !bench.length },
+      { bar: true, label: '🏃 도망', act: 'm:flee', disabled: !b.flee },
+    ];
+    if (me?.charging) return [{ label: `⚡ ${me.charging.skill} 발동!`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' }];
+    if (page === 'main' || page === 'fight') return main();
     if (page === 'bag') return [...items.map(i => { const sp = i.spec ?? inferItem(i.name); return { label: i.name, meta: `×${i.count}`, sub: sp ? ({ heal: 'HP 회복', sp: '기력 회복', full: '완전 회복', cure: '상태이상 회복', revive: '부활', damage: '공격', buff: '강화' }[sp.kind]) : '효과 불명', cls: 'plain', act: 'm:item', v: i.name }; }), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
     if (page === 'switch') return [...bench.map(mate), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
-    if (me?.charging) return [{ label: `⚡ ${me.charging.skill} 발동!`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' }];
-    return [{ label: '싸운다', cls: 'm-fight', page: 'fight' }, { label: '가방', cls: 'm-bag', page: 'bag', disabled: !items.length },
-      { label: '교체', cls: 'm-party', page: 'switch', disabled: !bench.length }, { label: '도망친다', cls: 'm-run', act: 'm:flee', disabled: !b.flee }];
+    return main();
   },
 
   onAct(act, v, b) {
@@ -220,6 +219,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     switch (act) {
       case 'm:skill': return { body: v, cmd: { actor: id, type: 'skill', skill: v } };
       case 'm:basic': return { body: '공격', cmd: { actor: id, type: 'attack' } };
+      case 'm:defend': return { body: '방어', cmd: { actor: id, type: 'defend' } };
       case 'm:release': return { body: '충전기 발동', cmd: { actor: id, type: 'release' } };
       case 'm:rest': return { body: '휴식', cmd: { actor: id, type: 'rest' } };
       case 'm:item': return v ? { body: `아이템 ${v}`, cmd: { actor: id, type: 'item', item: v, target: me?.name } } : null;

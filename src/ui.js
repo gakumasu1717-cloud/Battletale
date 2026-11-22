@@ -2,7 +2,7 @@
 import { escapeHtml as h, pct, norm } from './util.js';
 import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
-import { scene, menuGrid, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, skillCard } from './pkui.js';
+import { scene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, skillCard } from './pkui.js';
 import { findFighter } from './engine.js';
 import { THREAT_LABEL } from './engine.js';
 import { msgKey, profileOf, MODES, modeOf, allowedModes } from './game.js';
@@ -60,7 +60,16 @@ export function mountPanel(callbacks) {
   });
   panel.addEventListener('pointerup', () => { if (longPressed) { longPressed = false; api.ui.suppressUntil = Date.now() + 450; } }, true);
   for (const ev of ['pointerup', 'pointerleave', 'pointercancel', 'scroll']) panel.addEventListener(ev, cancelPress, true);
-  panel.addEventListener('contextmenu', e => { if (e.target.closest?.('.pk-btn[data-act="pk:item"], .pk-mon, .pz-tok')) e.preventDefault(); });
+  // Right-click (PC) = the same details a long-press opens on touch screens.
+  panel.addEventListener('contextmenu', e => {
+    const btn = e.target.closest?.('.pk-btn[data-act="pk:item"]');
+    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .pk-info[data-v]');
+    if (!btn && !who) return;
+    e.preventDefault();
+    if (btn) { const it = api.ui.menuItems?.[Number(btn.dataset.i)]; if (it && ['m:skill', 'm:basic'].includes(it.act)) api.ui.peek = Number(btn.dataset.i); }
+    else api.ui.inspect = who.dataset.v;
+    refreshPanel();
+  });
   panel.addEventListener('change', onChange);
   panel.addEventListener('toggle', e => { if (e.target?.hasAttribute?.('data-log')) api.ui.logOpen = e.target.open; }, true);
   panel.addEventListener('toggle', e => { const g = e.target?.dataset?.group; if (g && api.ui.sdOpen) api.ui.sdOpen[g] = e.target.open; }, true);
@@ -168,6 +177,37 @@ export function refreshPanel() {
   // Popups and HP slides play once per turn, not on every redraw.
   api.ui.fx = null; api.ui.anim = null; api.ui.atk = null;
   api.ui.prevHp = null;
+  scheduleAuto();
+}
+
+/* Message window plays itself: each step (or two intro lines) stays up for a beat, longer when it has more
+ * lines. Tapping still advances at once; ⓘ details, the settings drawer or another tab pause it. */
+let autoTimer = null, autoKey = '';
+function advanceTalk() {
+  const ui = api.ui;
+  if (ui.steps && (ui.stepPos ?? 0) < ui.steps.length) { ui.stepPos += 1; showStep(ui.stepPos); return; }
+  ui.msgPos = (ui.msgPos ?? 0) + 2;
+}
+function scheduleAuto() {
+  const ui = api.ui;
+  const ms = Math.max(0, Number(api.settings?.().autoPlay ?? 1300) || 0);
+  const stepping = !!ui.steps && (ui.stepPos ?? 0) < ui.steps.length;
+  const talking = (ui.msgPos ?? 0) < (ui.msg?.length ?? 0);
+  if (!ms || tab !== 'battle' || (!stepping && !talking) || ui.inspect || ui.peek != null || ui.settingsOpen || api.state?.()?.battle?.status !== 'active') {
+    clearTimeout(autoTimer); autoTimer = null; autoKey = ''; return;
+  }
+  const key = stepping ? `s${ui.stepPos}/${ui.steps.length}` : `m${ui.msgPos}/${ui.msg.length}`;
+  if (key === autoKey && autoTimer) return;
+  clearTimeout(autoTimer);
+  autoKey = key;
+  const lines = stepping ? Math.min(4, ui.steps[ui.stepPos]?.lines?.length ?? 1) : 2;
+  autoTimer = setTimeout(() => {
+    autoTimer = null;
+    if (autoKey !== key) return;
+    autoKey = '';
+    advanceTalk();
+    refreshPanel();
+  }, ms * (1 + 0.35 * Math.max(0, lines - 1)));
 }
 
 /* ---------- Settings drawer (inside the panel) ---------- */
@@ -181,6 +221,7 @@ const SETTINGS = [
     { key: 'difficulty', basic: true, type: 'select', label: '난이도', options: [['easy', '🙂 쉬움 — 공정한 전투, 기습 없음, AI 가끔 실수'], ['normal', '⚔️ 기본 — 유저 편향 없음, 기습·지형에 대비'], ['hard', '😠 어려움 — 강한 적·연계, 전술 없으면 돌파 불가'], ['nightmare', '💀 악몽 — 약점 저격·기습·불리한 지형, AI 최상']], hint: '적 구성(보조모델)과 적 AI, 기습·지형 확률이 같이 바뀌어요' },
     { key: 'spCostScale', type: 'select', label: '기력 소모 배율', options: [['1', '×1.0 (가볍게)'], ['1.3', '×1.3 (기본)'], ['1.6', '×1.6 (빡빡하게)'], ['2', '×2.0 (템템처럼 매 턴 고민)']], hint: '기술 비용에 곱해져요. 잡몹은 기력 없이 싸우고, 엘리트·보스·도감 캐릭터만 기력을 써요.' },
     { key: 'showThreat', type: 'check', label: '위협도 표시' },
+    { key: 'autoPlay', type: 'select', label: '전투 메시지 자동 넘김', options: [['0', '끔 (탭해서 넘김)'], ['900', '빠르게'], ['1300', '보통 (기본)'], ['1900', '느리게']], hint: '탭하면 언제든 바로 다음으로' },
     { key: 'showFab', type: 'check', label: '화면에 떠 있는 ⚔️ 버튼도 쓰기', hint: '기본은 채팅창 옆 마법봉(🪄) 메뉴에서 열어요' },
     { key: 'exclude', type: 'text', label: '제외할 캐릭터 (쉼표)', ph: '예: 일상봇, 비서' },
   ]],
@@ -418,7 +459,7 @@ function battleTab(s) {
     ? `<div class="pk-msg talk" data-act="pk:next">${ui.steps[ui.stepPos].lines.slice(0, 4).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span><span class="pk-stepn">${ui.stepPos + 1}/${ui.steps.length}</span>${ui.steps.length - ui.stepPos > 1 ? '<button class="pk-skip" data-act="pk:skip">⏭</button>' : ''}</div>`
     : talking
     ? `<div class="pk-msg talk" data-act="pk:next">${msg.slice(pos, pos + 2).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span>${msg.length - pos > 2 ? '<button class="pk-skip" data-act="pk:skip">⏭</button>' : ''}</div>`
-    : `<div class="pk-msg">${h(V.idle ?? '')}</div>`;
+    : `<div class="pk-msg idle">${h(V.idle ?? '')}</div>`;
   let menu = '';
   const forced = M.forced?.(b.st);
   if (forced && ui.page !== forced) ui.page = forced;
@@ -437,14 +478,14 @@ function battleTab(s) {
     } else {
       const items = M.menu(b.st, page, ctx);
       ui.menuItems = items;
-      const canPeek = items.some(it => ['m:skill', 'm:basic'].includes(it.act));
       const mini = items.length && items.every(it => it.mini);
       const order = page === 'main' && M.order ? orderLine(M.order(b.st)) : '';
-      menu = `${order}${menuGrid(items, { main: page === 'main' && !mini, cols: mini ? (items.length > 4 ? 3 : items.length) : 2 })}${canPeek ? '<div class="pk-tip">기술·캐릭터를 꾹 누르면 상세 · 적을 탭하면 대상 지정</div>' : ''}`;
+      const skillsMain = items.some(it => it.tags);
+      menu = `${order}${menuGrid(items, { main: page === 'main' && !mini && !skillsMain, cols: mini ? (items.length > 4 ? 3 : items.length) : 2 })}${barRow(items)}`;
     }
   }
   const insp = ui.inspect ? findFighter(b.st.b ?? b.st, ui.inspect, { includeDown: true }) : null;
-  const inspector = insp ? inspectHtml(insp, { b: b.st.b ?? b.st, profile: p, intel: insp.intel ?? 1, side: insp.side }) : '';
+  const inspector = insp ? inspectHtml(insp, { b: b.st.b ?? b.st, profile: p, intel: insp.intel ?? 1, side: insp.side, intent: insp.side === 'enemy' && !insp.down ? M.intentText?.(b.st, insp) : '' }) : '';
   const mini = api.ui.compact ? miniStatus(V, b, p) : '';
   const stage = api.ui.compact ? mini : V.custom ?? scene(V, ctx);
   const showBox = talking || !V.custom; // the stealth map shows its own prompts
@@ -755,6 +796,7 @@ function onClick(e) {
     api.ui.card = Number(el.dataset.i); return refreshPanel();
   }
   if (act === 'pk:peek-close') { api.ui.peek = null; return refreshPanel(); }
+  if (act === 'pk:peekbtn') { e.stopPropagation(); e.preventDefault(); api.ui.peek = Number(el.dataset.i); return refreshPanel(); }
   if (act === 'pk:use') return useCard();
   if (act === 'pk:actor') { api.ui.actor = v; api.ui.card = null; return refreshPanel(); }
   if (act === 'pk:cancel') { api.ui.card = null; return refreshPanel(); }

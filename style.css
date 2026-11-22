@@ -791,3 +791,34 @@
 .bt-go-btn { background: #e0513a !important; color: #fff !important; font-weight: 800; padding: 6px 14px !important; border: none !important; }
 .bt-go.soft .bt-go-btn { background: #e8a33d !important; color: #1b1712 !important; }
 .bt-go-x { background: none; border: none; color: #aaa; font-size: 14px; cursor: pointer; }
+
+/* ---------- v0.14.2: battle screen diet ---------- */
+/* Two-line skill buttons: dark card, type-coloured left bar, cost badge, small tags. */
+.pk-menu .pk-btn.sk { background: #22252e; color: #e8e8ee; border: 1px solid #ffffff1a; border-left: 4px solid var(--tc, #8a8c8a); padding: 6px 26px 6px 9px; min-height: 0; text-align: left; border-radius: 8px; }
+.pk-menu .pk-btn.sk:not(:disabled):hover { background: #2a2e39; }
+.pk-btn.sk .sk-l1 { display: flex; align-items: center; gap: 6px; }
+.pk-btn.sk .sk-l1 b { display: inline; flex: 1; min-width: 0; font-size: 13.5px; text-shadow: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pk-btn.sk .sk-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tc, #8a8c8a); flex-shrink: 0; }
+.pk-btn.sk em.sk-cost { position: static; font-style: normal; font-size: 11px; font-weight: 800; padding: 0 6px; border-radius: 8px; background: #ffffff14; opacity: 1; }
+.pk-btn.sk em.sk-cost.free { color: #9fd49f; }
+.pk-btn.sk em.sk-cost.over { background: #c0392b; color: #fff; }
+.pk-btn.sk .sk-l2 { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.pk-btn.sk .sk-tag { font-size: 10.5px; line-height: 1.5; padding: 0 5px; border-radius: 4px; background: #ffffff10; color: #c9ccd6; }
+.pk-btn.sk .sk-tag.good { background: #2f7d3a55; color: #9fe6a8; }
+.pk-btn.sk .sk-tag.weak { background: #ffffff08; color: #8d909a; }
+.pk-btn.sk .sk-tag.bad { background: #c0392b55; color: #ffb3a8; }
+.pk-btn.sk .sk-tag.prio { background: #e8a33d33; color: #f3c27a; }
+.pk-btn.sk .sk-tag.why { background: #00000055; color: #aaa; }
+.pk-btn.sk .sk-info { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); font-size: 12px; opacity: .45; padding: 4px; cursor: help; }
+.pk-btn.sk .sk-info:hover { opacity: 1; }
+.pk-btn.sk.over { border-left-style: dashed; }
+/* Fixed mini bar under the skills. */
+.pk-bar { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.pk-bb { flex: 1 1 auto; min-width: 0; padding: 5px 6px; border-radius: 7px; border: 1px solid #ffffff1f; background: #2a2d36; color: #e8e8ee; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.pk-bb:not(:disabled):hover { background: #343844; }
+.pk-bb:disabled { opacity: .35; cursor: not-allowed; }
+.pk-bar-sep { width: 1px; align-self: stretch; background: #ffffff22; margin: 0 2px; }
+/* Idle message: a slim status line instead of the big dialog box. */
+.pk-msg.idle { min-height: 0; padding: 4px 10px; font-size: 12.5px; border-width: 0 0 0 3px; border-radius: 6px; background: #22252e; color: #d8d8e0; box-shadow: none; border-color: #e8a33d; }
+.pk-ins-intent { margin: 4px 0; padding: 4px 8px; border-radius: 6px; background: #e8a33d22; font-size: 12px; }
+.pk-info .pk-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

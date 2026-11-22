@@ -22,7 +22,7 @@ const DEFAULTS = {
   length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
   timingMode: 'off', modes: { party: true, duel: true, stealth: true }, showThreat: true,
-  playMode: 'panel', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
+  playMode: 'panel', autoPlay: '1300', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
 };
 
 const ctx = () => SillyTavern.getContext();

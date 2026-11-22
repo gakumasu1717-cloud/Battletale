@@ -106,7 +106,7 @@ export function infoBox(F, ctx, { compact = false } = {}) {
     <div class="pk-row1"><span class="pk-name">${h(F.name)}</span>${types}${F.threat === 'boss' ? '<span class="pk-boss">BOSS</span>' : F.threat === 'elite' ? '<span class="pk-elite">★</span>' : ''}<span class="pk-lv">${h(F.tier || '')}</span></div>
     <div class="pk-hprow">${hpBar(F, ctx)}${!compact ? nums : ''}</div>${sp}
     ${chips || state ? `<div class="pk-chips">${state ? `<span class="pk-st down">${state}</span>` : ''}${chips}</div>` : ''}
-    ${F.note && !F.down ? `<div class="pk-note ${F.noteCls}">${h(F.note)}</div>` : ''}
+    ${F.note && !F.down ? `<div class="pk-note ${F.noteCls}" title="${h(F.noteTitle || F.note)}">${h(F.note)}</div>` : ''}
   </div>`;
 }
 
@@ -159,9 +159,57 @@ export function fxLine(k, sys = 'world') {
   return c.lines.filter(l => !/^(선공|후공|재사용|\d+회 공격)/.test(l)).slice(0, 2).join(' · ');
 }
 
+/**
+ * Menu grid. Items with `tags` are skill buttons in two lines: [type dot] name · cost badge / 2-4 small tags,
+ * on a dark card with a type-coloured left bar. Items with `bar: true` are left out here (see barRow).
+ * Indices stay those of the full list, so clicks map back to ui.menuItems.
+ */
 export function menuGrid(items, { cols = 2, main = false } = {}) {
-  return `<div class="pk-menu c${cols} ${main ? 'main' : ''}">${items.map((it, i) => `<button class="pk-btn ${it.cls ?? ''}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''}>
-    <b>${h(it.label)}</b>${it.meta ? `<em>${h(it.meta)}</em>` : ''}${it.sub ? `<small>${h(it.sub)}</small>` : ''}${it.fx ? `<i class="pk-fx">${h(it.fx)}</i>` : ''}</button>`).join('')}</div>`;
+  const btn = (it, i) => {
+    if (it.tags) {
+      const col = TYPE_HEX[it.type] ?? '#8a8c8a';
+      const cost = it.over ? '<em class="sk-cost over">과로</em>' : it.cost ? `<em class="sk-cost">${h(it.cost)}</em>` : '<em class="sk-cost free">무료</em>';
+      return `<button class="pk-btn sk ${it.over ? 'over' : ''}" style="--tc:${col}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''} title="${h(it.title ?? '')}">
+        <span class="sk-l1"><i class="sk-dot"></i><b>${h(it.label)}</b>${cost}</span>
+        <span class="sk-l2">${it.tags.slice(0, 4).map(t => `<span class="sk-tag ${t.cls ?? ''}">${h(t.text ?? t)}</span>`).join('')}${it.why ? `<span class="sk-tag why">${h(it.why)}</span>` : ''}</span>
+        ${it.peek !== false ? `<span class="sk-info" data-act="pk:peekbtn" data-i="${i}" title="상세">ⓘ</span>` : ''}</button>`;
+    }
+    return `<button class="pk-btn ${it.cls ?? ''}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''}>
+    <b>${h(it.label)}</b>${it.meta ? `<em>${h(it.meta)}</em>` : ''}${it.sub ? `<small>${h(it.sub)}</small>` : ''}${it.fx ? `<i class="pk-fx">${h(it.fx)}</i>` : ''}</button>`;
+  };
+  return `<div class="pk-menu c${cols} ${main ? 'main' : ''}">${items.map((it, i) => (it.bar ? '' : btn(it, i))).join('')}</div>`;
+}
+
+/** The fixed mini bar under the skills: basic attack / guard / rest | bag / party / run. */
+export function barRow(items) {
+  const bar = items.map((it, i) => [it, i]).filter(([it]) => it.bar);
+  if (!bar.length) return '';
+  return `<div class="pk-bar">${bar.map(([it, i]) => `${it.sep ? '<i class="pk-bar-sep"></i>' : ''}<button class="pk-bb ${it.cls ?? ''}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''} title="${h(it.title ?? it.sub ?? '')}">${h(it.label)}</button>`).join('')}</div>`;
+}
+
+/** Two-line skill button data shared by the 1:1 and party menus. */
+export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, target = null, act = 'm:skill' }) {
+  const t = k.element && !['none', 'physical'].includes(k.element) ? typeIn(k.element, sys) : 'normal';
+  const over = (k.cost ?? 0) > actor.sp;
+  const tags = [];
+  if (['physical', 'magic'].includes(k.kind)) tags.push({ text: `${k.kind === 'magic' ? '✦' : '⚔'}${k.power}${k.hits > 1 ? `×${k.hits}` : ''}` });
+  else if (k.kind === 'heal') tags.push({ text: `✚${k.power}%` });
+  else tags.push({ text: { buff: '▲강화', debuff: '▼방해', guard: k.protect ? '⛨막기' : '⛨방어', revive: '✚부활', cleanse: '❖정화' }[k.kind] ?? k.kind });
+  if (k.priority > 0) tags.push({ text: '선공', cls: 'prio' });
+  if (foe && ['physical', 'magic'].includes(k.kind)) {
+    const mul = E.elementMul(foe, k.element, b).mul;
+    if (mul === 0) tags.push({ text: '무효', cls: 'bad' });
+    else {
+      const est = Math.min(100, Math.round((E.estimate(b, actor, foe, k) / Math.max(1, foe.hp)) * 100));
+      tags.push({ text: `≈${est}%`, cls: mul >= 2 ? 'good' : mul < 1 ? 'weak' : '' });
+      if (mul >= 2) tags.push({ text: `×${mul}`, cls: 'good' }); else if (mul < 1) tags.push({ text: `×${mul}`, cls: 'weak' });
+    }
+  }
+  const first = skillCard(k, { sys }).lines.find(l => !/^(선공|후공|재사용|\d+회 공격|적 전체|아군|자신|명중|HP \d+% 회복)/.test(l));
+  if (first) tags.push({ text: first.length > 12 ? `${first.slice(0, 11)}…` : first, cls: 'fx' });
+  const why = used ? '사용함' : cd ? `⏳${cd}` : '';
+  const title = `${k.name}${k.desc ? ` — ${k.desc}` : ''}${over ? `\n⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)` : ''}`;
+  return { label: k.name, type: t, cost: k.cost, over, tags, why, title, disabled: !!(cd || used), act, v: k.name, target };
 }
 
 /** After the HTML is in the page: slide HP bars from their old width to the new one. */
@@ -173,7 +221,7 @@ export function animateBars(root) {
 }
 
 /** Detail sheet for one fighter: stats with stage multipliers, status, type matchups, known skills. */
-export function inspectHtml(f, { b, profile, intel = 2, side }) {
+export function inspectHtml(f, { b, profile, intel = 2, side, intent = '' }) {
   if (!f) return '';
   const sys = b?.typeSystem ?? 'world';
   const known = side !== 'enemy' || intel >= 2;
@@ -201,6 +249,7 @@ export function inspectHtml(f, { b, profile, intel = 2, side }) {
   return `<div class="pk-inspect"><div class="pk-ins-box">
     <div class="pk-ins-head"><b>${h(f.name)}</b> <small>${h(f.tier ?? '')}</small> ${types.map(t => `<span class="bt-type t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}<button class="pk-ins-x" data-act="pk:inspect-close">✕</button></div>
     <div class="pk-ins-hp">${h(profile.hpLabel)} <b>${hp}</b>${side !== 'enemy' ? ` · ${h(profile.spLabel)} <b>${f.sp} / ${f.maxSp}</b>` : ''}${f.row && b?.format !== 'singles' ? ` · ${f.row === 'back' ? '후열' : '전열'}` : ''}</div>
+    ${intent ? `<div class="pk-ins-intent">다음 행동: ${h(intent)}</div>` : ''}
     ${f.statuses?.length ? `<div class="pk-chips">${f.statuses.map(x => `<span class="pk-st st-${x.id}">${STATUS[x.id]?.ko} ${x.turns}턴</span>`).join('')}</div>` : ''}
     <div class="pk-stats">${rows}</div>
     ${world ? `<div class="pk-world">${world}</div>` : ''}
