@@ -386,10 +386,10 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
       }),
       { bar: true, label: '⚔ 공격', act: 'm:basic', target: foes(E.basicAttack(actor)), title: '기본 공격 (무료)' },
       { bar: true, label: '🛡 방어', act: 'm:defend', title: '피해 반감 · 기력 +5%' },
-      { bar: true, label: '😮‍💨 휴식', act: 'm:rest', title: `기력 +20% (${actor.sp}/${actor.maxSp})` },
-      { bar: true, sep: true, label: '🎒 가방', page: 'bag', disabled: !items.length },
-      { bar: true, label: '👥 동료·위치', page: 'party', title: '명령할 동료 고르기 · 전열/후열 이동 · 관찰' },
-      { bar: true, label: '🏃 도망', act: 'm:flee', disabled: !b.flee },
+      { bar: true, label: '💤 휴식', act: 'm:rest', title: `기력 +20% (${actor.sp}/${actor.maxSp})` },
+      { bar: true, sep: true, icon: true, label: '🎒', page: 'bag', disabled: !items.length, title: '가방' },
+      { bar: true, icon: true, label: '👥', page: 'party', title: '동료·위치 — 명령할 동료 고르기 · 전열/후열 이동 · 관찰' },
+      { bar: true, icon: true, label: '🏃', act: 'm:flee', disabled: !b.flee, title: '도망' },
     ];
     if (page === 'fight') return main();
     if (page === 'bag') {

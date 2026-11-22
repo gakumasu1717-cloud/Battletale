@@ -2,7 +2,7 @@
 import { escapeHtml as h, pct, norm } from './util.js';
 import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
-import { scene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, skillCard } from './pkui.js';
+import { scene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, skillCard, skillSheet } from './pkui.js';
 import { findFighter } from './engine.js';
 import { THREAT_LABEL } from './engine.js';
 import { msgKey, profileOf, MODES, modeOf, allowedModes } from './game.js';
@@ -489,14 +489,18 @@ function battleTab(s) {
   const insp = ui.inspect ? findFighter(b.st.b ?? b.st, ui.inspect, { includeDown: true }) : null;
   const inspector = insp ? inspectHtml(insp, { b: b.st.b ?? b.st, profile: p, intel: insp.intel ?? 1, side: insp.side, intent: insp.side === 'enemy' && !insp.down ? M.intentText?.(b.st, insp) : '' }) : '';
   const mini = api.ui.compact ? miniStatus(V, b, p) : '';
-  const stage = api.ui.compact ? mini : V.custom ?? scene(V, ctx);
   const showBox = talking || !V.custom; // the stealth map shows its own prompts
+  V.place ??= b.place || '';
+  // Cards layout: the message ticker sits between the enemy rows and the ally HUD.
+  const inField = !api.ui.compact && !V.custom;
+  const stage = api.ui.compact ? mini : V.custom ?? scene(V, ctx, { box: showBox ? box : '' });
   const peekIt = ui.peek != null ? ui.menuItems?.[ui.peek] : null;
   const peekCard = peekIt && M.peek ? M.peek(b.st, peekIt, ctx) : null;
-  const peeker = peekCard ? `<div class="pk-peek" data-act="pk:peek-close">${handHtml([peekCard], -1)}</div>` : '';
+  const est = peekIt?.tags?.find(t => String(t.text ?? t).startsWith('≈'));
+  const peeker = peekCard ? skillSheet({ ...peekCard, est: est ? Number(String(est.text ?? est).replace(/\D/g, '')) : null }) : '';
   const recent = b.history.slice(-3).flatMap(e => [`— ${e.turn}턴 —`, ...pkLines(e.events)]);
   const log = recent.length ? `<details class="pk-log" ${ui.logOpen ? 'open' : ''} data-log><summary>📜 전투 기록</summary><div>${recent.map(l => `<div class="${l.startsWith('—') ? 'pk-log-t' : ''}">${h(l)}</div>`).join('')}</div></details>` : '';
-  return `<div class="pk-wrap lr ${busy ? 'busy' : ''}">${head}${stage}${showBox ? box : ''}<div class="pk-actions ${busy ? 'off' : ''}">${menu}</div>${log}${inspector}${peeker}
+  return `<div class="pk-wrap lr ${busy ? 'busy' : ''}">${head}${stage}${showBox && !inField ? box : ''}<div class="pk-actions ${busy ? 'off' : ''}">${menu}</div>${log}${inspector}${peeker}
     ${api.settings().playMode === 'chat' ? '<div class="bt-note">채팅 모드: 버튼은 입력창에 명령을 넣어요.</div>' : ''}</div>`;
 }
 
@@ -613,7 +617,7 @@ async function shrinkImage(file, pixel) {
 }
 
 /** Help text that stays out of the way: a small ⓘ with a tooltip. */
-const tip = text => `<span class="bt-tip" title="${h(text)}" tabindex="0">ⓘ</span>`;
+const tip = text => `<span class="bt-tip" title="${h(text)}" tabindex="0" data-act="pk:tip" data-v="${h(text)}">ⓘ</span>`;
 
 function statGrid(stats, p) {
   return `<div class="sk-stats">${p.stats.map(x => `<span><small>${h(x.label || x.key)}</small><b>${stats?.[x.key] ?? '-'}</b></span>`).join('')}</div>`;
@@ -846,6 +850,8 @@ function onClick(e) {
     api.ui.card = Number(el.dataset.i); return refreshPanel();
   }
   if (act === 'pk:peek-close') { api.ui.peek = null; return refreshPanel(); }
+  // Tooltips don't exist on touch screens: tapping an intent badge or an ⓘ help mark shows the text as a toast.
+  if (act === 'pk:tip') { e.stopPropagation(); if (v) api.toast(v); return; }
   if (act === 'pk:peekbtn') { e.stopPropagation(); e.preventDefault(); api.ui.peek = Number(el.dataset.i); return refreshPanel(); }
   if (act === 'pk:use') return useCard();
   if (act === 'pk:actor') { api.ui.actor = v; api.ui.card = null; return refreshPanel(); }

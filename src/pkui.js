@@ -139,17 +139,109 @@ function monRows(list, side, ctx) {
   return side === 'enemy' ? line(back, 'far') + line(front, 'near') : line(front, 'near') + line(back, 'far');
 }
 
-export function scene(V, ctx) {
-  const n = V.foes.length, na = V.allies.length;
-  const sizeF = n <= 1 ? 'n1' : n === 2 ? 'n2' : n <= 4 ? 'n4' : 'n6';
-  const sizeA = na <= 1 ? 'n1' : na === 2 ? 'n2' : na <= 4 ? 'n4' : 'n6';
-  return `<div class="pk-scene map-${V.map ?? 'field'} ${V.sceneCls ?? ''} ${n >= 4 ? 'crowd' : ''} ${na >= 4 ? 'crowd-a' : ''}">
-    <div class="pk-top"><div class="pk-foe-infos">${balls(V.foeBalls)}${V.foes.map(F => infoBox(F, ctx, { compact: n > 2 })).join('')}</div>
-      <div class="pk-foe-mons ${sizeF}">${monRows(V.foes, 'enemy', ctx)}</div></div>
-    <div class="pk-bot"><div class="pk-ally-mons ${sizeA}">${monRows(V.allies, 'ally', ctx)}</div>
-      <div class="pk-ally-infos">${balls(V.allyBalls)}${V.allies.map(F => infoBox(F, ctx, { compact: na > 2 })).join('')}</div></div>
-    <svg width="0" height="0" style="position:absolute"><filter id="o"><feMorphology in="SourceAlpha" operator="dilate" radius="0.6" result="d"/><feFlood flood-color="#111"/><feComposite in2="d" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></svg>
-  </div>${V.banner ?? ''}`;
+/* ---------- Battlefield: unified entity cards ----------
+ * Enemies: one card per fighter (art + name + HP with a delayed trail + chips), intent badge on top,
+ * back row (small) above the front row. Allies: a compact HUD strip under the message ticker.
+ * Art is the character's own portrait as a full-bleed background, else an original vector emblem
+ * on a type-coloured glow. */
+const EMBLEM = {
+  male: '<circle cx="12" cy="7.6" r="4"/><path d="M3.6 21.5c.6-4.7 4.1-7.7 8.4-7.7s7.8 3 8.4 7.7z"/>',
+  female: '<path d="M12 3c-3.1 0-5.2 2.4-5.2 5.4 0 2.3.7 4-.9 5.8 1.5.7 3.4.5 4.4-.4h3.4c1 .9 2.9 1.1 4.4.4-1.6-1.8-.9-3.5-.9-5.8C17.2 5.4 15.1 3 12 3z"/><path d="M4 21.5c.7-4 4-6.5 8-6.5s7.3 2.5 8 6.5z"/>',
+  monster: '<path d="M2.5 3.5 7 7.2h10l4.5-3.7-1.2 8.3c0 5.1-3.7 9.2-8.3 9.2s-8.3-4.1-8.3-9.2z"/><path fill="#0d0f14" d="M7.2 11.2l3.3 1.4-.6 1.6-3-1.2zM16.8 11.2l-3.3 1.4.6 1.6 3-1.2zM9 16.6h6l-1 2-1-1-1 1-1-1-1 1z"/>',
+  kaiju: '<path d="M3.5 2 7 7.4h10L20.5 2l-.6 8 2.1 2.6-3.3 1-1.6 7.4H7l-1.6-7.4-3.3-1L4.1 10z"/><path fill="#0d0f14" d="M8 11.5l2.6.8-.4 1.3-2.4-.6zM16 11.5l-2.6.8.4 1.3 2.4-.6z"/>',
+  geometric: '<path d="M12 1.8 19.5 8 12 22.2 4.5 8z"/><path fill="#0d0f14" opacity=".35" d="M12 1.8 4.5 8h15z"/>',
+  fairy: '<path d="M12 10c-3.1-6.4-9.5-6.3-9.5-.9S7.8 14.2 12 12c4.2 2.2 9.5 2.5 9.5-2.9S15.1 3.6 12 10z"/><circle cx="12" cy="16.2" r="3.2"/>',
+  unknown: '<circle cx="12" cy="12" r="9.5" opacity=".35"/><path d="M9.2 9.3c0-1.8 1.3-3 2.9-3s2.8 1.1 2.8 2.6c0 2.4-2.9 2.5-2.9 5.1" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17.6" r="1.4"/>',
+};
+const CROWN = '<svg class="en-crown" viewBox="0 0 24 12"><path d="M2 11 3.5 2l5 5L12 1l3.5 6 5-5L22 11z"/></svg>';
+function artHtml(F, cls = 'en-art') {
+  if (F.portrait) return `<div class="${cls} has-img">${portraitImg(F.portrait, { hidden: F.hidden, cls: 'en-bg' })}</div>`;
+  return `<div class="${cls}"><svg class="en-emblem" viewBox="0 0 24 24" aria-hidden="true">${EMBLEM[F.shape] ?? EMBLEM.monster}</svg></div>`;
+}
+function hpTrail(F, ctx, cls) {
+  const to = F.hpUnknown ? 100 : clamp(Math.round(F.hp / Math.max(1, F.maxHp) * 100), 0, 100);
+  const prev = ctx?.ui?.prevHp?.[F.name];
+  const from = F.hpUnknown || prev == null ? to : prev;
+  const label = F.hpUnknown ? '???' : F.showNums ? `${F.hp}/${F.maxHp}` : `${to}%`;
+  return `<div class="${cls}"><div class="en-trail" style="width:${Math.max(from, to)}%" data-to="${to}"></div><div class="pk-hp-fill ${F.hpUnknown ? 'u' : hpCls(to)}" style="width:${from}%" data-to="${to}"></div><span>${h(label)}</span></div>`;
+}
+function chipsHtml(F) {
+  return F.statuses.map(s => `<span class="pk-st st-${s.id}">${STATUS_SHORT[s.id] ?? STATUS[s.id]?.ko ?? s.id}${s.turns ? ` ${s.turns}` : ''}</span>`).join('')
+    + Object.entries(F.stages ?? {}).filter(([, v]) => v).map(([k, v]) => `<span class="pk-stage ${v > 0 ? 'up' : 'down'}">${STAGE_SHORT[k] ?? k}${v > 0 ? '▲' : '▼'}${Math.abs(v)}</span>`).join('');
+}
+function fxLayer(F, ctx) {
+  const fx = ctx?.ui?.fx?.[F.name];
+  const pops = fx?.length ? `<div class="bt-fx-wrap">${fx.slice(0, 5).map((x, i) => `<span class="bt-fx ${x.cls}" style="animation-delay:${x.d ?? i * 0.18}s">${h(x.text)}</span>`).join('')}</div>` : '';
+  const bursts = (ctx?.ui?.anim?.[F.name] ?? []).slice(0, 4).map(a => `<div class="pk-hitfx k-${a.k} ${a.super ? 'super' : ''}" style="--c:${a.c};--d:${a.d}s"></div>`).join('');
+  const firstHit = fx?.find(x => ['dmg', 'crit', 'super', 'ko'].includes(x.cls));
+  return { html: bursts + pops, hit: firstHit ? `hit ${firstHit.cls === 'crit' || firstHit.cls === 'super' ? 'hard' : ''}` : '', hd: firstHit?.d ?? 0 };
+}
+function cardState(F, ctx) {
+  const tgt = ctx?.ui?.targetable?.includes(F.name) ? 'tgt' : '';
+  const sel = (tgt && ctx.ui.target === F.name) || (!ctx?.ui?.targetable && F.selected) ? 'sel' : '';
+  const atkD = ctx?.ui?.atk?.[F.name];
+  return { cls: `${F.down ? 'down' : ''} ${sel} ${tgt} ${atkD != null ? 'atk' : ''}`, style: atkD != null ? `--d:${atkD}s;` : '' };
+}
+
+export function enemyCard(F, ctx, { small = false } = {}) {
+  const t = F.types[0]?.id ?? 'normal';
+  const fx = fxLayer(F, ctx);
+  const st = cardState(F, ctx);
+  const state = F.out === 'yield' ? '항복' : F.out ? '이탈' : F.down ? '기절' : '';
+  const intent = F.note && !F.down ? `<div class="en-intent ${F.noteCls ?? ''}" title="${h(F.noteTitle || F.note)}" data-act="pk:tip" data-v="${h(F.noteTitle || F.note)}">${h(F.note)}</div>` : '';
+  const types = (F.types.length ? F.types : F.typeSystem === 'pokemon' ? [{ id: 'normal', label: '노말' }] : []).map(x => `<span class="pk-tdot t-${x.id}">${h(x.label)}</span>`).join('');
+  return `<div class="en-card ${small ? 'small' : ''} ${st.cls} ${fx.hit}" style="--tc:${TYPE_HEX[t] ?? '#6b6e78'};${st.style}--hd:${fx.hd}s" ${!F.down || fx.html ? `data-act="pk:pick" data-v="${h(F.name)}"` : ''}>
+    ${intent}${F.threat === 'boss' ? CROWN : ''}
+    ${artHtml(F)}
+    <button class="en-i" data-act="pk:inspect" data-v="${h(F.name)}" title="상세">ⓘ</button>
+    <div class="en-overlay">
+      <div class="en-top"><span class="en-name">${h(F.name)}</span>${F.threat === 'elite' ? '<span class="en-elite">★</span>' : ''}<span class="en-tier">${h(F.tier || '')}</span></div>
+      <div class="en-types">${types}</div>
+      ${hpTrail(F, ctx, 'en-hp')}
+      ${state || F.statuses.length || Object.values(F.stages ?? {}).some(Boolean) ? `<div class="en-chips">${state ? `<span class="pk-st down">${state}</span>` : ''}${chipsHtml(F)}</div>` : ''}
+    </div>${fx.html}</div>`;
+}
+
+export function allyCard(F, ctx) {
+  const t = F.types[0]?.id ?? 'normal';
+  const fx = fxLayer(F, ctx);
+  const st = cardState(F, ctx);
+  const state = F.out ? '이탈' : F.down ? '기절' : '';
+  const sp = F.sp != null ? `<div class="al-sp"><div style="width:${clamp(Math.round(F.sp / Math.max(1, F.maxSp) * 100), 0, 100)}%"></div></div>` : '';
+  return `<div class="al-card ${st.cls} ${fx.hit}" style="--tc:${TYPE_HEX[t] ?? '#6b6e78'};${st.style}--hd:${fx.hd}s" data-act="pk:pick" data-v="${h(F.name)}">
+    ${artHtml(F, 'al-art')}
+    <div class="al-body">
+      <div class="en-top"><span class="en-name">${h(F.name)}</span>${F.row === 'back' ? '<span class="al-row">후열</span>' : ''}${F.note && !F.down && F.note !== '후열' ? `<span class="al-note">${h(F.note)}</span>` : ''}<span class="en-tier">${h(F.tier || '')}</span></div>
+      ${hpTrail(F, ctx, 'en-hp')}${sp}
+      ${state || F.statuses.length || Object.values(F.stages ?? {}).some(Boolean) ? `<div class="en-chips">${state ? `<span class="pk-st down">${state}</span>` : ''}${chipsHtml(F)}</div>` : ''}
+    </div>${fx.html}</div>`;
+}
+
+/** Field = enemy rows (back above front) · message ticker · ally HUD strip. */
+export function scene(V, ctx, { box = '' } = {}) {
+  const foes = V.foes ?? [], allies = V.allies ?? [];
+  const back = foes.filter(F => F.row === 'back'), front = foes.filter(F => F.row !== 'back');
+  const row = (list, small) => (list.length ? `<div class="bf-row ${small ? 'back' : 'front'} n${Math.min(4, list.length)}">${list.map(F => enemyCard(F, ctx, { small })).join('')}</div>` : '');
+  const shake = (ctx?.ui?.lastEvents ?? []).some(e => (e.t === 'hit' && (e.crit || e.eff === 'super')) || ['break', 'down', 'enrage'].includes(e.t));
+  return `<div class="bf-field map-${V.map ?? 'field'} ${V.sceneCls ?? ''} ${shake ? 'shake' : ''}">
+      ${V.place ? `<div class="bf-place">${h(V.place)}</div>` : ''}
+      <div class="bf-foes">${balls(V.foeBalls)}${row(back, true)}${row(front, false)}</div>
+    </div>${box}
+    <div class="bf-allies">${balls(V.allyBalls)}${allies.map(F => allyCard(F, ctx)).join('')}</div>${V.banner ?? ''}`;
+}
+
+/** Skill details in the panel's own style (bottom sheet), from a skillCard() object. */
+export function skillSheet(c) {
+  if (!c) return '';
+  const col = TYPE_HEX[c.type] ?? '#8a8c8a';
+  const kind = KIND_NAME[c.kind] ?? c.kind ?? '';
+  return `<div class="pk-inspect sk-sheet" data-act="pk:peek-close"><div class="pk-ins-box" style="--tc:${col}">
+    <div class="pk-ins-head"><i class="sk-dot"></i><b>${h(c.name)}</b>${c.typeLabel ? `<span class="pk-tdot t-${c.type}">${h(c.typeLabel)}</span>` : ''}<small>${h(c.kindLabel ?? kind)}</small><button class="pk-ins-x" data-act="pk:peek-close">✕</button></div>
+    <div class="sk-sheet-nums">${c.power != null ? `<span><small>위력</small><b>${c.power}</b></span>` : ''}<span><small>${h(c.spLabel ?? 'SP')}</small><b>${c.cost ?? 0}</b></span>${c.est != null ? `<span><small>예상</small><b>≈${c.est}%</b></span>` : ''}</div>
+    ${c.lines?.length ? `<div class="sk-sheet-fx">${c.lines.map(l => `<span>${h(l)}</span>`).join('')}</div>` : ''}
+    ${c.desc ? `<div class="sk-sheet-desc">${h(c.desc)}</div>` : ''}
+    ${c.disabled && c.why ? `<div class="sk-sheet-why">${h(c.why)}</div>` : ''}
+  </div></div>`;
 }
 
 /** items: [{ label, sub, meta, cls, disabled, act, v, page, target: [names] }] */
@@ -184,7 +276,7 @@ export function menuGrid(items, { cols = 2, main = false } = {}) {
 export function barRow(items) {
   const bar = items.map((it, i) => [it, i]).filter(([it]) => it.bar);
   if (!bar.length) return '';
-  return `<div class="pk-bar">${bar.map(([it, i]) => `${it.sep ? '<i class="pk-bar-sep"></i>' : ''}<button class="pk-bb ${it.cls ?? ''}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''} title="${h(it.title ?? it.sub ?? '')}">${h(it.label)}</button>`).join('')}</div>`;
+  return `<div class="pk-bar">${bar.map(([it, i]) => `${it.sep ? '<i class="pk-bar-sep"></i>' : ''}<button class="pk-bb ${it.icon ? 'ic' : ''} ${it.cls ?? ''}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''} title="${h(it.title ?? it.sub ?? '')}">${h(it.label)}</button>`).join('')}</div>`;
 }
 
 /** Two-line skill button data shared by the 1:1 and party menus. */
@@ -214,9 +306,10 @@ export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, 
 
 /** After the HTML is in the page: slide HP bars from their old width to the new one. */
 export function animateBars(root) {
-  const bars = root?.querySelectorAll?.('.pk-hp-fill[data-to]') ?? [];
+  const bars = root?.querySelectorAll?.('.pk-hp-fill[data-to], .en-trail[data-to]') ?? [];
   if (!bars.length) return;
-  const go = () => bars.forEach(b => { b.style.width = `${b.dataset.to}%`; b.className = b.className.replace(/\b[gyr]\b/, hpCls(+b.dataset.to)); });
+  // The fill drops at once; the pale trail behind it follows a moment later (CSS delay) — the "delayed drain".
+  const go = () => bars.forEach(b => { b.style.width = `${b.dataset.to}%`; if (b.classList.contains('pk-hp-fill')) b.className = b.className.replace(/\b[gyr]\b/, hpCls(+b.dataset.to)); });
   (globalThis.requestAnimationFrame ?? (f => setTimeout(f, 16)))(() => (globalThis.requestAnimationFrame ?? (f => setTimeout(f, 16)))(go));
 }
 

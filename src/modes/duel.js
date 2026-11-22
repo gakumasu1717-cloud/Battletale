@@ -201,10 +201,10 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
       ...me.skills.map(k => skillItem(k, { actor: me, b, sys, foe, cd: me.cds?.[k.name] ?? 0, used: !!(k.once && me.used?.[k.name]) })),
       { bar: true, label: '⚔ 공격', act: 'm:basic', title: '노말 · 기본 공격 (무료)' },
       { bar: true, label: '🛡 방어', act: 'm:defend', title: '받는 피해 ½ · 기력 +5%' },
-      { bar: true, label: '😮‍💨 휴식', act: 'm:rest', title: `기력 +20% (${me.sp}/${me.maxSp})` },
-      { bar: true, sep: true, label: '🎒 가방', page: 'bag', disabled: !items.length },
-      { bar: true, label: '🔄 교체', page: 'switch', disabled: !bench.length },
-      { bar: true, label: '🏃 도망', act: 'm:flee', disabled: !b.flee },
+      { bar: true, label: '💤 휴식', act: 'm:rest', title: `기력 +20% (${me.sp}/${me.maxSp})` },
+      { bar: true, sep: true, icon: true, label: '🎒', page: 'bag', disabled: !items.length, title: '가방' },
+      { bar: true, icon: true, label: '🔄', page: 'switch', disabled: !bench.length, title: '교체' },
+      { bar: true, icon: true, label: '🏃', act: 'm:flee', disabled: !b.flee, title: '도망' },
     ];
     if (me?.charging) return [{ label: `⚡ ${me.charging.skill} 발동!`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' }];
     if (page === 'main' || page === 'fight') return main();
