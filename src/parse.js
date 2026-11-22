@@ -84,7 +84,8 @@ function fromJson(j) {
   if (j.variant) spec.variant = String(j.variant);
   if (j.initiative) spec.initiative = ['player', 'enemy'].includes(j.initiative) ? j.initiative : 'normal';
   if (Array.isArray(j.terrain)) spec.terrain = j.terrain.filter(Boolean).map(t => (typeof t === 'string' ? { desc: t } : t));
-  for (const k of ['goal', 'style', 'why', 'distance', 'alert', 'stones']) if (j[k] != null) spec[k] = j[k];
+  for (const k of ['goal', 'style', 'why', 'distance', 'alert', 'stones', 'outmatchedWhy']) if (j[k] != null) spec[k] = j[k];
+  if (j.outmatched === true || /^(true|yes)$/i.test(String(j.outmatched ?? ''))) spec.outmatched = true;
   spec.enemies = listOf(Array.isArray(j) ? j : j.enemies).slice(0, 8);
   spec.allies = listOf(j.allies).slice(0, 4);
   spec.alliesDecided = Array.isArray(j.allies);   // the builder looked at the scene and chose (maybe nobody)
@@ -149,6 +150,7 @@ export function parseChange(body) {
     };
     if (['hp', '체력'].includes(k)) ops.push({ op: 'hp', ...who(v) });
     else if (['sp', 'mp', '마나', '기력'].includes(k)) ops.push({ op: 'sp', ...who(v) });
+    else if (['status', '상태', '상태이상'].includes(k)) { const w = /^(.+?)\s+(clear|해제|회복|없음|정상)$/i.exec(v); ops.push({ op: 'cure', who: w ? w[1].trim() : /^(clear|해제|회복|없음|정상)$/i.test(v) ? null : v }); }
     else if (['heal', '회복'].includes(k)) ops.push({ op: 'heal', who: /^(all|전체|모두|파티)$/i.test(v) ? null : v, all: /^(all|전체|모두|파티)$/i.test(v) });
     else if (['item', '아이템'].includes(k)) {
       const im = /^(.+?)\s*([+\-]\s*\d+)?\s*(?:\|\s*(.+))?$/.exec(v);

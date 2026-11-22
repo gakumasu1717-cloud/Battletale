@@ -1,7 +1,7 @@
 // Game controller: everything between "chat happened" and "engine resolved".
 // Kept free of SillyTavern globals so it can be tested with plain objects.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, statedRank, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
-import { THREAT_LABEL } from './engine.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
+import { THREAT_LABEL, threatOf, createBattle } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
 import { ruleMessages, sheetMessages, forgeMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
 import { MODES, modeOf } from './modes/index.js';
@@ -98,15 +98,14 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   const persona = deps.persona();
   const statFields = deps.statFields?.();
   const partial = sheetFromStatFields(statFields, profile);
-  // A rank the user fixed in the panel, or wrote into the persona/description ("3등급", "B랭크"), is canon.
-  const stated = s.playerTier ? { tier: s.playerTier, raw: s.playerTier } : statedRank(profile, [extra || s.playerConcept || '', persona.text]);
-  const fixedTier = partial?.tier || (stated?.tier && tierOf(profile, stated.tier)?.name) || '';
-  if (stated) deps.trace?.('balance', `명시된 등급 · ${persona.name}: "${stated.raw}" → ${fixedTier || '(룰 등급표에 없음 → 보조모델이 가장 가까운 등급으로)'}`, '');
+  // Only an explicit choice in the panel or the status window's own rank field pins the tier; anything written in
+  // the persona or description ("3등급", "프로기오", "B랭크") is read and mapped by the aux model.
+  const fixedTier = partial?.tier || (s.playerTier && tierOf(profile, s.playerTier)?.name) || '';
   let raw = null;
   if (deps.auxReady()) {
     deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
     try {
-      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier, statedRank: !fixedTier ? stated?.raw ?? '' : '' }), { maxTokens: 2400 });
+      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -380,11 +379,53 @@ function buildState(s, spec, mode, { seed, settings }) {
   // 1:1 (Pokémon singles): allies wait on the bench and can be switched in.
   const party = partyFor(s, { solo: mode === 'stealth' });
   if (mode === 'duel') party.push(...allies);
+  const fit = fitThreat(enemies, [...party, ...(mode === 'party' ? allies : [])], profile, settings, spec);
+  if (fit) spec.threatFit = fit;
   let st = M.create({ spec, profile, party, allies: mode === 'party' ? allies : [], enemies, seed, settings });
   let opening = null;
   const op = M.opening?.(st);
   if (op) { st = op.st; opening = op.events; }
   return { st, opening };
+}
+
+/**
+ * Threat ceiling per difficulty (enemy power ÷ party power, same measure as the threat label:
+ * >2.5 압도적, >1.35 위험, >0.75 대등). Ordinary encounters stay within reach of the party; only when the
+ * referee marks the scene "outmatched" (a canonically stronger foe, a place known for higher-rank monsters,
+ * the story saying {{user}} is outclassed) is the ceiling lifted.
+ */
+export const THREAT_CAP = { easy: 1.0, normal: 1.35, hard: 1.9, nightmare: 2.6 };
+export function fitThreat(enemies, side, profile, settings = {}, spec = {}) {
+  if (spec.outmatched || !side.length || !enemies.length) return null;
+  const cap = THREAT_CAP[settings.difficulty ?? 'normal'] ?? 1.35;
+  // Registered characters keep their canon sheet; only generic mooks and monsters are toned down.
+  const scalable = enemies.filter(e => !e.codexId);
+  if (!scalable.length) return null;
+  const ratio = () => threatOf(createBattle({ party: side, enemies, profile, seed: 'fit', format: 'multi' })).ratio;
+  const from = ratio();
+  if (from <= cap) return null;
+  // With a canon character in the fight, the mooks beside them shrink at most ~-50% (they must not vanish
+  // just because the boss is strong); an all-generic encounter is brought all the way under the ceiling.
+  const maxSteps = scalable.length < enemies.length ? 8 : 60;
+  let r = from, steps = 0;
+  while (r > cap && steps < maxSteps) {
+    for (const e of scalable) {
+      for (const k of Object.keys(e.stats ?? {})) e.stats[k] = Math.max(1, Math.round(e.stats[k] * 0.92));
+      const rate = e.hp / Math.max(1, e.maxHp);
+      e.maxHp = Math.max(1, Math.round(e.maxHp * 0.9)); e.hp = Math.max(1, Math.round(e.maxHp * rate));
+    }
+    r = ratio(); steps++;
+  }
+  // The rank label follows the new numbers (a "전설" bandit toned down to 중급 strength reads as 중급).
+  const tiers = profile.tiers ?? [];
+  if (steps && tiers.length) for (const e of scalable) {
+    const vals = Object.values(e.stats ?? {}).map(Number).filter(v => v > 0);
+    if (!vals.length) continue;
+    const avg = vals.reduce((a, v) => a + v, 0) / vals.length;
+    const best = tiers.slice().sort((a, b) => Math.abs((a.stat[0] + a.stat[1]) / 2 - avg) - Math.abs((b.stat[0] + b.stat[1]) / 2 - avg))[0];
+    if (best && best.name !== e.tier) e.tier = best.name;
+  }
+  return { from: Math.round(from * 100) / 100, to: Math.round(r * 100) / 100, cap, steps };
 }
 
 /** Deterministic difficulty nudges on top of what the referee wrote. */
@@ -685,6 +726,7 @@ export function applyChanges(s, ops, deps = null) {
     switch (op.op) {
       case 'hp': if (who) { who.hp = amount(op.value, who.maxHp, who.hp); done.push(`${who.name} ${profile.hpLabel} ${who.hp}/${who.maxHp}`); } break;
       case 'sp': if (who) { who.sp = amount(op.value, who.maxSp, who.sp); done.push(`${who.name} ${profile.spLabel} ${who.sp}/${who.maxSp}`); } break;
+      case 'cure': if (who) { who.statuses = []; done.push(`${who.name} 상태이상 해제`); } break;
       case 'heal': for (const x of op.all ? [s.player, ...s.companions] : [pickWho(op.who)]) if (x) { x.hp = x.maxHp; x.sp = x.maxSp; x.statuses = []; done.push(`${x.name} 완전 회복`); } break;
       case 'item': {
         const it = s.inventory.find(i => norm(i.name) === norm(op.name));

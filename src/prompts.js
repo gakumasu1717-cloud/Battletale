@@ -27,7 +27,7 @@ Work out how this world measures combat power and answer with ONE JSON object:
   "map": {                                            // how each engine stat is computed from the world's stats. Simple arithmetic on keys only.
     "pow": "STR", "mag": "INT", "def": "END", "res": "(END+INT)/2", "spd": "AGI", "acc": "SEN", "luk": "LUK"
   },
-  "tiers": [ {"name": "F", "desc": "who sits at this rank in THIS world, one short line (e.g. 'fresh guild recruits, street thugs')", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the world's OWN rank names when it has them (hunter F~S, martial-arts realms, guild ranks…). Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10). "desc" is required: it is how later sheets decide who belongs where.
+  "tiers": [ {"name": "F", "aliases": ["the same rank in the world's OTHER rank systems"], "desc": "who sits at this rank in THIS world, one short line (e.g. 'fresh guild recruits, street thugs')", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the world's OWN rank names when it has them (hunter F~S, martial-arts realms, guild ranks, named magic-power grades…). Worlds often have SEVERAL ladders at once (e.g. a hunter grade AND a mana grade with its own names like Inchio < Progio < Dominus < Arcanum < Exceedus): pick the main one for "name" and line the others up in "aliases" by what the lore says they correspond to. Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10). "desc" is required: it is how later sheets decide who belongs where.
   "elements": ["불", "물", ...],                        // elements/attributes that exist in this world (may be empty)
   "pokeMap": {"<each world element>": "<closest of the 18 Pokémon types>"},   // so the Pokémon rule set can be switched on without losing types
   "notes": "1-3 sentences on how fights work in this world (rank gaps, magic vs. tech, lethality)"
@@ -39,7 +39,7 @@ Write names and labels in the language the lore uses.`;
 
 /* ====================== Aux model: character sheets ====================== */
 export const SHEET_SCHEMA = `{
-  "name": "", "tierReason": "FIRST, one line: which canon facts (card, lore, story) place them at this rank — or 'no canon info, judged from <evidence>'",
+  "name": "", "tierReason": "FIRST, one line: quote any rank the persona/card/lore/story states for them (in whatever ladder the world uses) and how it maps to the tier list — or 'no stated rank, judged from <evidence>'",
   "tier": "<one of the tier names>", "threat": "minion|normal|elite|boss",
   "hp": <max HP>, "sp": <max resource>, "stats": {<every stat key>: <number>},
   "elements": ["1-2 types/elements in the active system"], "ptypes": ["ALWAYS 1-2 of the 18 Pokémon types that fit them (불꽃, 물, 풀, 전기, 얼음, 격투, 독, 땅, 비행, 에스퍼, 벌레, 바위, 고스트, 드래곤, 악, 강철, 페어리, 노말) — even in world-element rules, so the rule set can be switched"], "weak": [], "resist": [], "immune": [],
@@ -79,21 +79,20 @@ const SKILL_GUIDE = `Skill design guide — rank sets the budget, the archetype 
 
 const FAIRNESS = `Fairness rules (strict, two sides):
 - CANON WINS. If the character card, the world info or the story states a character's standing (a famous assassin, a guild master, a dragon, a top-ranked hunter, "the strongest in the city"), place them at the rank that standing means in this world's tier list — read each tier's description. Do not shrink canon characters to a "safe" low rank; when evidence is thin, judge from their role in the story and pick the middle, not the bottom.
-- STATED RANK IS CANON. A rank the user writes for a character ("3등급", "B랭크", "rank: 상급", a status window's rank field) is a fact of the world — use exactly that rank, even for the player character.
+- STATED RANK IS CANON. A rank written for a character in ANY of the world's rank systems — numbered grades ("3등급"), guild/hunter ranks ("B랭크"), named magic-power grades (e.g. "프로기오", "Dominus"), realms, levels, a status window's rank field — is a fact of the world, even for the player character. Read the persona, card, description and lore for such wording, then find the tier it corresponds to by tier names, aliases, descriptions and the order of that ladder in the lore. If the tier list lacks that ladder, place the rank by its relative position (e.g. the 2nd of 5 mana grades ≈ the 2nd fifth of the tier list) and explain the mapping in tierReason.
 - WISHES DON'T. Vague praise and power fantasies ("a genius", "the strongest", "can beat anyone") never buy extra power: without a stated rank or canon standing, a rookie is a rookie however cool the concept sounds.
 - Stats stay inside their tier's range and skills inside the rank budget.
 - Nobody gets an answer to every situation (no "counters everything", no free full heals, no instant wins). Real characters have gaps: a fragile caster, a slow bruiser, a melee fighter with no ranged option.
 - If the user listed skills, treat them as a WISH LIST: keep their names and flavor, but set power, priority, accuracy and effects by the rank budget, and drop or weaken anything above it.`;
 
-export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '', statedRank = '' }) {
+export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '' }) {
   const maxSkills = profile.typeSystem === 'pokemon' ? 4 : 6;
   const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance and never favor the player. Output only JSON.`;
   const user = `## Rule set
 ${profileText(profile)}
 
 ${lore ? `## World info for this character (canonical rank and abilities)\n${lore}\n` : ''}${card ? `## Character card (canon setting — may describe this character)\n${card}\n` : ''}
-## Who to build: ${npc ? `the character "${personaName}"` : `the player character "${personaName}"`}${tier ? ` — rank: ${tier} (FIXED by the user/world — use exactly this tier, its stat/HP ranges and its skill budget)` : ''}${statedRank ? `
-## Rank stated by the user: "${statedRank}" — this is the character's rank in the world, not a wish. Use the tier that means the same thing in the tier list above (closest by name or meaning) and say so in tierReason.` : ''}
+## Who to build: ${npc ? `the character "${personaName}"` : `the player character "${personaName}"`}${tier ? ` — rank: ${tier} (FIXED by the user/world — use exactly this tier, its stat/HP ranges and its skill budget)` : ''}
 ${persona || '(no description)'}${keepSkills ? `\n\n## The user's description and wished-for skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}` : ''}
 ${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
 ## Task
@@ -146,9 +145,9 @@ ${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}
 
 /* ====================== Aux model: forging an encounter ====================== */
 export const DIFFICULTY = {
-  easy: { ko: '쉬움', ai: 'normal', stance: 'Difficulty EASY: encounters are fair and readable. No ambush on the player unless the story clearly demands it; no stacked hostile terrain.' },
-  normal: { ko: '기본', ai: 'hard', stance: 'Difficulty NORMAL: no favoritism toward {{user}}. Enemies ambush or set traps when it fits the scene, and places give hostile terrain when they would have it. The player should need some preparation and tactics.' },
-  hard: { ko: '어려움', ai: 'hard', stance: 'Difficulty HARD: zero favoritism. Encounters lean against {{user}}: enemies sit at the upper end of what fits the place, coordinate (attackers plus a support/healer, rows used well, a charger to interrupt), and the fight is winnable only with tactics — focus fire, breaking charges, type matchups, resting at the right time. Use ambush or hostile terrain whenever plausible.' },
+  easy: { ko: '쉬움', ai: 'normal', stance: 'Difficulty EASY: encounters are fair and readable, a little below the strength of {{user}}. No ambush on the player unless the story clearly demands it; no stacked hostile terrain.' },
+  normal: { ko: '기본', ai: 'hard', stance: 'Difficulty NORMAL: an even fight for the strength of {{user}} — winnable with sensible play, with real risk. Enemies ambush or set traps when it fits the scene, and places give hostile terrain when they would have it.' },
+  hard: { ko: '어려움', ai: 'hard', stance: 'Difficulty HARD: dangerous for the strength of {{user}} but winnable with tactics: enemies at the upper end of the range of {{user}} (a leader may be one rank higher), coordinated (attackers plus a support/healer, rows used well, a charger to interrupt). Use ambush or hostile terrain when plausible.' },
   nightmare: { ko: '악몽', ai: 'brutal', stance: 'Difficulty NIGHTMARE: the fight is stacked against {{user}}. Enemies exploit the party\'s weaknesses — choose enemy types and skills that hit the party\'s weak types and resist its main attack types, target its fragile members, and disable its healer. Prefer ambushes ("initiative": "enemy") and terrain that hurts the party. Enemies are as strong as the setting can justify; bosses one rank higher.' },
 };
 
@@ -163,7 +162,7 @@ export function forgeMessages({ profile, lore, scene, party, hint, inventory, mo
 ${profileText(profile)}
 
 ${lore ? `## World info for the named characters/places in this scene — read carefully, they keep this canonical strength\n${lore}\n` : ''}
-## The player's side (for reference only — do NOT scale enemies to it)
+## The player's side (the yardstick for ordinary enemies)
 ${party}
 Inventory: ${inventory || '(empty)'}
 
@@ -178,6 +177,8 @@ A confrontation is starting in the latest scene. Answer with ONE JSON object:
   "why": "one line: why this mode",
   "title": "short name", "place": "where", "flee": true,
   "initiative": "player|enemy|normal",
+  "outmatched": false,                 // true only with a canon reason the foe outclasses {{user}} (see rules)
+  "outmatchedWhy": "",
   "terrain": [{"desc": "short description", "side": "all|ally|enemy", "stages": {"acc": -1}}],
   "enemies": [ <sheet> + {"row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker"} ],
   "allies": [ <sheet> or {"ref": "<registered name>"} ],   // who REALLY fights beside the player right now (party mode). Read the recent story: only characters present in the scene and on the player's side. Registered characters → {"ref"}. Nobody there → []
@@ -193,8 +194,9 @@ ${codex ? `\n## Registered characters (stats and skills are already stored)\n${c
 
 ## Honesty rules — the most important part
 - ${(DIFFICULTY[difficulty] ?? DIFFICULTY.normal).stance}
-- Do NOT balance the encounter against the player. Build what actually exists here: numbers, ranks and abilities come from the place's danger, the lore and the story. A dungeon of a high rank holds high-rank monsters even if the player is weak; a back-alley thug is weak even if the player is strong.
-- It is fine if the fight is hopeless or trivial. Hopeless fights are where fleeing, stealth and preparation matter.
+- SCALE ORDINARY ENEMIES TO {{user}}. Thugs, guards, wild monsters, rivals and unnamed foes use ranks around {{user}}'s own: mooks one rank lower or equal, regulars equal, a leader at most one higher — adjusted by the difficulty above. Numbers come from that rank, not from how scary the scene sounds.
+- Go clearly beyond {{user}}'s strength ONLY when the scene or lore SPECIFICALLY establishes it: a named character whose canon rank is higher, a place the lore says holds higher-rank monsters, or the story stating {{user}} is outmatched. Then add "outmatched": true and "outmatchedWhy": "<the canon fact>". Without such a fact, never build an overwhelming fight — "it felt dramatic" is not a reason.
+- Weaker-than-{{user}} fights are fine when the scene is clearly minor (a drunk, a pickpocket).
 - Named characters keep their canonical strength from their world info. Nameless mooks and wild monsters: judge from the scene and the rule set's tiers.
 - Enemies fight intelligently with what they really have: real skill sets, sensible rows (fragile casters/archers in the back), real weaknesses only if they make sense.
 - initiative: "player" only if the player prepared an ambush, approached unseen or struck first; "enemy" if the player walked into a trap, ignored warnings or was careless; otherwise "normal".
@@ -204,6 +206,33 @@ ${codex ? `\n## Registered characters (stats and skills are already stored)\n${c
 ${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}
 - Enemies follow the same rank budget (a boss may use one rank higher). Their rank comes from what they are in this world, not from the player's rank.
 - Mode flavor: in "duel" give the opponent mind-game tools (a protect/guard move, a pivot move if it has teammates, a big move that needs reading); in "party" make the group play as a unit — a front-row tank (trait vanguard or a taunt), a back-row damage dealer or healer, and moves that combo (one applies mark/vulnerable/burn, another exploits it), or a charger the player can break.`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+/* ====================== Aux model: tracking condition between fights ====================== */
+export function stateMessages({ status, inventory, text, recent = '' }) {
+  const system = 'You keep the condition of a roleplay party up to date, like a fair game master. You read one story passage and output only the state changes it implies. Output only JSON.';
+  const user = `## Party now (authoritative numbers)
+${status}
+Bag: ${inventory || '(empty)'}
+${recent ? `\n## Just before\n${recent}\n` : ''}
+## New story passage
+${text}
+
+## Task
+Did this passage change anyone's HP, resource, status or items OUTSIDE a battle? Answer with ONE JSON object:
+{"changes": ["<lines in this syntax>"], "why": "one short line"}
+Line syntax (who defaults to {{user}}; add a name for a companion):
+  hp: full | +30% | -15% | +120 | Name +40%
+  sp: full | +40% | -30% | Name full
+  status: clear | Name clear
+  item: Item name -1 | Item name +2
+Guide — scale to what is actually shown:
+- full night's sleep / long safe rest / full treatment → hp: full, sp: full, status: clear
+- short break, meal, catching breath → hp +15..30%, sp +20..40%
+- potion, first aid, healing magic → as strong as described; a used consumable → item -1
+- new wounds, poison, exhaustion, spending mana on a spell → hp -10..40%, sp -20..60%; do not drop anyone to 0 unless they collapse
+- Only what the passage shows happening now. No change, talk only, or a fight still in progress → {"changes": []}.`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
@@ -237,7 +266,7 @@ export function profileText(p) {
   return [
     `Name: ${p.name}`,
     `Stats: ${p.stats.map(s => `${s.key}${s.label && s.label !== s.key ? ` (${s.label})` : ''}`).join(', ')}; health "${p.hpLabel}", resource "${p.spLabel}"`,
-    `Tiers, weakest → strongest (HP / resource / stat ranges${p.tiers.some(t => t.desc) ? ' — who belongs there' : ''}):\n${p.tiers.map(t => `  - ${t.name}: ${t.hp.join('-')}/${t.sp.join('-')}/${t.stat.join('-')}${t.desc ? ` — ${t.desc}` : ''}`).join('\n')}`,
+    `Tiers, weakest → strongest (HP / resource / stat ranges${p.tiers.some(t => t.desc) ? ' — who belongs there' : ''}):\n${p.tiers.map(t => `  - ${t.name}${t.aliases?.length ? ` (= ${t.aliases.join(' / ')})` : ''}: ${t.hp.join('-')}/${t.sp.join('-')}/${t.stat.join('-')}${t.desc ? ` — ${t.desc}` : ''}`).join('\n')}`,
     p.typeSystem === 'pokemon' ? `Type system: Pokémon rules. Use ONLY these 18 types for characters (1-2 each) and skills: ${Object.values(POKE_KO).join(', ')}. Official Pokémon type chart, same-type bonus ×1.5. Every combatant — monsters, thugs, humans — gets 1-2 types that fit its nature (a goblin: 악/독, a knight: 강철/격투, a plain human: 노말); every skill gets a type too (untyped = 노말). Matchups come ONLY from the chart: leave weak/resist/immune empty. "physical" skills use pow vs def, "magic" (= special) use mag vs res.` : p.elements?.length ? `Elements: ${p.elements.join(', ')}` : '',
     p.notes ? `Notes: ${p.notes}` : '',
   ].filter(Boolean).join('\n');
@@ -382,8 +411,13 @@ export function worldPrompt({ mode, player, party, profile, statusWindow, change
     if (statusWindow) out.push('Use these exact HP/SP values in any status window.');
   }
   if (changes) {
-    out.push('', 'If the story changes {{user}}\'s HP/SP, items, stats or skills outside battle (rest, healing, injury, loot, training), add at the end:',
-      '<bt-change>', 'hp: +200 | -50 | full', 'sp: +30 | full', 'item: Item name +1', 'stat: STR +2', 'skill: Skill name: physical 60 <type> (what it does)', 'upgrade: Skill name power +10', 'join: Name | tier <tier>', 'leave: Name',
+    out.push('', 'Keep {{user}}\'s condition like a game master. Whenever the story changes HP/SP, items, stats or skills outside battle, add at the end a <bt-change> block, with amounts that match what happened:',
+      '- a full night\'s sleep or a long safe rest → hp: full, sp: full, status: clear',
+      '- a short break, a meal, catching breath → hp: +15%..+30%, sp: +20%..+40%',
+      '- first aid, a potion, healing magic → as strong as described (hp: +40%, or full for a miracle); used consumables → item: Name -1',
+      '- new wounds, poison, exhaustion, spent mana → hp: -10%..-40%, sp: -20%..-60% (never to 0 outside a fight unless the story says they collapse)',
+      '- companions the same way: hp: Name +30%',
+      '<bt-change>', 'hp: +200 | -50 | +30% | full', 'sp: +30 | -40% | full', 'status: clear', 'item: Item name +1', 'stat: STR +2', 'skill: Skill name: physical 60 <type> (what it does)', 'upgrade: Skill name power +10', 'join: Name | tier <tier>', 'leave: Name',
       'npc: Name | stat AGI +5 | learn Skill: magic 70 <type> | upgrade Skill power +10 | tier B', '</bt-change>', 'Only the lines that apply. npc: is for registered characters who grow stronger in the story. The values above are already up to date — write only new changes. Never output <bt-change> during a battle.');
   }
   if (registered.length) out.push('', `[Registered characters — their stats and skills are stored by the engine: ${registered.join(', ')}]`);

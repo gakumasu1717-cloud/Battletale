@@ -358,13 +358,12 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.equal(G.retryBattle(s, SET), null, 'no retry after the result went to the story');
 });
 
-/* 26 */ await test('적어 둔 등급(3등급·B랭크·Lv.45)은 그대로 인정, 아이템 이름은 무시', () => {
-  const w = C.normalizeProfile({ tiers: [{ name: '5등급' }, { name: '4등급' }, { name: '3등급' }, { name: '2등급' }, { name: '1등급' }] });
-  assert.equal(C.statedRank(w, '세계관상 3등급 헌터다')?.tier, '3등급');
-  assert.equal(C.statedRank(C.applyTierPreset(C.normalizeProfile({}), 'hunter').profile, 'B랭크 헌터')?.tier, 'B');
-  assert.equal(C.statedRank(C.setTypeSystem(C.normalizeProfile({}), 'pokemon'), 'Lv.45 트레이너')?.tier, 'Lv.45');
-  assert.equal(C.statedRank(C.normalizeProfile({}), '하급 포션을 들고 다닌다'), null);
-  assert.deepEqual(C.statedRank(w, '나는 7등급'), { tier: null, raw: '7등급' });
+/* 26 */ await test('등급 별칭: 세계관의 다른 등급 체계 이름으로도 같은 등급을 찾는다', () => {
+  const w = C.normalizeProfile({ tiers: [{ name: 'E', aliases: ['인치오'] }, { name: 'C', aliases: ['프로기오'] }, { name: 'A', aliases: ['도미누스', 'Dominus'] }] });
+  assert.equal(C.tierOf(w, '프로기오')?.name, 'C');
+  assert.equal(C.tierOf(w, 'dominus')?.name, 'A');
+  assert.deepEqual(w.tiers[2].aliases, ['도미누스', 'Dominus']);
+  assert.equal(C.normalizeSheet({ name: 'x', tier: '프로기오', stats: {} }, w).tier, 'C');
 });
 
 /* 27 */ await test('상시 주입: 주요 전투를 메인 모델이 끝내지 못하게 한다 (끄기 가능)', async () => {
@@ -374,6 +373,20 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
     assert.match(t, /Combat discipline/); assert.match(t, /after a fierce battle/);
   }
   assert.doesNotMatch(Pr.worldPrompt({ mode: 'hybrid', profile: PROFILE, fightGuard: false }), /Combat discipline/);
+});
+
+/* 28 */ await test('위협도: 평범한 적은 내 실력 근처로, 캐논 근거가 있을 때만 압도적', () => {
+  const mk = () => ({ name: '산적 두목', tier: '전설', hp: 6000, stats: { STR: 300, INT: 50, AGI: 200, END: 250, SEN: 150, LUK: 50 }, skills: ['대검: 물리 100'] });
+  const start = (spec, difficulty = 'normal') => { const st = G.stateOf({}); st.profile = PROFILE; st.player = hero(); return G.beginBattle(st, { mode: 'party', ...spec }, { originIndex: 0, originHash: 'x', settings: { difficulty } }); };
+  const b = start({ enemies: [mk()] });
+  assert.ok(b.spec.threatFit, 'should have been toned down');
+  assert.ok(b.threat.ratio < 2.5, `still overwhelming: ${b.threat.ratio}`);
+  const hard = start({ enemies: [mk()] }, 'hard');
+  assert.ok(hard.threat.ratio > b.threat.ratio, 'hard allows a stronger fight than normal');
+  const canon = start({ enemies: [mk()], outmatched: true, outmatchedWhy: '로어상 최강 산적' });
+  assert.ok(!canon.spec.threatFit && canon.threat.level === 'overwhelming', 'outmatched keeps the canon strength');
+  const reg = start({ enemies: [{ ...mk(), codexId: 'c1' }] });
+  assert.ok(!reg.spec.threatFit, 'registered characters are never scaled');
 });
 
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);

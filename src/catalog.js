@@ -284,6 +284,8 @@ function buildProfile(raw) {
   const tiers = (Array.isArray(p.tiers) && p.tiers.length ? p.tiers : DEFAULT_PROFILE.tiers).map(t => ({
     name: plain(t.name ?? '?') || '?', hp: range(t.hp, [100, 200]), sp: range(t.sp, [0, 50]), stat: range(t.stat, [10, 20]),
     ...(t.desc ? { desc: plain(t.desc, 80) } : {}),
+    // The same rank in the world's other ladders (magic-power grades, guild ranks, levels…).
+    ...(Array.isArray(t.aliases) && t.aliases.length ? { aliases: t.aliases.map(x => plain(x, 24)).filter(Boolean).slice(0, 6) } : {}),
   }));
   return {
     name: plain(p.name ?? '사용자 룰') || '사용자 룰', stats, map, tiers,
@@ -509,39 +511,11 @@ function guessMap(d, keys) {
   return pick[d] ?? (d === 'acc' ? pick.spd : null) ?? keys[0] ?? '10';
 }
 
-/**
- * A rank the user wrote down for their own character ("3등급 헌터", "랭크: B", "S랭크", "등급은 상급").
- * Stated rank is a fact of the world, not a wish — it is honored as-is. Returns { tier, raw } where tier is the
- * matching tier name of this profile (or null when the world has no such rank), or null when nothing is stated.
- */
-export function statedRank(profile, texts) {
-  const text = (Array.isArray(texts) ? texts : [texts]).filter(Boolean).join('\n');
-  if (!text.trim()) return null;
-  // Only explicit rank wording counts ("등급/랭크/rank …", "…등급", "S급 헌터", "Lv.40") — never a bare "하급 포션".
-  const T = String.raw`([^\s,.·()\[\]「」"']{1,8})`;
-  const pats = [
-    new RegExp(T + String.raw`\s*(등급|랭크|rank)(?![가-힣])`, 'i'),
-    new RegExp(String.raw`(?:^|[\s(\[])(?:등급|랭크|계급|rank|tier)\s*[:：]?\s*(?:은|는|이|가)?\s*` + T, 'i'),
-    new RegExp(T + String.raw`\s*급\s*(?:헌터|각성자|능력자|모험가|마법사|기사|전사|무인|용병|요원|플레이어|hunter)`, 'i'),
-    new RegExp(String.raw`(?:lv|레벨)\.?\s*(\d{1,3})`, 'i'),
-  ];
-  for (const re of pats) {
-    const m = re.exec(text);
-    if (!m) continue;
-    const word = m[2] && !/^(등급|랭크|rank)$/i.test(m[2]) ? '' : m[2] ?? '';
-    const raw = re === pats[3] ? `Lv.${m[1]}` : `${m[1]}${word}`.trim();
-    const cand = [raw, m[1], `Lv.${m[1]}`];
-    for (const c of cand) { const t = tierOf(profile, c); if (t && norm(t.name) === norm(c)) return { tier: t.name, raw }; }
-    for (const c of cand.slice(0, 2)) { const t = tierOf(profile, c); if (t) return { tier: t.name, raw }; }
-    return { tier: null, raw };
-  }
-  return null;
-}
-
 export function tierOf(profile, name) {
   if (!name) return null;
   const k = norm(name);
-  return profile.tiers.find(t => norm(t.name) === k) ?? profile.tiers.find(t => k.startsWith(norm(t.name)) || norm(t.name).startsWith(k)) ?? null;
+  return profile.tiers.find(t => norm(t.name) === k) ?? profile.tiers.find(t => (t.aliases ?? []).some(a => norm(a) === k))
+    ?? profile.tiers.find(t => k.startsWith(norm(t.name)) || norm(t.name).startsWith(k)) ?? null;
 }
 
 /* ---------- Skill inference & normalization ---------- */

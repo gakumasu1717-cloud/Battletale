@@ -1,5 +1,5 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, statedRank } from './src/catalog.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaText, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
@@ -8,7 +8,7 @@ import {
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
   playLocal, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
 } from './src/game.js';
-import { sheetMessages, castMessages } from './src/prompts.js';
+import { sheetMessages, castMessages, stateMessages } from './src/prompts.js';
 // 타이밍 리듬게임은 보류 중 (요청에 따라 비활성화). 다시 켜려면 아래 import와 modeAct의 타이밍 블록 주석을 해제.
 // import { runTiming } from './src/timing.js';
 import { mountPanel, togglePanel, refreshPanel, refreshTrace, renderCards, settingsHtml, setFab, beginTurn, endTurn, toggleDock, refreshDock } from './src/ui.js';
@@ -22,7 +22,7 @@ const DEFAULTS = {
   length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
   timingMode: 'off', modes: { party: true, duel: true, stealth: true }, showThreat: true,
-  playMode: 'panel', autoPlay: '1300', fightGuard: true, ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
+  playMode: 'panel', autoPlay: '1300', fightGuard: true, stateWatch: 'auto', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
 };
 
 const ctx = () => SillyTavern.getContext();
@@ -240,6 +240,8 @@ async function processMessage(index) {
     else if (b.kind === 'battle') spec = parseBattleBody(b.body) ?? spec;
     else if (b.kind === 'start') startHint = b.body || startHint || '';
   }
+  // No <bt-change> from the main model: let the aux model read the passage and keep HP/SP/items in step.
+  if (!blocks.some(b => b.kind === 'change')) await watchState(s, m, index);
   if (blocks.length && set.hideBlocks) {
     m.mes = stripBlocks(m.mes);
     if (Array.isArray(m.swipes)) m.swipes[m.swipe_id ?? 0] = m.mes;
@@ -263,6 +265,35 @@ async function processMessage(index) {
   afterChange();
 }
 
+const STATE_CUES = /쉬[었었고며자]|휴식|잠[을이에들]|잠든|잤|자고|눈을 떴|아침이|하룻밤|숙소|여관|야영|노숙|식사|밥을|먹[었고으]|치료|치유|회복|붕대|포션|물약|약을|상처|부상|다쳤|다친|피를|출혈|쓰러|기절|독에|중독|지쳤|탈진|녹초|마나|마력을|기력|체력|숨을 고|rest|sleep|slept|heal|potion|wound|injur|bandage|meal|camp|exhaust/i;
+/**
+ * State watcher (outside battles): the aux model reads a story message and returns <bt-change>-style lines,
+ * so resting, treatment, wounds or spent mana move HP/SP/items without a fixed rule.
+ * "auto" asks only when the passage mentions such things; "always" reads every message.
+ */
+async function watchState(s, m, index) {
+  const set = settings();
+  const mode = set.stateWatch ?? 'auto';
+  if (mode === 'off' || !set.trackChanges || !s.player || s.battle?.status === 'active' || !effectiveAuxReady()) return;
+  const text = stripBlocks(String(m.mes ?? ''));
+  if (text.length < 40 || (mode === 'auto' && !STATE_CUES.test(text))) return;
+  const p = profileOf(s);
+  const line = x => `- ${x.name}${x.isPlayer ? ' ({{user}})' : ''}: ${p.hpLabel} ${x.hp}/${x.maxHp}, ${p.spLabel} ${x.sp}/${x.maxSp}${x.statuses?.length ? `, status: ${x.statuses.map(st => st.id).join(' ')}` : ''}`;
+  try {
+    const r = await deps().auxJson(stateMessages({
+      status: [s.player, ...s.companions].map(line).join('\n'),
+      inventory: s.inventory.filter(i => i.count > 0).map(i => `${i.name} ×${i.count}`).join(', '),
+      text: text.slice(-3500), recent: recentScene(ctx().chat.slice(0, index), 2, stripBlocks).slice(-1200),
+    }), { maxTokens: 800 });
+    const lines = (Array.isArray(r?.changes) ? r.changes : []).map(String).filter(Boolean).slice(0, 12);
+    if (!lines.length) return;
+    const ops = parseChange(lines.join('\n'));
+    const done = applyChanges(s, ops, deps());
+    trace('change', `상태 감시 · 변경 ${done.length}건 (메시지 #${index})`, `이유: ${r?.why ?? ''}\n줄: ${lines.join(' / ')}\n적용: ${done.join(', ') || '(없음)'}`);
+    if (done.length) toast(`🩹 ${done.join(', ')}`);
+  } catch (e) { trace('error', '상태 감시 실패', String(e?.message ?? e)); }
+}
+
 /** Forge (or resolve) the fight signalled by message #index and open the panel. */
 async function startFrom(index, { hint = '', spec = null } = {}, s = state()) {
   if (forging) return toast('이미 준비 중이에요…', 'warning');
@@ -274,7 +305,7 @@ async function startFrom(index, { hint = '', spec = null } = {}, s = state()) {
       await ensurePlayer(s, deps());
       const finalSpec = spec ? resolveRegistered(s, spec, deps(), set) : await forgeSpec(s, deps(), { hint: hint ?? '' });
       const b = beginBattle(s, finalSpec, { originIndex: index, originHash: hashStr(m.mes), settings: set });
-      trace('start', `전투 시작: ${b.mode} · ${b.title || ''}`, `신호: ${spec ? '<bt-battle> 직접 작성' : `<bt-start> ${hint}`}\n적: ${finalSpec.enemies.map(e => `${e.name}${e.tier ? ` [${e.tier}]` : ''}`).join(', ')}\n위협도: ${b.threat?.level ?? '?'}`);
+      trace('start', `전투 시작: ${b.mode} · ${b.title || ''}`, `신호: ${spec ? '<bt-battle> 직접 작성' : `<bt-start> ${hint}`}\n적: ${finalSpec.enemies.map(e => `${e.name}${e.tier ? ` [${e.tier}]` : ''}`).join(', ')}\n위협도: ${b.threat?.level ?? '?'}${b.spec?.threatFit ? `\n⚖️ 실력에 맞게 적 조정: 전력비 ${b.spec.threatFit.from} → ${b.spec.threatFit.to} (난이도 상한 ${b.spec.threatFit.cap})` : b.spec?.outmatched ? `\n⚠ 압도적 허용: ${b.spec.outmatchedWhy || '(이유 없음)'}` : ''}`);
       m.extra = { ...(m.extra ?? {}), battletale: { ...(m.extra?.battletale ?? {}) } };
       m.extra.battletale.origin = [...(m.extra.battletale.origin ?? []), b.id];
       delete m.extra.battletale.pending;
@@ -298,7 +329,7 @@ function announce(b) {
   const M = modeOf(b.mode);
   const foes = M.enemiesOf(b.st).map(f => f.name).join(', ');
   const threat = { overwhelming: '압도적', dangerous: '위험', even: '대등', favorable: '우세', trivial: '쉬움' }[b.threat?.level];
-  toast(`${M.icon} ${M.ko} 개시! ${foes}${threat && settings().showThreat ? ` · 위협도 ${threat}` : ''}${b.opening?.length ? ' · 기습당함!' : ''}`, b.threat?.level === 'overwhelming' ? 'warning' : 'success');
+  toast(`${M.icon} ${M.ko} 개시! ${foes}${threat && settings().showThreat ? ` · 위협도 ${threat}` : ''}${b.spec?.threatFit ? ' · ⚖️ 실력에 맞게 조정됨' : ''}${b.opening?.length ? ' · 기습당함!' : ''}`, b.threat?.level === 'overwhelming' ? 'warning' : 'success');
 }
 
 async function manualStart(hint = '', mode = null) {
@@ -437,8 +468,6 @@ const panelApi = {
     try {
       const profile = await ensureProfile(s, deps());
       // Read only this character's own world-info entries (if any), not the whole lorebook.
-      // A rank written into the description ("3등급", "B랭크") is canon: fix it unless one was chosen.
-      if (!tier) { const st = statedRank(profile, concept); if (st?.tier) { tier = st.tier; trace('balance', `명시된 등급 · ${name}: "${st.raw}" → ${tier}`, ''); } }
       const lore = (await matchLore(settings(), [name, aliases, concept].join('\n'))).text;
       toast(`🤖 ${name} 시트 생성 중…${lore ? ' (월드인포 참고)' : ''}`);
       const prev = id ? deps().codex.list().find(x => x.id === id) : null;

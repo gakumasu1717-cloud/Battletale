@@ -262,6 +262,7 @@ const SETTINGS = [
     { key: 'statTag', type: 'text', label: '상태창 태그', ph: 'stat (비우면 안 씀)' },
     { key: 'statSync', type: 'select', label: '상태창 → 시트', options: [['all', 'HP/SP + 스탯 + 스킬'], ['hpsp', 'HP/SP만'], ['off', '안 함']] },
     { key: 'trackChanges', type: 'check', label: '회복·아이템·성장 <bt-change> 추적' },
+    { key: 'stateWatch', type: 'select', label: '보조모델 상태 감시 (휴식·치료·부상 → HP/SP)', options: [['auto', '자동: 휴식·치료·부상 묘사가 있을 때만 (추천)'], ['always', '매 메시지마다'], ['off', '끔 (메인 모델의 <bt-change>만)']], hint: '메인 모델이 <bt-change>를 빼먹어도 보조모델이 장면을 읽고 HP·기력·상태이상·아이템을 맞춰요', show: s => s.auxSource !== 'none' },
     { key: 'autoRegister', type: 'check', label: '네임드 NPC 자동 도감 등록' },
     { key: 'hideBlocks', type: 'check', label: '채팅에서 <bt-…> 블록 숨기기' },
     { key: 'reviveAfter', type: 'check', label: '전투 후 기절한 동료 HP 1로' },
@@ -666,8 +667,8 @@ function sheetTab(s) {
   }
   const concept = s.playerConcept ?? '';
   const aiForm = `<div class="bt-section pc-form"><div class="bt-sub">✨ AI로 ${me ? '다시 만들기' : '시트 만들기'} ${tip('숫자(위력·확률·스탯)는 AI가 세계관 등급에 맞춰 정하고, 등급을 넘는 건 자동으로 깎여요. 상태창이 있으면 그 수치를 그대로 써요.')}</div>
-      <div class="bt-row"><label>등급<select class="text_pole" data-act="player-tier"><option value="">페르소나·설명에 적힌 등급 → 없으면 AI 판단</option>${p.tiers.map(t => `<option value="${h(t.name)}" ${s.playerTier === t.name ? 'selected' : ''} title="${h(t.desc ?? '')}">${h(t.name)} 고정</option>`).join('')}</select></label></div>
-      <textarea class="text_pole" id="bt-sheet-extra" rows="3" placeholder="어떤 전투 스타일인지 자유롭게 적어주세요.  등급을 적으면(예: 3등급, B랭크) 그대로 써요.&#10;예) 쌍검을 쓰는 속도형 검사. 번개를 두른 돌진기, 상대 방어를 깎는 연속베기 같은 느낌">${h(concept)}</textarea>
+      <div class="bt-row"><label>등급<select class="text_pole" data-act="player-tier"><option value="">AI 판단 (페르소나·설명·로어의 등급 표기를 읽어요)</option>${p.tiers.map(t => `<option value="${h(t.name)}" ${s.playerTier === t.name ? 'selected' : ''} title="${h(t.desc ?? '')}">${h(t.name)} 고정</option>`).join('')}</select></label></div>
+      <textarea class="text_pole" id="bt-sheet-extra" rows="3" placeholder="어떤 전투 스타일인지 자유롭게 적어주세요. 세계관 등급을 적으면(예: 3등급, 프로기오, B랭크) AI가 등급표에 맞춰 읽어요.&#10;예) 쌍검을 쓰는 속도형 검사. 번개를 두른 돌진기, 상대 방어를 깎는 연속베기 같은 느낌">${h(concept)}</textarea>
       <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="gen-sheet" ${busy ? 'disabled' : ''}>${me ? '🎲 리롤' : '🧬 AI로 시트 생성'}</button>
         <button class="menu_button" data-act="import-stat">📥 상태창에서 불러오기</button></div>
       ${me ? `<div class="bt-sub" style="margin-top:8px">✍️ 수정 지시</div>
@@ -705,7 +706,7 @@ function rulesTab(s) {
       <div class="bt-note">스탯: ${p.stats.map(x => h(x.label && x.label !== x.key ? `${x.key}(${x.label})` : x.key)).join(', ')} · 체력 ${h(p.hpLabel)} · 자원 ${h(p.spLabel)}</div>
       <div class="bt-note">계산: ${Object.entries(p.map).map(([k, v]) => `${DERIVED_KO[k]}=${h(v)}`).join(', ')}</div>
       <div class="bt-note">등급: ${p.tiers.map(t => `<span title="${h(t.desc ?? '')}">${h(t.name)}(${t.hp[0]}~${t.hp[1]})</span>`).join(' → ')}</div>
-      ${p.tiers.some(t => t.desc) ? `<details class="bt-note"><summary>등급별 기준</summary>${p.tiers.map(t => `<div>· <b>${h(t.name)}</b> — ${h(t.desc ?? '(설명 없음)')}</div>`).join('')}</details>` : ''}
+      ${p.tiers.some(t => t.desc) ? `<details class="bt-note"><summary>등급별 기준</summary>${p.tiers.map(t => `<div>· <b>${h(t.name)}</b>${t.aliases?.length ? ` <small>(= ${t.aliases.map(h).join(' / ')})</small>` : ''} — ${h(t.desc ?? '(설명 없음)')}</div>`).join('')}</details>` : ''}
       ${p.elements?.length ? `<div class="bt-note">속성: ${p.elements.map(h).join(', ')}</div>` : ''}
       ${p.notes ? `<div class="bt-note">${h(p.notes)}</div>` : ''}
     </div>
