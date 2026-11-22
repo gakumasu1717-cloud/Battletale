@@ -210,6 +210,129 @@ const snap = s => JSON.stringify({ st: s.battle.st, inv: s.inventory, n: s.battl
   assert.deepEqual(b.st.fighters.filter(f => f.side === 'ally').map(f => f.name).sort(), ['나', '서윤'].sort());
 });
 
+/* ---------- v-next: combat identity, budgets, fairness ---------- */
+const PK = C.setTypeSystem(C.normalizeProfile({}), 'pokemon');
+const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stats: { STR: 50, INT: 50, AGI: 50, END: 50, SEN: 50, LUK: 20 }, ...o }, PK, { side });
+
+/* 16 */ await test('포켓몬 룰: 동급 상대의 약점+자속 일격에 풀피에서 즉사하지 않는다', () => {
+  for (let i = 0; i < 12; i++) {
+    const me = { ...pkSheet({ name: '나', ptypes: ['에스퍼'], skills: [{ name: '사이코키네시스', kind: 'magic', power: 90, element: '에스퍼' }] }, 'ally'), id: 'player', isPlayer: true };
+    const foe = pkSheet({ name: '자객', ptypes: ['악', '독'], stats: { STR: 55, INT: 60, AGI: 60, END: 50, SEN: 50, LUK: 40 }, skills: [{ name: '암흑참', kind: 'magic', power: 140, element: '악', cooldown: 4, charge: false, crit: 0.5 }] });
+    const b = E.createBattle({ party: [me], enemies: [foe], profile: PK, seed: `oneshot${i}`, initiative: 'enemy', format: 'singles' });
+    const r = E.resolveTurn(b, [], { ambush: true });
+    const p = r.battle.fighters.find(f => f.isPlayer);
+    assert.ok(!p.down && p.hp > 0, `seed ${i}: one-shot from full HP (${JSON.stringify(r.events.filter(e => e.t === 'hit'))})`);
+  }
+  // A huge power gap still kills outright.
+  const weak = { ...pkSheet({ name: '나', ptypes: ['에스퍼'], stats: { STR: 10, INT: 10, AGI: 10, END: 10, SEN: 10, LUK: 10 }, hp: 120 }, 'ally'), id: 'player', isPlayer: true };
+  const dragon = pkSheet({ name: '용', ptypes: ['악'], stats: { STR: 200, INT: 200, AGI: 200, END: 200, SEN: 200, LUK: 50 }, skills: [{ name: '파멸', kind: 'magic', power: 120, element: '악', charge: false }] });
+  const r2 = E.resolveTurn(E.createBattle({ party: [weak], enemies: [dragon], profile: PK, seed: 'gap', initiative: 'enemy', format: 'singles' }), [], { ambush: true });
+  assert.ok(r2.battle.fighters.find(f => f.isPlayer).down, 'overwhelming foe should still one-shot');
+});
+
+/* 17 */ await test('표식을 건 뒤 조건부 기술이 배율로 터지고 표식을 소모한다', () => {
+  const me = { ...C.normalizeSheet({ name: '사냥꾼', hp: 600, sp: 300, stats: { STR: 50, INT: 20, AGI: 50, END: 40, SEN: 60, LUK: 20 }, skills: [
+    { name: '표적 지정', kind: 'physical', power: 30, status: { id: 'mark', chance: 100, turns: 3 } },
+    { name: '처형', kind: 'physical', power: 70, bonusIf: { status: 'mark', mul: 1.7, consume: true } }] }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const dummy = C.normalizeSheet({ name: '허수아비', hp: 50000, stats: { STR: 1, END: 40, AGI: 1 } }, PROFILE);
+  let b = E.createBattle({ party: [me], enemies: [dummy], profile: PROFILE, seed: 'mark' });
+  let r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '표적 지정' }]);
+  assert.ok(r.battle.fighters.find(f => f.name === '허수아비').statuses.some(s => s.id === 'mark'));
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '처형' }]);
+  assert.ok(r.events.some(e => e.t === 'combo'), 'combo should fire');
+  assert.ok(r.events.some(e => e.t === 'consume' && e.status === 'mark'), 'mark consumed');
+  assert.ok(!r.battle.fighters.find(f => f.name === '허수아비').statuses.some(s => s.id === 'mark'));
+});
+
+/* 18 */ await test('반동·HP 소모·전투당 1회 기술', () => {
+  const me = { ...C.normalizeSheet({ name: '광전사', hp: 600, sp: 300, stats: { STR: 60, END: 40, AGI: 40, SEN: 50 }, skills: [
+    { name: '이판사판', kind: 'physical', power: 100, recoil: 0.33 }, { name: '피의 일격', kind: 'physical', power: 80, hpCost: 15 }, { name: '최후의 일섬', kind: 'physical', power: 120, once: true, charge: false }] }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const dummy = C.normalizeSheet({ name: '바위', hp: 90000, stats: { STR: 1, END: 40, AGI: 1 } }, PROFILE);
+  let b = E.createBattle({ party: [me], enemies: [dummy], profile: PROFILE, seed: 'cost' });
+  let r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '이판사판' }]);
+  assert.ok(r.events.some(e => e.t === 'hit' && e.label === '반동' && e.target === '광전사'), 'recoil');
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '피의 일격' }]);
+  assert.ok(r.events.some(e => e.t === 'hpcost'), 'hp cost');
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '최후의 일섬' }]);
+  assert.ok(r.events.some(e => e.t === 'use' && e.skill === '최후의 일섬'));
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '최후의 일섬' }]);
+  assert.ok(r.events.some(e => e.t === 'fallback' && e.why === 'used'), 'second use blocked');
+  // One-line notation round-trips.
+  const k = C.normalizeSkill('폭발 돌진: 물리 90 반동25% 조건:화상×1.5 1회');
+  assert.equal(k.recoil, 0.25); assert.equal(k.once, true); assert.deepEqual(k.bonusIf, { status: 'burn', mul: 1.5 });
+  assert.match(C.skillLine(k), /반동25%.*조건:화상×1.5.*1회/);
+});
+
+/* 19 */ await test('프로텍트는 공격을 막고, 연속으로 쓰면 확률이 떨어진다', () => {
+  const me = { ...pkSheet({ name: '나', ptypes: ['노말'], skills: [{ name: '방어', kind: 'guard', protect: true }] }, 'ally'), id: 'player', isPlayer: true };
+  const foe = pkSheet({ name: '적', skills: [{ name: '몸통박치기', kind: 'physical', power: 60 }] });
+  let b = E.createBattle({ party: [me], enemies: [foe], profile: PK, seed: 'prot', format: 'singles' });
+  let r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '방어' }]);
+  assert.ok(r.events.some(e => e.t === 'protect' && e.ok));
+  assert.ok(!r.events.some(e => e.t === 'hit' && e.target === '나'), 'no damage through protect');
+  let fails = 0;
+  for (let i = 0; i < 20; i++) {
+    let x = E.createBattle({ party: [me], enemies: [foe], profile: PK, seed: `prot${i}`, format: 'singles' });
+    x = E.resolveTurn(x, [{ actor: 'player', type: 'skill', skill: '방어' }]).battle;
+    const r2 = E.resolveTurn(x, [{ actor: 'player', type: 'skill', skill: '방어' }]);
+    if (r2.events.some(e => e.t === 'protect' && !e.ok)) fails++;
+  }
+  assert.ok(fails >= 4 && fails <= 16, `second protect should fail about half the time (${fails}/20)`);
+});
+
+/* 20 */ await test('유턴(교체기)은 쓰고 나서 대기 중인 동료와 바뀐다', () => {
+  const me = { ...pkSheet({ name: '나', skills: [{ name: '유턴', kind: 'physical', power: 70, element: '벌레', pivot: true }] }, 'ally'), id: 'player', isPlayer: true };
+  const mate = { ...pkSheet({ name: '동료' }, 'ally'), id: 'mate', persistent: true };
+  const foe = pkSheet({ name: '적', hp: 9000 });
+  const b = E.createBattle({ party: [me, mate], enemies: [foe], profile: PK, seed: 'piv', format: 'singles' });
+  const r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '유턴' }]);
+  assert.ok(r.events.some(e => e.t === 'switch' && e.pivot && e.to === '동료'));
+  assert.ok(r.battle.fighters.find(f => f.name === '동료' && !f.bench));
+});
+
+/* 21 */ await test('입력 토큰 예산: 대화 기록부터 줄이고 규칙·과제는 그대로', async () => {
+  const A = await import(here + 'assist.js');
+  const long = Array.from({ length: 400 }, (_, i) => `대화 ${i}: 고블린이 공격했다. 검을 휘둘렀다.`).join('\n');
+  const msgs = [{ role: 'system', content: 'sys' }, { role: 'user', content: `## Rule set\nRULES-KEEP\n\n## World info about people\n${'로어 '.repeat(800)}\n\n## Story so far (most recent last)\n${long}\n\n## Task\nTASK-KEEP` }];
+  const r = A.fitInput(msgs, { auxMaxInput: 3000 });
+  assert.ok(r.est <= 3000 || r.cut.length >= 2, `still too big: ${r.est}`);
+  const u = r.messages[1].content;
+  assert.ok(u.includes('RULES-KEEP') && u.includes('TASK-KEEP'));
+  assert.ok(u.includes('대화 399'), 'newest story line kept');
+  assert.ok(!u.includes('대화 0:'), 'oldest story line dropped');
+  assert.equal(A.fitInput(msgs, { auxMaxInput: 0 }).cut.length, 0);
+});
+
+/* 22 */ await test('등급: 포켓몬 룰 전환 시 기본 등급 → 레벨대, 설명 유지, 프리셋 매핑', () => {
+  const g = C.normalizeProfile({});
+  assert.ok(g.tiers.every(t => t.desc), 'default tiers carry descriptions');
+  const pk = C.setTypeSystem(g, 'pokemon');
+  assert.equal(pk.tiers[0].name, 'Lv.10'); assert.equal(pk.tiers.at(-1).name, 'Lv.100');
+  assert.equal(C.setTypeSystem(pk, 'world').tiers[0].name, '일반인');
+  const custom = C.normalizeProfile({ tiers: [{ name: '삼류' }, { name: '일류' }, { name: '화경' }] });
+  assert.equal(C.setTypeSystem(custom, 'pokemon').tiers[0].name, '삼류', 'world ranks stay');
+  const { profile, map } = C.applyTierPreset(g, 'hunter');
+  assert.equal(profile.tiers.length, 7); assert.equal(map('전설'), 'S'); assert.equal(map('일반인'), 'F');
+});
+
+/* 23 */ await test('피해 있는 약화기는 공격기로, 무상 부가효과는 공격기 절반까지만', () => {
+  const k = C.normalizeSkill({ name: '독침', kind: 'debuff', power: 60, status: { id: 'poison', chance: 40 } });
+  assert.equal(k.kind, 'magic');
+  const sh = C.normalizeSheet({ name: '마녀', tier: '중급', hp: 500, stats: {}, skills: [
+    { name: 'A', kind: 'magic', power: 60, status: { id: 'burn', chance: 30 } }, { name: 'B', kind: 'magic', power: 60, status: { id: 'poison', chance: 30 } },
+    { name: 'C', kind: 'magic', power: 60, status: { id: 'blind', chance: 30 } }, { name: 'D', kind: 'magic', power: 60, status: { id: 'bleed', chance: 30 } }] }, C.normalizeProfile({}));
+  C.auditSheet(sh, C.normalizeProfile({}));
+  assert.equal(sh.skills.filter(x => x.status).length, 2, 'half of 4 attacks keep their effect (was 1 under the old ¼ rule)');
+});
+
+/* 24 */ await test('어려움은 이야기에 없는 기습을 넣지 않는다', () => {
+  for (let i = 0; i < 20; i++) {
+    const st = G.stateOf({}); st.profile = PROFILE; st.player = hero();
+    const b = G.beginBattle(st, { mode: 'party', enemies: [{ name: '고블린', hp: 100, stats: {}, skills: [] }], initiative: 'normal' }, { originIndex: 0, originHash: `h${i}`, settings: { difficulty: 'hard' } });
+    assert.ok(!b.opening?.length, 'hard added an ambush');
+  }
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

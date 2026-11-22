@@ -10,12 +10,59 @@ export function auxReady(settings) {
   return settings.auxSource === 'main';
 }
 
+/* ---------- Input budget ----------
+ * Every aux prompt is built from "## Heading" sections. When the whole request is over the user's
+ * input limit, sections are shortened by priority: story history first (oldest lines go), then world
+ * info / registered lists (the tail goes), then the character card / persona. Rules, the task and the
+ * output schema are never cut. */
+export function estTokens(s) {
+  const t = String(s ?? '');
+  const wide = (t.match(/[ᄀ-ᇿ぀-ヿ㄰-㆏㐀-鿿가-힯]/g) ?? []).length;
+  return Math.ceil(wide * 0.9 + (t.length - wide) / 3.6);
+}
+const CUT_ORDER = [
+  { re: /recent story|story so far|recent|history|scene|대화/i, keep: 'tail' },
+  { re: /world info|world lore|lore|people|registered|already registered|로어|월드/i, keep: 'head' },
+  { re: /character card|persona|캐릭터 카드|페르소나/i, keep: 'head' },
+];
+const MIN_KEEP = 400;
+export function fitInput(messages, settings) {
+  const limit = Math.max(0, Math.round(Number(settings?.auxMaxInput) || 0));
+  const total = () => msgs.reduce((a, m) => a + estTokens(m.content), 0);
+  const msgs = messages.map(m => ({ ...m, content: String(m.content ?? '') }));
+  const before = total();
+  if (!limit || before <= limit) return { messages: msgs, est: before, before, limit, cut: [] };
+  const cut = new Set();
+  const ui = msgs.findIndex(m => m.role === 'user');
+  if (ui < 0) return { messages: msgs, est: before, before, limit, cut: [] };
+  const parts = msgs[ui].content.split(/\n(?=## )/);
+  const head = p => (/^## (.*)/.exec(p)?.[1] ?? '').trim();
+  for (const group of CUT_ORDER) {
+    for (let guard = 0; guard < 80; guard++) {
+      msgs[ui].content = parts.join('\n');
+      if (total() <= limit) break;
+      const idx = parts.map((p, i) => ({ i, p })).filter(x => group.re.test(head(x.p)) && !/^(task|rule set|answer|modes|honesty)/i.test(head(x.p)) && x.p.length > MIN_KEEP)
+        .sort((a, b) => b.p.length - a.p.length)[0]?.i;
+      if (idx == null) break;
+      const p = parts[idx];
+      const nl = p.indexOf('\n');
+      const title = nl > 0 ? p.slice(0, nl) : p, body = nl > 0 ? p.slice(nl + 1) : '';
+      const keepLen = Math.max(MIN_KEEP - title.length, Math.floor(body.length * 0.7));
+      const trimmed = group.keep === 'tail' ? `…(older part cut for length)\n${body.slice(-keepLen)}` : `${body.slice(0, keepLen)}\n…(rest cut for length)`;
+      parts[idx] = `${title}\n${trimmed}`;
+      cut.add(head(p));
+    }
+  }
+  msgs[ui].content = parts.join('\n');
+  return { messages: msgs, est: total(), before, limit, cut: [...cut] };
+}
+
 export async function callAux(messages, settings, { maxTokens } = {}) {
   // The user's limit wins (reasoning models need room); the per-call value is only a fallback.
   const tokens = Number(settings.auxMaxTokens) > 0 ? Number(settings.auxMaxTokens) : (maxTokens ?? 10000);
   const c = ctx();
   const userName = c.name1 || 'User';
-  const msgs = messages.map(m => ({ role: m.role, content: String(m.content).replace(/\{\{user\}\}/gi, userName) }));
+  const msgs = fitInput(messages, settings).messages.map(m => ({ role: m.role, content: String(m.content).replace(/\{\{user\}\}/gi, userName) }));
 
   if (settings.auxSource === 'profile') {
     const svc = c.ConnectionManagerRequestService;
@@ -213,6 +260,24 @@ export function personaText() {
   const pu = c.powerUserSettings ?? {};
   const desc = pu.persona_description ?? '';
   return cleanLore(desc).slice(0, 3000);
+}
+
+/** Lines of recent messages that mention any of the names (for judging one character's canon strength). */
+export function mentions(chat, names, { lookback = 60, max = 2500, strip = s => s } = {}) {
+  const keys = (names ?? []).map(x => String(x ?? '').trim()).filter(k => k.length >= 2);
+  if (!keys.length) return '';
+  const out = [];
+  let used = 0;
+  for (const m of (chat ?? []).filter(x => !x.is_system).slice(-lookback).reverse()) {
+    const text = strip(String(m.mes ?? ''));
+    for (const para of text.split(/\n+/)) {
+      if (!keys.some(k => para.includes(k))) continue;
+      const piece = `${m.is_user ? '{{user}}' : m.name}: ${para.trim().slice(0, 400)}`;
+      if (used + piece.length > max) return out.reverse().join('\n');
+      out.push(piece); used += piece.length;
+    }
+  }
+  return out.reverse().join('\n');
 }
 
 export function recentScene(chat, n = 6, strip = s => s) {

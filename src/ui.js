@@ -1,6 +1,6 @@
 // DOM: floating battle panel, in-chat turn cards, settings drawer.
 import { escapeHtml as h, pct, norm } from './util.js';
-import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId } from './catalog.js';
+import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
 import { scene, menuGrid, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, skillCard } from './pkui.js';
 import { findFighter } from './engine.js';
@@ -194,6 +194,7 @@ const SETTINGS = [
     { key: 'auxTemp', type: 'number', label: '온도 (temperature)', min: 0, max: 2, step: 0.05, show: s => s.auxSource === 'openai' || (s.auxSource === 'profile' && s.auxOverride) },
     { key: 'auxTopP', type: 'number', label: 'Top P (비우면 기본값)', min: 0, max: 1, step: 0.05, show: s => s.auxSource === 'openai' || (s.auxSource === 'profile' && s.auxOverride) },
     { key: 'auxMaxTokens', type: 'number', label: '최대 응답 토큰 (권장 10000 — 추론 모델은 더)', min: 1000, max: 64000, step: 500, show: s => s.auxSource !== 'none' },
+    { key: 'auxMaxInput', type: 'number', label: '최대 입력 토큰 (0 = 제한 없음)', min: 0, max: 200000, step: 1000, hint: '넘치면 대화 기록 → 로어북 → 카드·페르소나 순으로 줄여요. 룰·출력 형식은 안 잘려요. 실제 투입량은 🔍 점검 탭에서 확인', show: s => s.auxSource !== 'none' },
     { key: 'auxReasoning', type: 'select', label: '추론 강도 (지원 모델만)', options: [['', '보내지 않음'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']], show: s => s.auxSource === 'openai' },
     { key: 'auxJsonMode', type: 'check', label: 'JSON 모드 강제 (response_format)', hint: '지원 안 하는 API면 끄세요', show: s => s.auxSource === 'openai' },
     { key: 'auxExtra', type: 'textarea', label: '추가 요청 본문 (JSON)', ph: '{"provider": {"order": ["Google"]}}', show: s => s.auxSource === 'openai' },
@@ -205,7 +206,9 @@ const SETTINGS = [
     { key: 'startTrigger', type: 'select', label: '전투 신호가 오면', options: [['button', '메시지 아래 「⚔️ 전투 시작」 버튼 (추천)'], ['auto', '바로 자동 시작']] },
     { key: 'suggestStart', type: 'check', label: '신호가 없어도 위험한 장면이면 시작 버튼 제안', hint: '메인 모델이 태그를 빼먹거나, 첫 메시지부터 위기 상황일 때' },
     { key: 'startMode', type: 'select', label: '전투 감지', options: [['hybrid', '메인이 <bt-start> 표시 → 보조가 구성 (추천)'], ['main', '메인이 <bt-battle> 전체 작성'], ['manual', '수동 (버튼·/bt-start)']] },
-    { key: 'sceneSize', type: 'number', label: '적 구성 때 읽을 최근 메시지 수', min: 1, max: 10, step: 1 },
+    { key: 'sceneSize', type: 'number', label: '적 구성 때 읽을 최근 메시지 수', min: 1, max: 15, step: 1 },
+    { key: 'castScene', type: 'number', label: '인물 찾기 때 읽을 최근 메시지 수', min: 2, max: 60, step: 1 },
+    { key: 'sheetScene', type: 'number', label: '내 시트 생성 때 읽을 최근 메시지 수', min: 0, max: 15, step: 1 },
     { key: 'forgeLore', type: 'select', label: '적 구성 때 월드인포', options: [['auto', '자동: 장면에 나온 주요 인물 항목만'], ['always', '키워드 걸린 항목은 항상'], ['never', '안 읽음 (대화만)']] },
     { key: 'castBatch', type: 'select', label: '인물 찾기 한 번에', options: [['2', '2명'], ['4', '4명 (기본)'], ['6', '6명']], hint: '많을수록 보조모델 답이 길어져서 잘릴 수 있어요' },
     { key: 'loreBooks', type: 'text', label: '추가 로어북 (쉼표)', ph: '캐릭터·채팅 로어북은 자동' },
@@ -605,14 +608,18 @@ function rulesTab(s) {
       <div class="bt-fname">${h(p.name)} ${s.profile ? '' : '<small>(기본값)</small>'}</div>
       <div class="bt-note">스탯: ${p.stats.map(x => h(x.label && x.label !== x.key ? `${x.key}(${x.label})` : x.key)).join(', ')} · 체력 ${h(p.hpLabel)} · 자원 ${h(p.spLabel)}</div>
       <div class="bt-note">계산: ${Object.entries(p.map).map(([k, v]) => `${DERIVED_KO[k]}=${h(v)}`).join(', ')}</div>
-      <div class="bt-note">등급: ${p.tiers.map(t => `${h(t.name)}(${t.hp[0]}~${t.hp[1]})`).join(' → ')}</div>
+      <div class="bt-note">등급: ${p.tiers.map(t => `<span title="${h(t.desc ?? '')}">${h(t.name)}(${t.hp[0]}~${t.hp[1]})</span>`).join(' → ')}</div>
+      ${p.tiers.some(t => t.desc) ? `<details class="bt-note"><summary>등급별 기준</summary>${p.tiers.map(t => `<div>· <b>${h(t.name)}</b> — ${h(t.desc ?? '(설명 없음)')}</div>`).join('')}</details>` : ''}
       ${p.elements?.length ? `<div class="bt-note">속성: ${p.elements.map(h).join(', ')}</div>` : ''}
       ${p.notes ? `<div class="bt-note">${h(p.notes)}</div>` : ''}
     </div>
     <div class="bt-section"><div class="bt-sub">상성 체계</div>
       <div class="bt-row bt-wrap"><button class="menu_button ${p.typeSystem !== 'pokemon' ? 'bt-on' : ''}" data-act="rule-set" data-v="world">🌍 세계관 속성</button>
       <button class="menu_button ${p.typeSystem === 'pokemon' ? 'bt-on' : ''}" data-act="rule-set" data-v="pokemon">🎮 포켓몬식 상세 룰</button></div>
-      <div class="bt-note">${p.typeSystem === 'pokemon' ? `18타입 (${Object.values(POKE_KO).join('·')}) · 공식 상성표 (2배/0.5배/무효, 겹치면 4배) · 자속 1.5배 · 물리/특수 분리 · 우선도` : '세계관 속성 + 간이 상성표 · 자속 1.2배'}</div></div>
+      <div class="bt-note">${p.typeSystem === 'pokemon' ? `18타입 (${Object.values(POKE_KO).join('·')}) · 공식 상성표 (2배/0.5배/무효, 겹치면 4배) · 자속 1.5배 · 물리/특수 분리 · 우선도 · 배율이 큰 만큼 기본 피해는 낮게` : '세계관 속성 + 간이 상성표 · 자속 1.2배'}</div></div>
+    <div class="bt-section"><div class="bt-sub">등급 체계</div>
+      <div class="bt-row bt-wrap">${Object.entries(TIER_PRESETS).map(([k, v]) => `<button class="menu_button ${p.tiers.map(t => t.name).join('|') === v.tiers.map(t => t.name).join('|') ? 'bt-on' : ''}" data-act="tier-preset" data-v="${k}" ${busy ? 'disabled' : ''}>${h(v.ko)}</button>`).join('')}</div>
+      <div class="bt-note">세계관에 고유 랭크(헌터 F~S, 무협 경지 등)가 있으면 「AI로 세계관 룰 분석」이 그 이름을 그대로 써요. 프리셋을 바꾸면 이미 등록된 캐릭터 등급도 같은 위치의 새 등급으로 옮겨요.</div></div>
     <div class="bt-section bt-row bt-wrap">
       <button class="menu_button" data-act="gen-rules" ${busy ? 'disabled' : ''}>📜 AI로 세계관 룰 분석</button>
       <button class="menu_button" data-act="edit-json" data-v="rules">✏️ JSON</button>
@@ -628,21 +635,22 @@ function codexTab(s) {
   const p = profileOf(s);
   const list = api.codex();
   if (editing?.startsWith('codex:')) return codexEditor(s, p, editing.slice(6), list);
-  const cast = api.ui.cast;
   const ROLE = { player: '🙋 나', companion: '🤝 동료', rival: '⚔️ 라이벌', enemy: '👹 적', boss: '💀 보스', npc: '👤 NPC' };
-  const castBox = cast ? `<div class="bt-section cx-cast"><div class="bt-sub">🧭 찾은 인물 — 만들 사람을 고르세요</div>
-      ${cast.map((c, i) => `<label class="cx-cand"><input type="checkbox" data-act="cast-pick" data-i="${i}" ${c.pick ? 'checked' : ''}>
-        <div><b>${h(c.name)}</b> <span class="cx-role">${ROLE[c.role] ?? h(c.role)}</span>${c.tier ? ` <span class="cx-tier">${h(c.tier)}</span>` : ''}<div class="bt-note">${h(c.concept)}</div>${c.why ? `<small>${h(c.why)}</small>` : ''}</div></label>`).join('')}
-      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-build" ${api.busy() ? 'disabled' : ''}>🤖 선택한 ${cast.filter(c => c.pick).length}명 만들기</button><button class="menu_button" data-act="cast-close">닫기</button></div>
-      <div class="bt-note">한 명씩 보조모델이 만들어요 (인원수만큼 호출). '나'는 캐릭터 탭 시트로 들어가요.</div></div>` : '';
+  const fresh = new Set(api.ui.castFresh ?? []);
+  const busy = api.busy();
+  const freshPlayer = fresh.has('player') && s.player ? `<div class="bt-section cx-fresh"><div class="bt-note">🆕 내 시트도 만들었어요: <b>${h(s.player.name)}</b> [${h(s.player.tier || '?')}] — 캐릭터 탭에서 확인·리롤</div></div>` : '';
+  // Newly registered first, so a fresh batch can be reviewed (reroll / delete) at a glance.
+  const ordered = [...list.filter(e => fresh.has(e.id)), ...list.filter(e => !fresh.has(e.id))];
   return `<div class="bt-section"><div class="bt-note">한 번 등록한 캐릭터는 이후 이름만 나와도 이 스킬셋 그대로 등장해요. 성장은 채팅별로 기록돼요.</div>
-      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-scan" ${api.busy() ? 'disabled' : ''}>🧭 ${list.length ? '주요 인물 더 찾기' : '세계관에서 주요 인물 찾기'}</button><button class="menu_button" data-act="codex-new">＋ 직접 등록</button></div>
-      <div class="bt-note">페르소나·캐릭터 카드·로어북 인물 항목·대화를 보조모델이 읽고 후보를 골라줘요. 한 번에 ${api.settings().castBatch ?? 4}명씩, 이미 등록된 사람은 빼고, 등록된 인물들을 기준으로 강약을 맞춰요.</div></div>
-    ${castBox}
-    <div class="bt-section">${list.length ? list.map(e => {
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-scan" ${busy ? 'disabled' : ''}>🧭 ${list.length ? '주요 인물 더 찾아서 등록' : '세계관에서 주요 인물 찾아서 등록'}</button><button class="menu_button" data-act="codex-new">＋ 직접 등록</button></div>
+      <div class="bt-note">보조모델이 페르소나·캐릭터 카드·로어북 인물 항목·최근 대화 ${h(api.settings().castScene ?? 20)}개를 읽고, 한 번에 ${api.settings().castBatch ?? 4}명까지 찾아서 시트까지 바로 등록해요. 마음에 안 들면 🎲 리롤 / ✕ 삭제.</div></div>
+    ${freshPlayer}
+    <div class="bt-section">${ordered.length ? ordered.map(e => {
       const sh = api.rosterOf(e);
       const grown = api.hasRoster(e);
-      return `<div class="bt-skillrow bt-click" data-act="codex-open" data-v="${h(e.id)}"><b>${h(e.name)}</b> <small>[${h(sh.tier || '?')}] ${typesFor(sh, p.typeSystem).map(x => h(typeName(x, p.typeSystem))).join('/')} · 스킬 ${sh.skills.length}${e.locked ? ' · 🔒' : ''}${grown ? ' · 📈 이 채팅에서 성장' : ''}${s.companions.some(c => c.codexId === e.id) ? ' · 🤝 같이 다님' : ''}</small></div>`;
+      const isNew = fresh.has(e.id);
+      return `<div class="bt-skillrow cx-row ${isNew ? 'cx-new' : ''}"><div class="bt-click cx-main" data-act="codex-open" data-v="${h(e.id)}">${isNew ? '<span class="cx-badge">NEW</span> ' : ''}<b>${h(e.name)}</b>${e.role ? ` <span class="cx-role">${ROLE[e.role] ?? h(e.role)}</span>` : ''} <small>[${h(sh.tier || '?')}] ${typesFor(sh, p.typeSystem).map(x => h(typeName(x, p.typeSystem))).join('/')} · 스킬 ${sh.skills.length}${e.locked ? ' · 🔒' : ''}${grown ? ' · 📈 이 채팅에서 성장' : ''}${s.companions.some(c => c.codexId === e.id) ? ' · 🤝 같이 다님' : ''}</small>${isNew && e.why ? `<div class="bt-note">${h(e.why)}</div>` : ''}</div>
+        <span class="cx-quick"><button class="menu_button" data-act="codex-reroll" data-v="${h(e.id)}" title="설명으로 다시 생성 (등급도 다시 판단)" ${busy || e.locked ? 'disabled' : ''}>🎲</button><button class="menu_button" data-act="codex-quickdel" data-v="${h(e.id)}" title="도감에서 삭제">✕</button></span></div>`;
     }).join('') : '<div class="bt-empty">아직 등록된 캐릭터가 없어요.</div>'}</div>`;
 }
 
@@ -654,7 +662,7 @@ function codexEditor(s, p, id, list) {
   const sys = p.typeSystem;
   const preview = sh ? `<div class="bt-section cx-sheet">
       <div class="cx-head"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(x => `<span class="pk-tdot t-${typeIn(x, sys)}">${h(typeName(x, sys))}</span>`).join('')}${entry.locked ? '<span class="cx-lock">🔒</span>' : ''}</div>
-      <div class="bt-note">${h(p.hpLabel)} ${sh.maxHp} · ${h(p.spLabel)} ${sh.maxSp}${grown ? ' · 📈 이 채팅에서 성장한 값' : ''}</div>
+      <div class="bt-note">${h(p.hpLabel)} ${sh.maxHp} · ${h(p.spLabel)} ${sh.maxSp}${grown ? ' · 📈 이 채팅에서 성장한 값' : ''}${sh.trait && TRAITS[sh.trait] ? ` · 특성 <b>${h(TRAITS[sh.trait].ko)}</b> (${h(TRAITS[sh.trait].desc)})` : ''}</div>
       ${portraitControls(`codex:${entry.id}`, sh.portrait)}
       ${statGrid(sh.stats, p)}
       <div class="bt-sub">기술</div>${skillRows(sh.skills, p)}
@@ -762,8 +770,13 @@ function onClick(e) {
     case 'pt-pixel': return api.setPortrait(v, p0 => (p0 ? { ...p0, pixel: !p0.pixel } : null));
     case 'pt-clear': return api.setPortrait(v, null);
     case 'cast-scan': return api.scanCast();
-    case 'cast-build': return api.buildCast();
-    case 'cast-close': api.ui.cast = null; return refreshPanel();
+    case 'codex-reroll': return api.rerollCodex(v);
+    case 'codex-quickdel': {
+      const e = api.codex().find(x => x.id === v);
+      if (e && confirm(`「${e.name}」을(를) 도감에서 삭제할까요?`)) { api.ui.castFresh = (api.ui.castFresh ?? []).filter(x => x !== v); api.deleteCodex(v); }
+      return;
+    }
+    case 'tier-preset': return api.setTierPreset(v);
     case 'codex-revise': {
       const instr = document.getElementById('bt-cx-instr')?.value?.trim();
       if (!instr) return api.toast('어떻게 고칠지 적어주세요.', 'warning');

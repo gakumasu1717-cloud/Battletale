@@ -102,7 +102,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   if (deps.auxReady()) {
     deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
     try {
-      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction }), { maxTokens: 2400 });
+      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -115,6 +115,14 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
     }
   }
   if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: partial?.tier ?? profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
+  return applyPlayerSheet(s, deps, raw, { statFields, partial });
+}
+
+/** Turn a raw (aux model) sheet into the player's sheet: normalize, audit, keep the portrait. */
+export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(), partial = null } = {}) {
+  const profile = profileOf(s);
+  const persona = deps.persona();
+  if (raw.tierReason) deps.trace?.('balance', `등급 판단 · ${persona.name} → ${raw.tier ?? '?'}`, String(raw.tierReason));
   const sheet = normalizeSheet({ ...raw, name: persona.name, isPlayer: true, id: 'player' }, profile, { side: 'ally', seed: persona.name });
   sheet.id = 'player';
   sheet.isPlayer = true;
@@ -158,6 +166,7 @@ export function rosterSheet(s, entry) {
 export function registerCharacter(s, deps, raw, { side = 'enemy', locked = false } = {}) {
   const profile = profileOf(s);
   const sheet = normalizeSheet(raw, profile, { side, seed: raw.name });
+  if (raw.tierReason) deps.trace?.('balance', `등급 판단 · ${sheet.name} → ${sheet.tier || '?'}`, String(raw.tierReason));
   const { notes } = auditSheet(sheet, profile, { clampStats: true, bonusTier: sheet.threat === 'boss' ? 1 : 0 });
   if (notes.length) { deps.toast?.(`⚖️ ${sheet.name} 밸런스 조정: ${notes.slice(0, 3).join(' · ')}${notes.length > 3 ? ` 외 ${notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, notes.join('\n')); }
   const existing = codexFind(deps, sheet.name);
@@ -377,10 +386,12 @@ function buildState(s, spec, mode, { seed, settings }) {
 function applyDifficulty(spec, settings, seed) {
   const d = settings.difficulty ?? 'normal';
   const out = { ...spec, terrain: [...(spec.terrain ?? [])] };
-  const roll = (hashStr(`${seed}:diff`) % 1000) / 1000;
+  // hashStr is base-36 text; read its tail as a number (the old `% 1000` on the string was always NaN).
+  const roll = (parseInt(hashStr(`${seed}:diff`).slice(-6), 36) % 1000) / 1000;
   const init = out.initiative ?? 'normal';
   if (d === 'easy' && init === 'enemy') out.initiative = 'normal';
-  if (d === 'hard' && init === 'normal' && roll < 0.25) out.initiative = 'enemy';
+  // HARD: no random ambush on top of the story — difficulty comes from enemy composition and AI.
+  // Only NIGHTMARE adds surprise rounds the story did not call for.
   if (d === 'nightmare') {
     if (init === 'normal' && roll < 0.5) out.initiative = 'enemy';
     if (!out.terrain.some(t => t.side === 'ally' || Object.values(t.stages ?? {}).some(v => v < 0))) out.terrain.push({ desc: '불리한 지형', side: 'ally', stages: { spd: -1 } });

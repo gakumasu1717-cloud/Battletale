@@ -4,16 +4,47 @@
 // The opponent's moves are not shown in advance — just like Pokémon.
 import * as E from '../engine.js';
 import { STATUS, inferItem, typeName, typeIn, typesFor } from '../catalog.js';
-import { norm } from '../util.js';
+import { norm, hashStr } from '../util.js';
 import { splitBody, matchWord, aiLevelOf } from './shared.js';
 import { vf, mapOf, skillCard, fxLine } from '../pkui.js';
 import { josa } from '../narrate.js';
 
 const KIND_KO = { physical: '물리', magic: '특수', heal: '회복', buff: '변화', debuff: '변화', guard: '방어', revive: '부활', cleanse: '회복' };
-const WORDS = { attack: ['attack', '공격', '기본공격'], flee: ['flee', 'run', '도주', '도망', '도망친다'], switch: ['switch', '교체'] };
+const WORDS = { attack: ['attack', '공격', '기본공격'], flee: ['flee', 'run', '도주', '도망', '도망친다'], switch: ['switch', '교체'], rest: ['rest', '휴식', '숨고르기'] };
 
 const field = (b, side) => b.fighters.find(f => f.side === side && E.onField(f));
 const team = (b, side) => b.fighters.filter(f => f.side === side);
+
+/**
+ * Mind game: the opponent's next move is never shown, but its body language is — a vague, mostly
+ * honest tell ("winding up something big", "playing it safe"). Unknown foes give nothing away,
+ * and about one read in five is a bluff that reveals nothing.
+ */
+function tellOf(b, f, lang = 'ko') {
+  if (!f || (f.intel ?? 1) === 0 || f.charging) return '';
+  const it = b.intents?.[f.id];
+  if (!it) return '';
+  const roll = (parseInt(hashStr(`${b.seed}:tell:${b.turn}:${f.id}`).slice(-6), 36) % 100) / 100;
+  const ko = lang === 'ko';
+  if (roll < 0.2) return ko ? '속내를 읽을 수 없다…' : 'Their intent is impossible to read.';
+  const me = field(b, 'ally');
+  const sk = it.skill ? f.skills.find(k => k.name === it.skill) : null;
+  let kind = 'poke';
+  if (it.type === 'switch') kind = 'switch';
+  else if (it.type === 'rest') kind = 'rest';
+  else if (it.type === 'defend' || sk?.kind === 'guard') kind = 'guard';
+  else if (sk && ['buff', 'debuff', 'heal', 'cleanse'].includes(sk.kind)) kind = 'setup';
+  else if (sk && me && (sk.power >= 90 || sk.once || E.estimate(b, f, me, sk) >= me.hp * 0.45)) kind = 'big';
+  const T = {
+    big: ['큰 한 방을 노리는 기색이다!', 'They are clearly setting up a heavy blow.'],
+    setup: ['무언가 꾸미는 기색이다…', 'They seem to be plotting something other than a straight attack.'],
+    guard: ['몸을 사리며 틈을 본다.', 'They are playing it safe, guarding.'],
+    switch: ['물러날 틈을 엿보는 것 같다.', 'They look ready to pull back and swap out.'],
+    rest: ['숨을 고르려는 것 같다.', 'They look winded, about to catch their breath.'],
+    poke: ['가볍게 견제할 생각인 듯하다.', 'They look ready to probe with a quick attack.'],
+  }[kind];
+  return ko ? T[0] : T[1];
+}
 
 export default {
   id: 'duel', ko: '1:1 대결', icon: '🤺',
@@ -102,7 +133,11 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
       ...team(b, 'ally').map(f => `- ${line(f, true)}`), ...team(b, 'enemy').map(f => `- ${line(f, (f.intel ?? 1) >= 2)}`)].join('\n');
   },
 
-  nextHint: () => '',
+  nextHint(b, lang = 'en') {
+    const fo = field(b, 'enemy');
+    const t = tellOf(b, fo, lang);
+    return t ? `${fo.name}: ${t}` : '';
+  },
   timingPlan: () => [],
   applyGrades: cmd => cmd,
   autoGrades: () => ({}),
@@ -114,7 +149,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const sys = b.typeSystem;
     const fo = field(b, 'enemy'), me = field(b, 'ally');
     const balls = side => team(b, side).map(f => (f.down ? 'x' : f.bench ? 'o' : '*'));
-    const foes = fo ? [vf(fo, { side: 'enemy', intel: fo.intel ?? 1, typeSystem: sys, note: fo.charging ? `⚡ ${fo.charging.skill}의 힘을 모으고 있다!` : '', noteCls: fo.charging ? 'charge' : '' })] : [];
+    const foes = fo ? [vf(fo, { side: 'enemy', intel: fo.intel ?? 1, typeSystem: sys, note: fo.charging ? `⚡ ${fo.charging.skill}의 힘을 모으고 있다!` : tellOf(b, fo, 'ko'), noteCls: fo.charging ? 'charge' : 'tell' })] : [];
     const allies = me ? [vf(me, { side: 'ally', typeSystem: sys, note: me.charging ? '힘을 모으는 중' : '' })] : [];
     const intro = [];
     const lead = team(b, 'enemy')[0];
@@ -131,7 +166,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const sys = b.typeSystem, sp = ctx.spLabel ?? 'SP';
     const cards = me.skills.map(k => {
       const cd = me.cds?.[k.name] ?? 0;
-      const why = k.cost > me.sp ? `${sp} 부족` : cd ? `${cd}턴 후 사용` : '';
+      const why = k.once && me.used?.[k.name] ? '이번 전투에 이미 씀' : k.cost > me.sp ? `${sp} 부족` : cd ? `${cd}턴 후 사용` : '';
       return skillCard(k, { sys, spLabel: sp, disabled: !!why, why });
     });
     cards.push(skillCard({ ...E.basicAttack(me, b.attackName), basic: true, element: 'normal' }, { sys, spLabel: sp, act: 'm:basic', v: '' }));
@@ -169,7 +204,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
         const dmg = ['physical', 'magic'].includes(k.kind) && foe ? E.elementMul(foe, k.element, b).mul : null;
         const effTxt = dmg == null ? '' : dmg === 0 ? '효과 없음' : dmg >= 2 ? `효과 굉장 ×${dmg}` : dmg < 1 ? `별로 ×${dmg}` : '';
         const est = dmg && foe ? Math.min(100, Math.round((E.estimate(b, me, foe, k) / Math.max(1, foe.hp)) * 100)) : null;
-        return { fx: k.cost > me.sp ? '⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)' : [est != null ? `≈${est}%` : '', effTxt, fxLine(k, sys)].filter(Boolean).join(' · '), label: k.name, meta: k.cost ? `${ctx?.spLabel ?? 'SP'} ${k.cost} · ${Math.round((k.cost / Math.max(1, me.maxSp)) * 100)}%` : '무료', sub: `${typeName(k.element && !['physical', 'none'].includes(k.element) ? k.element : 'normal', sys)} · ${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''}${cd ? ` · ⏳${cd}` : ''}`, cls: `t-${t}`, disabled: cd > 0, act: 'm:skill', v: k.name };
+        return { fx: k.cost > me.sp ? '⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)' : [est != null ? `≈${est}%` : '', effTxt, fxLine(k, sys)].filter(Boolean).join(' · '), label: k.name, meta: k.cost ? `${ctx?.spLabel ?? 'SP'} ${k.cost} · ${Math.round((k.cost / Math.max(1, me.maxSp)) * 100)}%` : '무료', sub: `${typeName(k.element && !['physical', 'none'].includes(k.element) ? k.element : 'normal', sys)} · ${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''}${cd ? ` · ⏳${cd}` : ''}`, cls: `t-${t}`, disabled: cd > 0 || !!(k.once && me.used?.[k.name]), act: 'm:skill', v: k.name };
       }), { label: '공격', sub: '노말 · 기본 공격', cls: 't-normal', act: 'm:basic' }, { label: '휴식', sub: `기력 +20% (${me.sp}/${me.maxSp})`, cls: 'plain', act: 'm:rest' }, { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
     }
     if (page === 'bag') return [...items.map(i => { const sp = i.spec ?? inferItem(i.name); return { label: i.name, meta: `×${i.count}`, sub: sp ? ({ heal: 'HP 회복', sp: '기력 회복', full: '완전 회복', cure: '상태이상 회복', revive: '부활', damage: '공격', buff: '강화' }[sp.kind]) : '효과 불명', cls: 'plain', act: 'm:item', v: i.name }; }), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];

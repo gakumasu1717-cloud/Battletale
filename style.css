@@ -722,6 +722,12 @@
 .cx-cast .cx-cand { display: flex; gap: 8px; align-items: flex-start; padding: 6px; margin: 4px 0; border-radius: 6px; background: #ffffff0a; cursor: pointer; }
 .cx-cast .cx-cand input { margin-top: 3px; }
 .cx-role { font-size: 10px; padding: 0 5px; border-radius: 8px; background: #ffffff1a; }
+.cx-row { display: flex; align-items: center; gap: 6px; }
+.cx-row .cx-main { flex: 1; min-width: 0; }
+.cx-row .cx-quick { display: flex; gap: 4px; flex-shrink: 0; }
+.cx-row .cx-quick .menu_button { padding: 2px 8px; min-width: 0; margin: 0; }
+.cx-row.cx-new { background: #e8a33d14; border-left: 3px solid #e8a33d; }
+.cx-badge { font-size: 9px; font-weight: 800; padding: 0 4px; border-radius: 3px; background: #e8a33d; color: #1b1712; }
 #bt-cx-instr, #bt-sheet-instr { width: 100%; resize: vertical; }
 .bt-chip.diff-easy { background: #2f6b3a; } .bt-chip.diff-hard { background: #8a4a12; } .bt-chip.diff-nightmare { background: #5a1020; color: #ffd0d0; }
 .bt-fx.sp { color: #7fc4ff; font-size: 12px; font-weight: 800; }

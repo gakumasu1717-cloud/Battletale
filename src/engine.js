@@ -7,7 +7,7 @@
 //  - front/back rows: melee only reaches the front line while it stands
 //  - terrain, initiative (ambush) and intel (how much you know) come from the story
 // Physical layer: optional timing grades for the player's attacks and defenses.
-import { STATUS, DERIVED, derive, inferItem, elementId, stageKey, typeIn, typesFor } from './catalog.js';
+import { STATUS, DERIVED, TRAITS, derive, inferItem, elementId, stageKey, typeIn, typesFor } from './catalog.js';
 import { makeRng, clamp, clone, norm, pct, num } from './util.js';
 
 const STAGE_MIN = -4, STAGE_MAX = 4;
@@ -37,6 +37,8 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
     f.enraged = false;
     f.charging = null;
     f.staggered = false;
+    f.used = {};
+    f.protectChain = 0;
     f.row = f.row === 'back' ? 'back' : 'front';
     // Resource: rank-and-file enemies fight without one (free skills, cooldowns still apply);
     // the player's side and major enemies (elite/boss/registered) pay scaled costs.
@@ -76,7 +78,9 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
     id: `b${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
     seed: String(seed ?? Math.random()),
     turn: 1, status: 'active', title, place, flee: flee !== false, fleeTries: 0, aiLevel,
-    scale: (hpPerStat / 3.5) * clamp(num(length, 1), 0.3, 3),
+    // Pokémon rules multiply harder (×2 chart, ×4 dual weakness, ×1.5 STAB on every move), so the base
+    // damage is lower there: an even STAB super-effective hit takes ~half a bar instead of all of it.
+    scale: (hpPerStat / 3.5) * clamp(num(length, 1), 0.3, 3) * (profile.typeSystem === 'pokemon' ? POKEMON_DAMAGE : 1),
     refStat: Math.max(1, ref(fighters).st),
     initiative: ['player', 'enemy'].includes(initiative) ? initiative : 'normal',
     chart: profile.chart ?? null, stab: profile.stab ?? 1.2, typeSystem: profile.typeSystem ?? 'world',
@@ -86,8 +90,22 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
     format: format === 'singles' ? 'singles' : 'multi',
   };
   for (const t of (terrain ?? []).slice(0, 4)) applyTerrain(b, t);
+  b.startEvents = [];
+  for (const f of b.fighters.filter(onField)) entryTrait(b, f, b.startEvents);
   planIntents(b);
   return b;
+}
+
+export const POKEMON_DAMAGE = 0.68;
+
+/** Traits that fire when a fighter enters the field (battle start, switch-in, send-out). */
+function entryTrait(b, f, ev) {
+  if (f.trait !== 'intimidate') return;
+  for (const o of b.fighters.filter(x => x.side !== f.side && onField(x))) {
+    const before = o.stages.pow ?? 0;
+    o.stages.pow = clamp(before - 1, STAGE_MIN, STAGE_MAX);
+    if (o.stages.pow !== before) ev.push({ t: 'stage', who: o.name, stat: 'pow', delta: -1, trait: 'intimidate', src: f.name });
+  }
 }
 
 function applyTerrain(b, t) {
@@ -195,10 +213,26 @@ export function rawDamage(b, a, t, skill, { rand = 0.925, crit = false, aoe = fa
   if (t.guard) dmg *= 0.5;
   if (t.staggered) dmg *= 1.25;
   if (t.statuses.some(s => s.id === 'shield')) dmg *= STATUS.shield.dmgMul;
+  if (t.statuses.some(s => s.id === 'vulnerable')) dmg *= STATUS.vulnerable.dmgIn;
   if (a.statuses.some(s => s.id === 'fear')) dmg *= STATUS.fear.dmgOut;
+  if (bonusMet(a, t, skill)) dmg *= skill.bonusIf.mul;
+  if (t.trait === 'vanguard' && t.row === 'front') dmg *= 0.8;
+  if (a.trait === 'opportunist' && t.statuses.some(s => !STATUS[s.id]?.good && s.id !== 'mark')) dmg *= 1.25;
   if (skill.range === 'melee' && a.row === 'back') dmg *= 0.6;
   if (aoe) dmg *= 0.75;
   return dmg;
+}
+
+/** Is a skill's conditional bonus (bonusIf) active against this target right now? */
+export function bonusMet(a, t, skill) {
+  const c = skill?.bonusIf;
+  if (!c || !a || !t) return false;
+  if (c.selfHpBelow) return a.hp / Math.max(1, a.maxHp) <= c.selfHpBelow;
+  if (c.targetFullHp) return t.hp >= t.maxHp;
+  if (c.targetCharging) return !!t.charging;
+  if (c.status === 'any') return t.statuses.some(s => !STATUS[s.id]?.good);
+  if (c.status) return t.statuses.some(s => s.id === c.status);
+  return false;
 }
 
 export function hitChance(a, t, skill) {
@@ -257,12 +291,13 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
     const c = (commands ?? []).find(x => x.type === 'switch');
     const pick = (c && findFighter(b, c.target, { side: 'ally', bench: true })) || benchOf(b, 'ally')[0];
     const ev0 = [];
-    if (pick) { pick.bench = false; ev0.push({ t: 'sendout', who: pick.name, side: 'ally' }); }
+    if (pick) { pick.bench = false; ev0.push({ t: 'sendout', who: pick.name, side: 'ally' }); entryTrait(b, pick, ev0); }
     b.needSwitch = null;
     planIntents(b);
     return { battle: b, events: ev0, inventory: inv };
   }
   const ev = [{ t: 'turn', n: b.turn, ambush }];
+  if (b.startEvents?.length) { ev.push(...b.startEvents); b.startEvents = []; }
   const cmds = clone(commands) ?? [];
   for (const c of cmds) { const f = byId(b, c.actor); if (f && c.defense) f.defense = c.defense; }
 
@@ -291,7 +326,7 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
   }
 
   // 2. Order: guard > flee > priority > speed. Releases of charged moves go at normal speed.
-  const prio = a => (a.type === 'switch' ? 11 : a.type === 'defend' || a.type === 'rest' ? 10 : a.type === 'flee' ? 9 : a.type === 'swap' ? 8 : a.type === 'item' ? 2 : ['surprised', 'stagger', 'charge'].includes(a.type) ? -9 : skillOf(byId(b, a.actor), a, attackName)?.priority ?? 0);
+  const prio = a => (a.type === 'switch' ? 11 : a.type === 'defend' || a.type === 'rest' ? 10 : a.type === 'flee' ? 9 : a.type === 'swap' ? 8 : a.type === 'item' ? 2 : ['surprised', 'stagger', 'charge'].includes(a.type) ? -9 : skillOf(byId(b, a.actor), a, attackName)?.protect ? 10 : skillOf(byId(b, a.actor), a, attackName)?.priority ?? 0);
   const keyed = acts.map(a => ({ a, p: prio(a), s: stat(byId(b, a.actor), 'spd') * (a.slot ? 0.5 : 1), r: rng.next() }));
   keyed.sort((x, y) => y.p - x.p || y.s - x.s || y.r - x.r);
 
@@ -313,7 +348,11 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
     checkEnd(b, ev);
   }
   if (b.status === 'active' && b.format === 'singles') replaceFainted(b, ev);
-  for (const f of b.fighters) { f.guard = false; delete f.defense; if (f.stunnedThisTurn) delete f.stunnedThisTurn; }
+  for (const f of b.fighters) {
+    f.guard = false; delete f.defense; if (f.stunnedThisTurn) delete f.stunnedThisTurn;
+    if (!f.protectedNow) f.protectChain = 0;
+    delete f.protectedNow; delete f.protect;
+  }
   b.turn += 1;
   planIntents(b);
   return { battle: b, events: ev, inventory: inv };
@@ -360,7 +399,8 @@ function act(b, f, a, rng, ev, inv, attackName) {
     case 'improvise': return improvise(b, f, a, rng, ev);
     case 'charge': {
       const sk = findSkill(f, a.skill);
-      if (!sk || sk.cost > f.sp) { return useSkill(b, f, basicAttack(f, attackName), a.target, rng, ev, a); }
+      if (!sk || sk.cost > f.sp || (sk.once && f.used?.[sk.name])) { return useSkill(b, f, basicAttack(f, attackName), a.target, rng, ev, a); }
+      if (sk.once) (f.used ??= {})[sk.name] = true;
       f.sp = Math.max(0, f.sp - sk.cost);
       f.charging = { skill: sk.name, target: a.target ?? null, threshold: Math.max(1, Math.round(f.maxHp * (f.threat === 'boss' ? 0.15 : 0.25))), taken: 0 };
       reveal(f, sk.name);
@@ -378,6 +418,7 @@ function act(b, f, a, rng, ev, inv, attackName) {
       let skill = skillOf(f, a.type === 'skill' ? a : { type: 'attack' }, attackName);
       let fallback = null;
       if (!skill) { fallback = 'unknown'; skill = basicAttack(f, attackName); }
+      else if (skill.once && f.used?.[skill.name]) fallback = 'used';
       else if (skill.cost > f.sp) {
         // Overexertion (Temtem): the move still happens; the missing resource is paid in HP and the next turn is lost.
         const deficit = skill.cost - f.sp;
@@ -407,6 +448,7 @@ function actSwitch(b, f, a, ev) {
   to.bench = false;
   b.lastSwitch = { ...(b.lastSwitch ?? {}), [f.side]: b.turn };
   ev.push({ t: 'switch', who: f.name, to: to.name, side: f.side });
+  entryTrait(b, to, ev);
 }
 
 /** Singles: refill empty field slots at the end of the turn. */
@@ -421,6 +463,7 @@ function replaceFainted(b, ev) {
     const pick = foe ? bench.slice().sort((x, y) => sendScore(b, y, foe) - sendScore(b, x, foe))[0] : bench[0];
     pick.bench = false;
     ev.push({ t: 'sendout', who: pick.name, side });
+    entryTrait(b, pick, ev);
   }
 }
 const sendScore = (b, f, foe) => Math.max(0, ...f.skills.filter(s => ['physical', 'magic'].includes(s.kind)).map(s => estimate(b, f, foe, s)), estimate(b, f, foe, basicAttack(f))) / Math.max(1, foe.hp) - Math.max(0, ...foe.skills.filter(s => ['physical', 'magic'].includes(s.kind)).map(s => estimate(b, foe, f, s))) / Math.max(1, f.hp);
@@ -458,15 +501,40 @@ function useSkill(b, f, skill, wanted, rng, ev, cmd = {}, { released = false } =
   const targets = pickTargets(b, f, skill, wanted, rng, ev);
   if (!released) f.sp = Math.max(0, f.sp - (skill.cost ?? 0));
   if (skill.cooldown && !released) f.cds[skill.name] = skill.cooldown + 1;
+  if (skill.once) (f.used ??= {})[skill.name] = true;
   if (!skill.basic) reveal(f, skill.name);
   ev.push({ t: 'use', who: f.name, side: f.side, skill: skill.name, kind: skill.kind, element: skill.element, basic: !!skill.basic, cost: skill.cost ?? 0, targets: targets.map(t => t.name), released, grade: cmd.grades?.[0] ?? null });
+  // Blood price: paid up front, never lethal on its own.
+  if (skill.hpCost && !released) {
+    const pay = Math.min(f.hp - 1, Math.round(f.maxHp * skill.hpCost / 100));
+    if (pay > 0) { f.hp -= pay; ev.push({ t: 'hpcost', who: f.name, skill: skill.name, dmg: pay, from: pct(f.hp + pay, f.maxHp), to: pct(f.hp, f.maxHp) }); }
+  }
   if (!targets.length) { ev.push({ t: 'notarget', who: f.name }); return; }
   const aoe = ['enemies', 'allies'].includes(skill.target);
   try { targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe); }
   finally {
     if (active(f) && skill.selfStages) applyStages(b, f, f, skill.selfStages, ev, { force: true });
     if (active(f) && skill.selfHeal) heal(f, Math.round(f.maxHp * skill.selfHeal / 100), ev);
+    if (active(f) && skill.move && b.format !== 'singles' && f.row !== skill.move) {
+      f.row = skill.move;
+      if (!b.fighters.some(x => x.side === f.side && active(x) && x.row === 'front')) f.row = 'front';
+      else ev.push({ t: 'swap', who: f.name, row: f.row });
+    }
+    if (active(f) && skill.pivot) pivotOut(b, f, ev);
   }
+}
+
+/** U-turn / Volt Switch: after the move, the user swaps with the best teammate on the bench (singles only). */
+function pivotOut(b, f, ev) {
+  if (b.format !== 'singles' || b.status !== 'active') return;
+  const bench = benchOf(b, f.side).filter(m => m.hp > 0);
+  if (!bench.length) return;
+  const foe = b.fighters.find(x => x.side !== f.side && onField(x));
+  const to = foe ? bench.slice().sort((x, y) => sendScore(b, y, foe) - sendScore(b, x, foe))[0] : bench[0];
+  f.bench = true; f.stages = {}; f.charging = null; f.guard = false;
+  to.bench = false;
+  ev.push({ t: 'switch', who: f.name, to: to.name, side: f.side, pivot: true });
+  entryTrait(b, to, ev);
 }
 
 function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
@@ -474,13 +542,20 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
   for (const t of targets) {
     switch (skill.kind) {
       case 'physical': case 'magic': {
-        let landed = 0;
+        let landed = 0, dealt = 0;
+        if (t.protect && t !== f) { ev.push({ t: 'protected', who: t.name, attacker: f.name, skill: skill.name }); break; }
+        const comboHit = bonusMet(f, t, skill);
+        if (comboHit) ev.push({ t: 'combo', who: f.name, target: t.name, skill: skill.name, cond: skill.bonusIf, mul: skill.bonusIf.mul });
         for (let h = 0; h < skill.hits && active(t); h++) {
           const grade = cmd.grades?.[h] ?? cmd.grades?.[0] ?? null;
           if (grade !== 'perfect' && !rng.chance(hitChance(f, t, skill))) { ev.push({ t: 'miss', who: f.name, target: t.name }); continue; }
           const crit = grade === 'perfect' || (grade !== 'miss' && rng.chance(critChance(f, t, skill)));
           const { eff } = elementMul(t, skill.element, b);
           let dmg = eff === 'immune' ? 0 : rawDamage(b, f, t, skill, { rand: rng.range(0.85, 1), crit, aoe: skill.target === 'enemies' }) * (GRADE_ATTACK[grade] ?? 1);
+          // Nobody near full health drops to one blow from an opponent of about their own strength
+          // (Focus Sash rule). Real power gaps — or minions — still go down at once.
+          const endure = dmg > 0 && t.side !== f.side && t.threat !== 'minion' && t.hp >= t.maxHp * 0.9 && avgDerived(f) < avgDerived(t) * 1.3 && dmg >= t.hp;
+          if (endure) dmg = Math.max(1, t.hp - Math.max(1, Math.round(t.maxHp * 0.1)));
           // The target's own timing against this attacker.
           const dg = t.defense?.[f.id] ?? t.defense?.all ?? null;
           let guarded = null;
@@ -497,9 +572,19 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
             break;
           }
           applyDamage(b, f, t, dmg, ev, { crit, eff, guarded, grade });
-          landed++;
+          if (endure && active(t)) ev.push({ t: 'endure', who: t.name });
+          landed++; dealt += dmg;
           if (skill.drain && dmg) heal(f, Math.round(dmg * skill.drain), ev, { drain: true });
         }
+        if (landed && comboHit && skill.bonusIf.consume) {
+          const i = skill.bonusIf.status === 'any' ? t.statuses.findIndex(s => !STATUS[s.id]?.good) : t.statuses.findIndex(s => s.id === skill.bonusIf.status);
+          if (i >= 0) { const [gone] = t.statuses.splice(i, 1); ev.push({ t: 'consume', who: t.name, status: gone.id }); }
+        }
+        if (skill.recoil && dealt > 0 && active(f)) {
+          const back = Math.max(1, Math.round(dealt * skill.recoil));
+          applyDamage(b, f, f, back, ev, { label: '반동' });
+        }
+        if (skill.pull && landed && active(t) && t.row === 'back' && b.format !== 'singles') { t.row = 'front'; ev.push({ t: 'swap', who: t.name, row: 'front', pulled: true }); }
         if (landed && active(t)) {
           if (skill.status && rng.chance(skill.status.chance / 100)) addStatus(t, skill.status, ev, f);
           if (skill.stages) applyStages(b, f, t, skill.stages, ev);
@@ -507,7 +592,7 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
         break;
       }
       case 'heal': {
-        const factor = clamp(0.75 + 0.2 * (stat(f, 'mag') / b.refStat), 0.7, 1.3);
+        const factor = clamp(0.75 + 0.2 * (stat(f, 'mag') / b.refStat), 0.7, 1.3) * (f.trait === 'medic' ? 1.3 : 1);
         heal(t, Math.round(t.maxHp * (skill.power / 100) * factor), ev);
         if (skill.status) addStatus(t, skill.status, ev, f);
         break;
@@ -528,6 +613,15 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
         break;
       }
       case 'guard': {
+        if (skill.protect) {
+          // Protect / Detect: blocks every hit this turn; each repeat in a row halves the odds.
+          const p = 1 / Math.pow(2, f.protectChain ?? 0);
+          f.protectedNow = true;
+          f.protectChain = (f.protectChain ?? 0) + 1;
+          if (rng.chance(p)) { t.protect = true; ev.push({ t: 'protect', who: t.name, ok: true }); }
+          else ev.push({ t: 'protect', who: t.name, ok: false, chance: Math.round(p * 100) });
+          break;
+        }
         t.guard = true;
         ev.push({ t: 'defend', who: t.name, sp: 0 });
         if (skill.stages) applyStages(b, f, t, skill.stages, ev, { force: true });
@@ -541,6 +635,7 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
         break;
       }
       case 'debuff': {
+        if (t.protect && t.side !== f.side) { ev.push({ t: 'protected', who: t.name, attacker: f.name, skill: skill.name }); break; }
         if (t.side !== f.side && !rng.chance(hitChance(f, t, skill))) { ev.push({ t: 'miss', who: f.name, target: t.name }); break; }
         if (skill.stages) applyStages(b, f, t, skill.stages, ev, { force: true });
         if (skill.status && rng.chance(skill.status.chance / 100)) addStatus(t, skill.status, ev, f);
@@ -559,6 +654,15 @@ function breakCharge(f, ev) {
   f.staggered = true;
 }
 
+/** Breaking a wind-up is a team win: everyone on the breaker's side catches their breath. */
+function breakReward(b, src, ev) {
+  if (!src) return;
+  const team = b.fighters.filter(x => x.side === src.side && onField(x));
+  let total = 0;
+  for (const x of team) { const g = Math.round(x.maxSp * 0.1); x.sp = Math.min(x.maxSp, x.sp + g); total += g; }
+  if (total) ev.push({ t: 'breakbonus', side: src.side, who: src.name, sp: 10 });
+}
+
 function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = null, guarded = null, grade = null } = {}) {
   const before = t.hp;
   t.hp = Math.max(0, t.hp - dmg);
@@ -568,10 +672,17 @@ function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = nul
     if (sl >= 0 && t.hp > 0) { t.statuses.splice(sl, 1); ev.push({ t: 'wake', who: t.name }); }
     if (t.charging && t.hp > 0 && src !== t) {
       t.charging.taken += dmg;
-      if (t.charging.taken >= t.charging.threshold) breakCharge(t, ev);
+      if (t.charging.taken >= t.charging.threshold) { breakCharge(t, ev); breakReward(b, src, ev); }
     }
   }
-  if (t.hp <= 0) { t.down = true; t.statuses = []; t.stages = {}; t.charging = null; ev.push({ t: 'down', who: t.name, side: t.side }); }
+  if (t.hp <= 0) {
+    t.down = true; t.statuses = []; t.stages = {}; t.charging = null; ev.push({ t: 'down', who: t.name, side: t.side });
+    // Avenger: the first fall on their side fires them up.
+    for (const o of b.fighters.filter(x => x.side === t.side && x.trait === 'avenger' && onField(x) && !x.avenged)) {
+      o.avenged = true; o.stages.pow = clamp((o.stages.pow ?? 0) + 1, STAGE_MIN, STAGE_MAX); o.stages.mag = clamp((o.stages.mag ?? 0) + 1, STAGE_MIN, STAGE_MAX);
+      ev.push({ t: 'stage', who: o.name, stat: 'pow', delta: 1, trait: 'avenger' });
+    }
+  }
   else if (t.threat === 'boss' && !t.enraged && t.hp / t.maxHp <= 0.5) {
     t.enraged = true;
     t.stages.pow = clamp((t.stages.pow ?? 0) + 1, STAGE_MIN, STAGE_MAX);
@@ -852,6 +963,8 @@ export function aiChoose(b, f, rng, attackName = '기본 공격') {
   const threatened = foes.some(t => dangers.get(t.id) * 2 >= f.hp);
   for (const s of f.skills) {
     if (s.cost > f.sp || (f.cds[s.name] ?? 0) > 0) continue;
+    if (s.once && f.used?.[s.name]) continue;
+    if (s.hpCost && f.hp <= f.maxHp * (s.hpCost / 100) * 1.5) continue;
     if (s.kind === 'magic' && f.statuses.some(x => x.id === 'silence')) continue;
     let o = null;
     switch (s.kind) {
@@ -861,6 +974,15 @@ export function aiChoose(b, f, rng, attackName = '기본 공격') {
         if (f.side === 'enemy') bonus += 10; // enemies fight with their techniques, not just plain hits
         if (s.selfStages) bonus += Object.values(s.selfStages).reduce((a, v) => a + v, 0) * 4;
         if (s.charge) bonus -= hard ? 4 : 10;
+        if (s.status && ['mark', 'vulnerable'].includes(s.status.id) && f.skills.some(k => k.bonusIf && (k.bonusIf.status === s.status.id || k.bonusIf.status === 'any'))) bonus += 12; // set up own combo
+        if (s.once) bonus -= r.score < 80 ? 25 : 0;                                   // save the trump card for a kill
+        if (s.recoil) bonus -= s.recoil * (hpRate(f) < 0.35 ? 60 : 20);
+        if (s.hpCost) bonus -= s.hpCost * (hpRate(f) < 0.5 ? 1.5 : 0.5);
+        if (s.pivot && b.format === 'singles' && benchOf(b, f.side).length) {
+          const foe0 = foes[0];
+          const bad = foe0 && Math.max(0, ...foe0.skills.filter(k => ['physical', 'magic'].includes(k.kind)).map(k => elementMul(f, k.element, b).mul)) >= 2;
+          bonus += bad ? 25 : 4;
+        }
         const costW = brutal && f.sp - s.cost < (f.skills.find(k => k.power >= 90)?.cost ?? 0) && r.score < 150 ? 30 : 15;
         o = { score: r.score + bonus - s.cost / Math.max(1, f.maxSp) * costW, target: r.target, est: r.est };
         break;
@@ -878,7 +1000,11 @@ export function aiChoose(b, f, rng, attackName = '기본 공격') {
         const t = s.target === 'self' ? f : (friends.slice().sort((x, y) => (y.derived?.pow ?? 0) - (x.derived?.pow ?? 0))[0] ?? f);
         const total = Object.values(t.stages ?? {}).reduce((a, v) => a + Math.max(0, v), 0);
         const already = s.stages ? Object.entries(s.stages).every(([k, v]) => (t.stages[k] ?? 0) >= (hard && s.target === 'allies' ? v : Math.min(4, v * 2))) : s.status ? t.statuses.some(x => x.id === s.status.id) : false;
-        if (s.kind === 'guard') o = { score: hpRate(f) < 0.3 ? 30 : 4, target: f.id };
+        if (s.kind === 'guard' && s.protect) {
+          // Protect when a big hit is coming (a charge about to land, or a lethal threat) — never twice in a row on purpose.
+          const big = foes.some(t => t.charging || (b.intents?.[t.id]?.type === 'charge')) || foes.some(t => dangers.get(t.id) >= f.hp);
+          o = { score: (f.protectChain ?? 0) > 0 ? 2 : big ? (hard ? 70 : 45) : 6, target: f.id };
+        } else if (s.kind === 'guard') o = { score: hpRate(f) < 0.3 ? 30 : 4, target: f.id };
         else if (!already) {
           // Set up when nobody can punish it; stop stacking once strong.
           const safe = !threatened && hpRate(t) > 0.55;

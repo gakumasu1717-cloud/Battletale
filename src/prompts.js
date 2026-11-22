@@ -27,7 +27,7 @@ Work out how this world measures combat power and answer with ONE JSON object:
   "map": {                                            // how each engine stat is computed from the world's stats. Simple arithmetic on keys only.
     "pow": "STR", "mag": "INT", "def": "END", "res": "(END+INT)/2", "spd": "AGI", "acc": "SEN", "luk": "LUK"
   },
-  "tiers": [ {"name": "F", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10).
+  "tiers": [ {"name": "F", "desc": "who sits at this rank in THIS world, one short line (e.g. 'fresh guild recruits, street thugs')", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the world's OWN rank names when it has them (hunter F~S, martial-arts realms, guild ranks…). Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10). "desc" is required: it is how later sheets decide who belongs where.
   "elements": ["불", "물", ...],                        // elements/attributes that exist in this world (may be empty)
   "pokeMap": {"<each world element>": "<closest of the 18 Pokémon types>"},   // so the Pokémon rule set can be switched on without losing types
   "notes": "1-3 sentences on how fights work in this world (rank gaps, magic vs. tech, lethality)"
@@ -39,49 +39,65 @@ Write names and labels in the language the lore uses.`;
 
 /* ====================== Aux model: character sheets ====================== */
 export const SHEET_SCHEMA = `{
-  "name": "", "tier": "<one of the tier names>", "threat": "minion|normal|elite|boss",
+  "name": "", "tierReason": "FIRST, one line: which canon facts (card, lore, story) place them at this rank — or 'no canon info, judged from <evidence>'",
+  "tier": "<one of the tier names>", "threat": "minion|normal|elite|boss",
   "hp": <max HP>, "sp": <max resource>, "stats": {<every stat key>: <number>},
   "elements": ["1-2 types/elements in the active system"], "ptypes": ["ALWAYS 1-2 of the 18 Pokémon types that fit them (불꽃, 물, 풀, 전기, 얼음, 격투, 독, 땅, 비행, 에스퍼, 벌레, 바위, 고스트, 드래곤, 악, 강철, 페어리, 노말) — even in world-element rules, so the rule set can be switched"], "weak": [], "resist": [], "immune": [],
+  "archetype": "burst|combo|tank|support|trickster — the ONE plan their kit is built around",
+  "trait": "intimidate|vanguard|opportunist|medic|avenger|null — at most one fixed role passive, only if it clearly fits",
   "skills": [{
     "name": "", "desc": "one line: what it looks like",
     "kind": "physical|magic|heal|buff|debuff|guard|revive|cleanse",
     "power": 60, "cost": 20, "target": "enemy|enemies|ally|allies|self",
     "element": "", "hits": 1, "acc": 95, "priority": 0, "cooldown": 0,
     "status": {"id": "${STATUS_IDS}", "chance": 30, "turns": 2},
-    "stages": {"pow": 1, "def": -1}, "selfStages": {"def": 1}, "selfHeal": 0
+    "stages": {"pow": 1, "def": -1}, "selfStages": {"def": 1}, "selfHeal": 0,
+    "recoil": 0.25, "hpCost": 10, "once": true,
+    "bonusIf": {"status": "mark|burn|poison|…|any", "mul": 1.6, "consume": true} | {"selfHpBelow": 0.5, "mul": 1.4} | {"targetFullHp": true, "mul": 1.3} | {"targetCharging": true, "mul": 1.5},
+    "pivot": true, "protect": true, "move": "front|back", "pull": true
   }],
   "passives": ["short text"], "desc": "one line"
 }`;
 
-const SKILL_GUIDE = `Skill design guide — rank decides the budget, nothing else:
-- Rank budget (by position in the tier list, weakest → strongest): normal attack power ≈ 60 at the lowest rank up to ≈ 105 at the highest. ONE signature move may exceed that by up to +35 and must have cooldown 3-5 or a charge turn. Multi-hit: ≤3 hits, low power per hit. Area attacks ≈ 80% power.
-- Priority moves: +1 (+2 only for upper ranks), power ≤ 50. Hard control (sleep/stun/paralyze/freeze/petrify): ≤20% chance on attacks, ≤75% accuracy as a pure status move.
-- One secondary effect per attack at most. About one attack in four has one; the rest are clean hits or plain support. Buff/debuff skills change at most 2 stages in total. Heals ≤ 35% of max HP (≤ 50% for upper ranks).
-- cost (Temtem-like economy): standard ≈ 15-25% of max resource, strong ≈ 30%, signature ≈ 40-45%. Regen is ~5% per turn; resting gives +20%. Basic attacks are free and automatic — do not list one.
+const SKILL_GUIDE = `Skill design guide — rank sets the budget, the archetype sets the identity:
+- Pick ONE archetype and build the kit so its skills interlock, instead of one generic damage/buff/debuff move each:
+  · burst — hard hitters that PAY for it (recoil, hpCost, a self stat drop like def -1, or once per battle).
+  · combo — one move APPLIES a trigger (status "mark", "vulnerable", burn, poison…), another EXPLOITS it via bonusIf (e.g. mark → bonusIf {"status":"mark","mul":1.7,"consume":true}).
+  · tank — guard/protect, shields, taunt, a hit that is stronger when they are hurt (bonusIf selfHpBelow).
+  · support — heals, cleanse, team buffs; only weak attacks.
+  · trickster — priority pokes, debuffs, pivot (hit then switch out — 1-on-1 only), pull/move (rows — party only).
+- Every non-basic move needs a reason to press it NOW: a cost, a condition, a cooldown, or a setup. Avoid "same move, different number".
+- Rank budget (by position in the tier list, weakest → strongest): normal attack power ≈ 60 at the lowest rank up to ≈ 105 at the highest. ONE signature move may exceed that by up to +35 and must have cooldown 3-5, a charge turn, or "once". A real price (recoil ≥ 0.25, hpCost ≥ 10, self def/res -1 or more) buys up to +15-30 power. Multi-hit: ≤3 hits, low power per hit. Area attacks ≈ 80% power. pivot moves ≈ 75% power.
+- bonusIf multipliers: ≤1.6 (≤1.8 when it consumes the status, ≤1.4 for selfHpBelow/targetFullHp). "mark" does nothing alone; "vulnerable" = +35% damage taken for 2 turns.
+- Priority moves: +1 (+2 only for upper ranks), power ≤ 50. Hard control (sleep/stun/freeze): ≤20% chance on attacks, ≤75% accuracy as a pure status move.
+- At most one secondary effect per attack, on at most half of the attacks (priced effects and mark/vulnerable setups don't count). Buff/debuff skills change at most 2 stages in total. Heals ≤ 35% of max HP (≤ 50% for upper ranks). Status moves that should deal damage are kind "physical"/"magic" with a status — a "debuff" has power 0.
+- Type coverage: with 3+ attacking moves, at least one uses a DIFFERENT type (or is normal/untyped) so one immunity never leaves them helpless.
+- cost (Temtem-like economy): standard ≈ 15-25% of max resource, strong ≈ 30%, signature ≈ 40-45%; hpCost moves cost little resource. Regen is ~5% per turn; resting gives +20%. Basic attacks are free and automatic — do not list one.
 - status ids: ${STATUS_IDS}. "stages" hit the target (or allies for buffs); "selfStages"/"selfHeal" (% of max HP) apply to the user. Omit unused fields.
 - ${'${maxSkills}'} skills at most, from the character's fighting style, class, gear and the world's tropes. Names in the story's language.
 - The engine clamps anything over budget, so over-designing only wastes the character's slots.`;
 
-const FAIRNESS = `Fairness rules (strict):
-- You are a neutral referee, not a fan of the player. The user's concept, wishes or self-description NEVER buy extra power: a rank-D character is rank-D however cool their concept sounds.
-- Rank and standing in THIS world decide everything — stats inside their tier's range, skills inside the rank budget. A rookie has rookie techniques even if their background claims greatness; legendary feats need a legendary rank in the world.
-- Do not give the player answers to every situation (no "counters everything", no free full heals, no instant wins). Real characters have gaps: a fragile caster, a slow bruiser, a melee fighter with no ranged option.
+const FAIRNESS = `Fairness rules (strict, two sides):
+- CANON WINS. If the character card, the world info or the story states a character's standing (a famous assassin, a guild master, a dragon, a top-ranked hunter, "the strongest in the city"), place them at the rank that standing means in this world's tier list — read each tier's description. Do not shrink canon characters to a "safe" low rank; when evidence is thin, judge from their role in the story and pick the middle, not the bottom.
+- WISHES DON'T. The user's own concept, wishes or self-description for THEIR player character never buy extra power: a rookie is a rookie however cool the concept sounds, unless the card/lore/story says otherwise.
+- Stats stay inside their tier's range and skills inside the rank budget.
+- Nobody gets an answer to every situation (no "counters everything", no free full heals, no instant wins). Real characters have gaps: a fragile caster, a slow bruiser, a melee fighter with no ranged option.
 - If the user listed skills, treat them as a WISH LIST: keep their names and flavor, but set power, priority, accuracy and effects by the rank budget, and drop or weaken anything above it.`;
 
-export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '' }) {
+export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '' }) {
   const maxSkills = profile.typeSystem === 'pokemon' ? 4 : 6;
   const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance and never favor the player. Output only JSON.`;
   const user = `## Rule set
 ${profileText(profile)}
 
-${lore ? `## World info for this character (canonical rank and abilities)\n${lore}\n` : ''}
+${lore ? `## World info for this character (canonical rank and abilities)\n${lore}\n` : ''}${card ? `## Character card (canon setting — may describe this character)\n${card}\n` : ''}
 ## Who to build: ${npc ? `the character "${personaName}"` : `the player character "${personaName}"`}${tier ? ` — rank: ${tier} (fixed)` : ''}
 ${persona || '(no description)'}${keepSkills ? `\n\n## The user's description and wished-for skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}` : ''}
 ${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
 ## Task
 Answer with ONE JSON object in this shape:
 ${SHEET_SCHEMA}
-- Use the status window's numbers when given. Otherwise decide the rank from the world info and the character's actual standing (not their self-image), then pick values inside that tier's ranges.
+- Use the status window's numbers when given. Otherwise write "tierReason" first, decide the rank from the canon (card, world info, story) and the tier descriptions, then pick values inside that tier's ranges.
 - If the status window lists skills, turn each into a skill entry with fitting mechanics (keep its name).
 ${FAIRNESS}
 ${SKILL_GUIDE.replace('${maxSkills}', maxSkills)}`;
@@ -90,7 +106,7 @@ ${SKILL_GUIDE.replace('${maxSkills}', maxSkills)}`;
 
 /* ====================== Aux model: finding the main cast ====================== */
 export function castMessages({ profile, personaName, persona, character, lore, history, existing = [], limit = 4, includePlayer = true }) {
-  const system = 'You read a roleplay setup and its story so far, and list the characters who matter in fights. Output only JSON.';
+  const system = 'You read a roleplay setup and its story so far, find the characters who matter in fights, and build a fair combat sheet for each, faithful to the world\'s ranks. Output only JSON.';
   const user = `## Rule set (ranks)
 ${profileText(profile)}
 
@@ -108,16 +124,21 @@ ${history || '(no messages yet)'}
 ${existing.length ? existing.join('\n') : '(none)'}
 
 ## Task
-List ${includePlayer ? 'the player and ' : ''}up to ${limit} other named characters who are likely to fight with or against {{user}}: companions, rivals, recurring enemies, bosses — the most important first. Skip background extras and anyone already registered. Keep each entry short.
+Find ${includePlayer ? 'the player and ' : ''}up to ${limit} other named characters who are likely to fight with or against {{user}}: companions, rivals, recurring enemies, bosses — the most important first. Skip background extras and anyone already registered.
+For EACH of them write a complete combat sheet right away (they are registered directly; the user can reroll or delete any of them afterwards).
 Answer with ONE JSON object:
 {"more": true/false (are there more important characters left after these?), "characters": [
-  {"name": "exact name as used in the story", "aliases": ["other names"], "role": "player|companion|rival|enemy|boss|npc",
-   "tier": "one of the rank names above, judged from the world and the story — not from how cool they are",
+  {"role": "player|companion|rival|enemy|boss|npc", "aliases": ["other names"],
    "concept": "2-3 sentences in the story's language: fighting style, weapon/element, notable techniques actually shown or stated",
-   "why": "one short line: where they matter"}
+   "why": "one short line: where they matter",
+   ...<sheet fields>}
 ]}
+<sheet> = ${SHEET_SCHEMA}
 ${includePlayer ? '- The player entry comes first with role "player".' : '- The player is already done; do not list them.'}
-- Ranks follow the world: a rookie is a rookie even if they are the main character.`;
+- "name" is the exact name used in the story. Write "tierReason" before "tier" for every character.
+- Keep sheets compact: ${profile.typeSystem === 'pokemon' ? 4 : '4-6'} skills each, short descs.
+${FAIRNESS}
+${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
@@ -179,7 +200,8 @@ ${codex ? `\n## Registered characters (stats and skills are already stored)\n${c
 - terrain: real environmental factors from the scene (darkness, rain, high ground, narrow corridor, cover). stages are -1..+1 on pow, mag, def, res, spd, acc, eva for the side that benefits or suffers. Usually 0-2 entries.
 - Preparation counts: traps the player set, buffs taken, intel gathered, allies brought — reflect them in initiative, terrain, intel and allies.
 ${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}
-- Enemies follow the same rank budget (a boss may use one rank higher). Their rank comes from what they are in this world, not from the player's rank.`;
+- Enemies follow the same rank budget (a boss may use one rank higher). Their rank comes from what they are in this world, not from the player's rank.
+- Mode flavor: in "duel" give the opponent mind-game tools (a protect/guard move, a pivot move if it has teammates, a big move that needs reading); in "party" make the group play as a unit — a front-row tank (trait vanguard or a taunt), a back-row damage dealer or healer, and moves that combo (one applies mark/vulnerable/burn, another exploits it), or a charger the player can break.`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
@@ -213,7 +235,7 @@ export function profileText(p) {
   return [
     `Name: ${p.name}`,
     `Stats: ${p.stats.map(s => `${s.key}${s.label && s.label !== s.key ? ` (${s.label})` : ''}`).join(', ')}; health "${p.hpLabel}", resource "${p.spLabel}"`,
-    `Tiers (HP / resource / stat ranges): ${p.tiers.map(t => `${t.name} ${t.hp.join('-')}/${t.sp.join('-')}/${t.stat.join('-')}`).join('; ')}`,
+    `Tiers, weakest → strongest (HP / resource / stat ranges${p.tiers.some(t => t.desc) ? ' — who belongs there' : ''}):\n${p.tiers.map(t => `  - ${t.name}: ${t.hp.join('-')}/${t.sp.join('-')}/${t.stat.join('-')}${t.desc ? ` — ${t.desc}` : ''}`).join('\n')}`,
     p.typeSystem === 'pokemon' ? `Type system: Pokémon rules. Use ONLY these 18 types for characters (1-2 each) and skills: ${Object.values(POKE_KO).join(', ')}. Official Pokémon type chart, same-type bonus ×1.5. Every combatant — monsters, thugs, humans — gets 1-2 types that fit its nature (a goblin: 악/독, a knight: 강철/격투, a plain human: 노말); every skill gets a type too (untyped = 노말). Matchups come ONLY from the chart: leave weak/resist/immune empty. "physical" skills use pow vs def, "magic" (= special) use mag vs res.` : p.elements?.length ? `Elements: ${p.elements.join(', ')}` : '',
     p.notes ? `Notes: ${p.notes}` : '',
   ].filter(Boolean).join('\n');
@@ -240,7 +262,7 @@ const MODE_RULES = {
 };
 const HINT_RULE = {
   party: '- End by foreshadowing what the enemies are visibly preparing, as listed under [Next], so {{user}} can react. Hidden details stay hidden.',
-  duel: '- End with both fighters squaring off, waiting for the next command.',
+  duel: '- End with both fighters squaring off, waiting for the next command. If [Next] gives the opponent\'s body language, show it as a subtle tell — never name the move.',
   stealth: '- End by showing what the guards or pursuers appear to be doing next, as listed under [Next] (if known).',
 };
 
@@ -355,7 +377,7 @@ export function worldPrompt({ mode, player, party, profile, statusWindow, change
 }
 
 /* ====================== Panel-mode prompts ====================== */
-const KEY_EVENTS = new Set(['down', 'parry', 'break', 'charge', 'finisher', 'broken', 'rout', 'yield', 'flee', 'takedown', 'detected', 'transition', 'improv', 'revive', 'enrage', 'lost', 'surprised', 'end', 'scan', 'swap']);
+const KEY_EVENTS = new Set(['down', 'parry', 'break', 'charge', 'finisher', 'broken', 'rout', 'yield', 'flee', 'takedown', 'detected', 'transition', 'improv', 'revive', 'enrage', 'lost', 'surprised', 'end', 'scan', 'swap', 'combo', 'protected', 'endure', 'switch']);
 const GUIDE_AMOUNT = [
   { upTo: 3, text: 'Show every action in order: the move, the impact, and how everyone reacts.' },
   { upTo: 10, text: 'In each clash, show the one or two actions that decided it in full; keep the exchanges between to a line or two. Give every knockout at least a sentence.' },

@@ -8,8 +8,8 @@ const effKo = { super: '효과가 굉장했다!', weak: '약점!', resist: '효�
 const effEn = { super: "super effective", weak: 'weakness hit', resist: 'not very effective', immune: 'no effect' };
 const RESULT_KO = { win: '승리', lose: '패배', fled: '도주 성공', stopped: '전투 중단', success: '성공' };
 const RESULT_EN = { win: 'VICTORY', lose: 'DEFEAT', fled: 'ESCAPED', stopped: 'STOPPED', success: 'SUCCESS' };
-const WHY_KO = { sp: 'SP 부족', cooldown: '재사용 대기 중', silence: '침묵 상태', unknown: '없는 기술' };
-const WHY_EN = { sp: 'not enough SP', cooldown: 'still on cooldown', silence: 'silenced', unknown: 'no such skill' };
+const WHY_KO = { sp: 'SP 부족', cooldown: '재사용 대기 중', silence: '침묵 상태', unknown: '없는 기술', used: '이번 전투에서 이미 씀' };
+const WHY_EN = { sp: 'not enough SP', cooldown: 'still on cooldown', silence: 'silenced', unknown: 'no such skill', used: 'already used this battle' };
 const IMPROV_KO = { crit: '대성공', success: '성공', fail: '실패', fumble: '대실패' };
 
 export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) {
@@ -26,7 +26,7 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
       if (e.note === 'finisher') return ko ? `  ☠ 결정타! ${e.target}에게 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  FINISHING BLOW on ${e.target}: ${e.dmg} damage (HP ${e.from}% → ${e.to}%).`;
       if (e.note === 'chip') return ko ? `  · 막혔지만 ${e.target}에게 ${e.dmg} 피해가 스밈` : `  Blocked, but ${e.dmg} damage seeps through to ${e.target}.`;
       if (e.label === '반격') return ko ? `  ↺ ${e.who}의 반격! ${e.target}에게 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.who} counters: ${e.dmg} damage to ${e.target} (HP ${e.from}% → ${e.to}%).`;
-      if (e.label) return ko ? `  · ${e.target} ${e.label}(으)로 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.target} takes ${e.dmg} damage from ${e.label === '혼란' ? 'confusion' : e.label} (HP ${e.from}%→${e.to}%).`;
+      if (e.label) return ko ? `  · ${e.target} ${e.label}(으)로 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.target} takes ${e.dmg} damage from ${({ 혼란: 'confusion', 반동: 'recoil', 역효과: 'a backfire' })[e.label] ?? e.label} (HP ${e.from}%→${e.to}%).`;
       const tags = [e.crit && (ko ? '치명타!' : 'CRITICAL'), e.eff && (ko ? effKo[e.eff] : effEn[e.eff])].filter(Boolean);
       if (ko) return `  · ${e.target}에게 ${e.dmg} 피해${tags.length ? ` [${tags.join(' ')}]` : ''}${hp ? ` (${e.from}%→${e.to}%)` : ''}`;
       return `  Hit ${e.target} for ${e.dmg} damage${tags.length ? ` (${tags.join(', ')})` : ''}${hp ? `; ${e.target} HP ${e.from}% → ${e.to}%` : ''}.`;
@@ -38,9 +38,17 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'resist': return ko ? `  · ${e.who}: ${stName(e.status, 'ko')} 저항` : `  ${e.who} resists ${stName(e.status, 'en')}.`;
     case 'stage': {
       const up = e.delta > 0;
-      if (ko) return `  · ${e.who} ${DERIVED_KO[e.stat] ?? e.stat} ${up ? '▲' : '▼'}${Math.abs(e.delta)}`;
-      return `  ${e.who}'s ${STAT_EN[e.stat] ?? e.stat} ${up ? 'rises' : 'falls'}${Math.abs(e.delta) > 1 ? ' sharply' : ''}.`;
+      const why = e.trait === 'intimidate' ? (ko ? ` (${e.src}의 위협)` : ` (intimidated by ${e.src})`) : e.trait === 'avenger' ? (ko ? ' (복수심)' : ' (fired up by a fallen ally)') : '';
+      if (ko) return `  · ${e.who} ${DERIVED_KO[e.stat] ?? e.stat} ${up ? '▲' : '▼'}${Math.abs(e.delta)}${why}`;
+      return `  ${e.who}'s ${STAT_EN[e.stat] ?? e.stat} ${up ? 'rises' : 'falls'}${Math.abs(e.delta) > 1 ? ' sharply' : ''}${why}.`;
     }
+    case 'hpcost': return ko ? `  · ${e.who} 「${e.skill}」에 HP ${e.dmg}를 바침 (${e.from}%→${e.to}%)` : `  ${e.who} pays ${e.dmg} HP to use "${e.skill}" (HP ${e.from}% → ${e.to}%).`;
+    case 'combo': return ko ? `  ✦ 연계 발동! ${e.target} 상대로 위력 ×${e.mul}` : `  COMBO: the condition is met against ${e.target}, power ×${e.mul}.`;
+    case 'consume': return ko ? `  · ${e.who}의 ${stName(e.status, 'ko')}이(가) 터지며 사라짐` : `  ${e.who}'s ${stName(e.status, 'en')} is consumed by the blow.`;
+    case 'endure': return ko ? `  · ${e.who} 간신히 버텨냄!` : `  ${e.who} barely holds on!`;
+    case 'protect': return ko ? `▶ ${e.who}: 방어 자세 ${e.ok ? '— 이번 턴 공격을 모두 막는다' : `실패${showRolls && e.chance != null ? ` (${e.chance}%)` : ''}`}` : `${e.who} ${e.ok ? 'braces to block every attack this turn' : 'tries to brace again, but fails'}.`;
+    case 'protected': return ko ? `  · ${e.who} 「${e.skill}」을(를) 완벽히 막아냄` : `  ${e.who} completely blocks "${e.skill}".`;
+    case 'breakbonus': return ko ? `  ✦ 충전을 끊은 쪽 전원 기력 +${e.sp}%` : `  Breaking the charge lets ${e.who}'s side catch its breath.`;
     case 'down': return ko ? `  ✖ ${e.who} 쓰러짐!` : `  ${e.who} is DOWN (knocked out / defeated).`;
     case 'wake': return ko ? `  · ${e.who} 잠에서 깸` : `  ${e.who} wakes up.`;
     case 'enrage': return ko ? `  ⚡ ${e.who} 격노! (공격 ▲)` : `  ${e.who} becomes ENRAGED (attack up).`;
@@ -222,6 +230,12 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'spotted': L(`${e.who}의 시선이 이쪽을 스쳤다! "…뭐지?"`); break;
       case 'overexert': L(`${j(e.who, '은', '는')} 무리해서 「${e.skill}」을 썼다! 반동으로 ${e.dmg} 피해!`); break;
       case 'rest': L(`${j(e.who, '은', '는')} 숨을 고르며 기력을 회복했다!`); break;
+      case 'hpcost': L(`${j(e.who, '은', '는')} 몸을 깎아 힘을 끌어냈다!`); break;
+      case 'combo': L('연계가 터졌다!'); break;
+      case 'endure': L(`${j(e.who, '은', '는')} 간신히 버텼다!`); break;
+      case 'protect': L(e.ok ? `${j(e.who, '은', '는')} 방어 태세를 굳혔다!` : '그러나 실패했다!'); break;
+      case 'protected': L(`${j(e.who, '은', '는')} 공격을 막아냈다!`); break;
+      case 'breakbonus': L('기세를 탔다! 기력이 돌아온다!'); break;
       case 'glance': L(`${j(e.who, '이', '가')} 이쪽을 봤지만… 눈치채지 못했다.`); break;
       case 'calm': L(`${j(e.who, '은', '는')} 의심을 풀고 돌아갔다.`); break;
       case 'blocked': L({ stones: '던질 돌이 없다!', sp: '숨이 차서 달릴 수 없다!', reach: '손이 닿지 않는다!' }[e.why] ?? '할 수 없었다.'); break;

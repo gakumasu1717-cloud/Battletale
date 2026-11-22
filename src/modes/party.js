@@ -257,7 +257,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     };
     const skills = actor && E.active(actor) ? actor.skills.map(k => {
       const cd = actor.cds?.[k.name] ?? 0;
-      const off = k.cost > actor.sp || cd > 0 || busy;
+      const off = k.cost > actor.sp || cd > 0 || busy || !!(k.once && actor.used?.[k.name]);
       return `<button class="bt-skill ${k.kind}" data-act="m:skill" data-v="${h(k.name)}" ${off ? 'disabled' : ''} title="${h(k.desc || '')}"><b>${h(k.name)}</b><small>${k.element && !['none', 'physical'].includes(k.element) ? `${h(typeName(k.element, b.typeSystem))} · ` : ''}${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''} · ${k.range === 'melee' ? '근접' : '원거리'} · ${TARGET_KO[k.target] ?? ''} · ${k.cost}${h(profile.spLabel)}${cd ? ` · ⏳${cd}` : ''}</small></button>`;
     }).join('') : '<div class="bt-note">행동할 수 있는 캐릭터가 없어요.</div>';
     const items = (inventory ?? []).filter(i => i.count > 0);
@@ -305,7 +305,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     const silenced = actor.statuses.some(x => x.id === 'silence');
     const cards = actor.skills.map(k => {
       const cd = actor.cds?.[k.name] ?? 0;
-      const why = k.cost > actor.sp ? `${sp} 부족` : cd ? `${cd}턴 후 사용` : silenced && k.kind === 'magic' ? '침묵' : '';
+      const why = k.once && actor.used?.[k.name] ? '이번 전투에 이미 씀' : k.cost > actor.sp ? `${sp} 부족` : cd ? `${cd}턴 후 사용` : silenced && k.kind === 'magic' ? '침묵' : '';
       return skillCard(k, { sys, spLabel: sp, targets: k.target === 'enemy' ? reach(k) : k.target === 'ally' ? allies : null, disabled: !!why, why, extra: k.kind === 'physical' && k.range === 'melee' && b.fighters.some(f => f.side === 'enemy' && E.onField(f) && f.row === 'back') ? ['근접 (전열만)'] : [] });
     });
     const basic = E.basicAttack(actor, b.attackName);
@@ -356,7 +356,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
         const tgtF = ['physical', 'magic'].includes(k.kind) ? (b.fighters.find(f => f.name === ctx.ui.target && E.active(f) && f.side === 'enemy' && E.reachable(b, actor, k).includes(f)) ?? E.reachable(b, actor, k)[0]) : null;
         const est = tgtF ? Math.min(100, Math.round((E.estimate(b, actor, tgtF, k) / Math.max(1, tgtF.hp)) * 100)) : null;
         return { label: k.name, meta: k.cost ? `${profile_sp(ctx)} ${k.cost} · ${pctCost}%` : '무료', sub: `${t !== 'normal' || k.element === 'normal' ? typeName(k.element, sys) + ' · ' : ''}${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''}${cd ? ` · ⏳${cd}` : ''}`,
-          fx: k.cost > actor.sp ? `⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)` : [est != null ? `${tgtF.name.slice(0, 6)} 체력의 ≈${est}%` : '', fxLine(k, sys)].filter(Boolean).join(' · '), cls: `t-${t}${k.cost > actor.sp ? ' over' : ''}`, disabled: cd > 0, act: 'm:skill', v: k.name, target: single };
+          fx: k.cost > actor.sp ? `⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)` : [est != null ? `${tgtF.name.slice(0, 6)} 체력의 ≈${est}%` : '', fxLine(k, sys)].filter(Boolean).join(' · '), cls: `t-${t}${k.cost > actor.sp ? ' over' : ''}`, disabled: cd > 0 || !!(k.once && actor.used?.[k.name]), act: 'm:skill', v: k.name, target: single };
       });
       return [...list, { label: '공격', sub: '기본 공격', cls: 't-normal', act: 'm:basic', target: foes(E.basicAttack(actor)) },
         { label: '방어', sub: '피해 반감 · 기력 +5%', cls: 'plain', act: 'm:defend' }, { label: '휴식', sub: `기력 +20% (${actor.sp}/${actor.maxSp})`, cls: 'plain', act: 'm:rest' }, { label: '◀ 돌아가기', cls: 'back', page: 'main' }];

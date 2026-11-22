@@ -1,6 +1,6 @@
 // Pokémon-style battle screen pieces: scene, info boxes, HP bars, sprites, menu grid.
 import { escapeHtml as h, clamp } from './util.js';
-import { STATUS, typeName, typeIn, typesFor, skillLine, POKE_TYPES, ELEMENT_KO } from './catalog.js';
+import { STATUS, typeName, typeIn, typesFor, skillLine, POKE_TYPES, ELEMENT_KO, bonusText } from './catalog.js';
 import * as E from './engine.js';
 
 const hpCls = p => (p > 50 ? 'g' : p > 20 ? 'y' : 'r');
@@ -229,11 +229,19 @@ export function skillCard(k, { sys = 'world', spLabel = 'SP', targets = null, di
   if (k.selfHeal) lines.push(`자신 HP ${k.selfHeal}% 회복`);
   if (k.drain) lines.push(`흡수 ${Math.round(k.drain * 100)}%`);
   if (k.crit) lines.push('급소율 ↑');
+  if (k.bonusIf) lines.push(bonusText(k.bonusIf));
+  if (k.recoil) lines.push(`반동 ${Math.round(k.recoil * 100)}%`);
+  if (k.hpCost) lines.push(`HP ${k.hpCost}% 소모`);
+  if (k.protect) lines.push('이번 턴 공격 전부 막기 (연속 사용 시 확률↓)');
+  if (k.pivot) lines.push('쓴 뒤 교체');
+  if (k.move) lines.push(k.move === 'back' ? '쓴 뒤 후열로' : '쓴 뒤 전열로');
+  if (k.pull) lines.push('후열 적을 전열로 끌어냄');
+  if (k.once) lines.push('전투당 1회');
   if (k.charge) lines.push('충전 후 발동');
   if (k.cooldown) lines.push(`재사용 ${k.cooldown}턴`);
   lines.push(...extra);
-  const fx = (k.status ? 1 : 0) + Object.keys(k.stages ?? {}).length + Object.keys(k.selfStages ?? {}).length + (k.selfHeal ? 1 : 0) + (k.drain ? 1 : 0) + (k.priority ? 1 : 0);
-  const rarity = k.basic ? 'paper' : k.cooldown >= 3 || k.power >= 110 ? 'art' : k.power >= 80 || fx >= 2 ? 'limited' : fx ? 'hard' : 'paper';
+  const fx = (k.status ? 1 : 0) + Object.keys(k.stages ?? {}).length + Object.keys(k.selfStages ?? {}).length + (k.selfHeal ? 1 : 0) + (k.drain ? 1 : 0) + (k.priority ? 1 : 0) + (k.bonusIf ? 1 : 0) + (k.pivot || k.protect ? 1 : 0);
+  const rarity = k.basic ? 'paper' : k.cooldown >= 3 || k.power >= 110 || k.once ? 'art' : k.power >= 80 || fx >= 2 ? 'limited' : fx ? 'hard' : 'paper';
   return { name: k.name, cost: k.cost ?? 0, spLabel, type: t, typeLabel: typeName(t === 'normal' && k.element !== 'normal' ? 'normal' : k.element, sys), kind: k.kind, power: ['physical', 'magic'].includes(k.kind) ? k.power : null,
     lines, rarity, disabled, why, act, v: v ?? k.name, target: targets, desc: k.desc ?? '' };
 }

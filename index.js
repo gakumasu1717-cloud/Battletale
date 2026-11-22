@@ -1,12 +1,12 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait } from './src/catalog.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag } from './src/parse.js';
-import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaText, recentScene, rememberActivated, forgetActivated } from './src/assist.js';
+import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaText, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
-  playLocal, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty,
+  playLocal, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet,
 } from './src/game.js';
 import { sheetMessages, castMessages } from './src/prompts.js';
 // 타이밍 리듬게임은 보류 중 (요청에 따라 비활성화). 다시 켜려면 아래 import와 modeAct의 타이밍 블록 주석을 해제.
@@ -17,7 +17,7 @@ const NAME = 'battletale';
 const PROMPT_KEY = 'BATTLETALE';
 const DEFAULTS = {
   enabled: true, exclude: '',
-  auxSource: 'main', auxProfile: '', auxUrl: '', auxKey: '', auxModel: '', auxMaxTokens: 10000, auxTemp: 0.4, auxTopP: null, auxReasoning: '', auxJsonMode: false, auxExtra: '', auxHeaders: '', auxProfilePreset: false, auxOverride: false, auxProfileModel: '', castBatch: 4, difficulty: 'normal', spCostScale: '1.3', auxCommands: true, sceneSize: 3, forgeLore: 'auto',
+  auxSource: 'main', auxProfile: '', auxUrl: '', auxKey: '', auxModel: '', auxMaxTokens: 10000, auxTemp: 0.4, auxTopP: null, auxReasoning: '', auxJsonMode: false, auxExtra: '', auxHeaders: '', auxProfilePreset: false, auxOverride: false, auxProfileModel: '', auxMaxInput: 16000, castScene: 20, sheetScene: 4, castBatch: 4, difficulty: 'normal', spCostScale: '1.3', auxCommands: true, sceneSize: 3, forgeLore: 'auto',
   startMode: 'hybrid', startTrigger: 'button', suggestStart: true, statTag: 'stat', statSync: 'all', trackChanges: true, loreBooks: '', loreBudget: 14000,
   length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
@@ -120,9 +120,11 @@ function deps() {
     auxReady: effectiveAuxReady,
     auxJson: async (messages, opts) => {
       const label = String(messages?.[0]?.content ?? '').split('\n')[0].slice(0, 70);
+      const fit = fitInput(messages, settings());
+      const size = `[입력 ~${fit.est.toLocaleString()} tok${fit.limit ? ` / 한도 ${fit.limit.toLocaleString()}` : ''}${fit.cut.length ? ` · 줄임: ${fit.cut.join(', ')} (원래 ~${fit.before.toLocaleString()})` : ''}]`;
       try {
-        const r = await auxJson(messages, settings(), opts);
-        trace('aux', `보조모델 응답 · ${label}`, `── 요청 ──\n${messages.map(m => `[${m.role}]\n${m.content}`).join('\n\n')}\n\n── 응답 ──\n${JSON.stringify(r, null, 1)}`);
+        const r = await auxJson(fit.messages, settings(), opts);
+        trace('aux', `보조모델 응답 · ${label} ${size}`, `${size}\n── 요청 ──\n${fit.messages.map(m => `[${m.role}]\n${m.content}`).join('\n\n')}\n\n── 응답 ──\n${JSON.stringify(r, null, 1)}`);
         return r;
       } catch (e) { trace('error', `보조모델 실패 · ${label}`, String(e?.message ?? e)); throw e; }
     },
@@ -425,7 +427,10 @@ const panelApi = {
       toast(`🤖 ${name} 시트 생성 중…${lore ? ' (월드인포 참고)' : ''}`);
       const prev = id ? deps().codex.list().find(x => x.id === id) : null;
       const current = instruction && prev ? rosterSheet(s, prev) : null;
-      const raw = await auxJson(sheetMessages({ profile, lore, persona: '', personaName: name, npc: true, keepSkills: concept, tier, current, instruction, roster: rosterBrief(name) }), settings(), { maxTokens: 2400 });
+      // Canon for rank judgement: the card (the bot may BE this character, or describe them) and story lines that mention them.
+      const names = [name, ...String(aliases ?? '').split(',')].map(x => x.trim()).filter(Boolean);
+      const seen = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(10, Number(settings().castScene) || 20) * 3 });
+      const raw = await deps().auxJson(sheetMessages({ profile, lore, persona: '', personaName: name, npc: true, keepSkills: concept, tier, current, instruction, roster: rosterBrief(name), card: characterText(), scene: seen }), { maxTokens: 2400 });
       if (raw.__truncated) toast('⚠ 보조모델 답이 중간에 잘렸어요. 받은 부분까지만 반영했어요 (⚙ 최대 응답 토큰을 늘려보세요).', 'warning');
       Object.assign(raw, { name, desc: raw.desc || concept.slice(0, 200) });
       if (tier) raw.tier = tier;
@@ -443,44 +448,72 @@ const panelApi = {
       return e;
     } catch (err) { toast(`생성 실패: ${err.message}`, 'error'); afterChange(); return null; }
   }),
+  // One shot: find the cast AND build their sheets in the same aux call, register them right away.
+  // Unwanted ones are rerolled or deleted from the codex list afterwards.
   scanCast: () => work(async () => {
     if (!effectiveAuxReady()) return toast('보조모델이 필요해요. ⚙ 설정에서 연결해주세요.', 'warning');
     const s = state();
     try {
       const profile = await ensureProfile(s, deps());
       const persona = deps().persona();
-      const history = recentScene(ctx().chat, 40, stripBlocks).slice(-9000);
+      const n = Math.max(2, Math.min(60, Number(settings().castScene) || 20));
+      const history = recentScene(ctx().chat, n, stripBlocks);
       const lore = await personEntries(settings());
-      const existing = deps().codex.list().map(e => `${e.name} [${e.sheet?.tier ?? '?'}]`);
+      const existing = rosterBrief('') || '';
       const limit = Math.max(1, Math.min(8, Number(settings().castBatch) || 4));
       const includePlayer = !s.player;
-      toast(`🧭 페르소나·카드·로어북·대화를 읽는 중… (이번엔 최대 ${limit}명)`);
-      const r = await auxJson(castMessages({ profile, personaName: persona.name, persona: persona.text, character: characterText(), lore, history, existing, limit, includePlayer }), settings(), { maxTokens: 2500 });
+      toast(`🧭 인물을 찾아 바로 시트까지 만드는 중… (최대 ${limit}명${includePlayer ? ' + 나' : ''})`);
+      const r = await deps().auxJson(castMessages({ profile, personaName: persona.name, persona: persona.text, character: characterText(), lore, history, existing: existing ? existing.split('\n') : [], limit, includePlayer }), { maxTokens: 9000 });
       const known = new Set(deps().codex.list().flatMap(e => [e.name, ...(Array.isArray(e.sheet?.aliases) ? e.sheet.aliases : [])]).map(x => String(x).trim()));
-      const list = (Array.isArray(r?.characters) ? r.characters : []).filter(c => c?.name && !known.has(String(c.name).trim()) && (includePlayer || c.role !== 'player')).slice(0, limit + (includePlayer ? 1 : 0))
-        .map(c => ({ name: String(c.name).slice(0, 40), aliases: Array.isArray(c.aliases) ? c.aliases.map(String).slice(0, 4) : [], role: String(c.role ?? 'npc'), tier: String(c.tier ?? ''), concept: String(c.concept ?? '').slice(0, 400), why: String(c.why ?? '').slice(0, 120), pick: c.role !== 'npc' }));
-      ui.cast = list;
+      const list = (Array.isArray(r?.characters) ? r.characters : []).filter(c => c?.name && !known.has(String(c.name).trim()) && (includePlayer || c.role !== 'player')).slice(0, limit + (includePlayer ? 1 : 0));
+      const fresh = [];
+      for (const c of list) {
+        const concept = String(c.concept ?? '').slice(0, 400);
+        if (c.role === 'player') {
+          s.playerConcept = s.playerConcept || concept;
+          applyPlayerSheet(s, deps(), { ...c, desc: c.desc || concept.slice(0, 200) });
+          fresh.push('player');
+          continue;
+        }
+        const raw = { ...c, name: String(c.name).slice(0, 40), desc: c.desc || concept.slice(0, 200), aliases: Array.isArray(c.aliases) ? c.aliases.map(String).slice(0, 4) : [] };
+        if (!raw.skills?.length) { raw.skills = []; }   // a bare entry still registers; reroll fills it
+        const e = registerCharacter(s, deps(), raw, { side: 'enemy' });
+        deps().codex.put({ ...e, concept, role: String(c.role ?? 'npc'), why: String(c.why ?? '').slice(0, 120) });
+        fresh.push(e.id);
+      }
+      ui.castFresh = fresh;
       ui.castMore = !!r?.more || !!r?.__truncated;
-      if (r?.__truncated) toast('답이 길어서 잘렸어요. 받은 인물까지만 보여줄게요 — 나머지는 "더 찾기"로.', 'warning');
-      if (!list.length) toast('찾은 인물이 없어요. 대화가 조금 더 진행된 뒤 다시 해보세요.', 'warning');
+      ui.cast = null;
+      await saveState();
+      if (r?.__truncated) toast('⚠ 답이 길어서 잘렸어요. 완성된 인물까지만 등록했어요 — 나머지는 "더 찾기"로 (⚙ 최대 응답 토큰을 늘리거나 "인물 찾기 한 번에"를 줄여도 돼요).', 'warning');
+      if (!fresh.length) toast('찾은 인물이 없어요. 대화가 조금 더 진행된 뒤 다시 해보세요.', 'warning');
+      else toast(`📖 ${fresh.length}명 등록! 마음에 안 드는 인물은 목록의 🎲 리롤 / ✕ 삭제로 정리하세요.${ui.castMore ? ' 남은 인물은 "더 찾기"로.' : ''}`, 'success');
     } catch (e) { toast(`인물 찾기 실패: ${e.message}`, 'error'); }
     afterChange();
   }),
-  buildCast: async () => {
-    const list = (ui.cast ?? []).filter(c => c.pick);
-    if (!list.length) return toast('만들 인물을 골라주세요.', 'warning');
-    let done = 0;
-    for (const c of list) {
-      toast(`🤖 ${c.name} 만드는 중… (${++done}/${list.length})`);
-      if (c.role === 'player') await panelApi.genSheet(c.concept);
-      else await panelApi.genCodex({ name: c.name, concept: c.concept, tier: c.tier, aliases: c.aliases.join(', ') });
-    }
-    ui.cast = null;
-    ui.castDone = true;
-    toast(`📖 ${list.length}명 완성! ${ui.castMore ? '아직 남은 인물이 있어요 — "🧭 더 찾기"로 이어서 등록해요. ' : ''}마음에 안 들면 리롤하거나 수정 지시를 보내세요.`, 'success');
-    afterChange();
+  rerollCodex: async id => {
+    const e = deps().codex.list().find(x => x.id === id);
+    if (!e) return;
+    const sh = e.sheet ?? {};
+    return panelApi.genCodex({ id, name: e.name, concept: e.concept ?? sh.desc ?? '', tier: '', shape: sh.shape ?? '', aliases: (sh.aliases ?? []).join(', ') });
   },
-  setRuleSet: async sys => { const s = state(); s.profile = setTypeSystem(profileOf(s), sys); deps().cache.set(s.profile); await saveState(); afterChange(); toast(sys === 'pokemon' ? '🎮 포켓몬식 상세 룰 (18타입·공식 상성표)' : '🌍 세계관 속성 룰'); },
+  setRuleSet: async sys => {
+    const s = state();
+    const before = profileOf(s);
+    s.profile = setTypeSystem(before, sys);
+    remapTiers(s, before.tiers, s.profile.tiers);
+    deps().cache.set(s.profile); await saveState(); afterChange();
+    toast(sys === 'pokemon' ? '🎮 포켓몬식 상세 룰 (18타입·공식 상성표)' : '🌍 세계관 속성 룰');
+  },
+  setTierPreset: async key => {
+    const s = state();
+    const before = profileOf(s);
+    const { profile } = applyTierPreset(before, key);
+    s.profile = profile;
+    remapTiers(s, before.tiers, profile.tiers);
+    deps().cache.set(s.profile); await saveState(); afterChange();
+    toast(`🏷 등급 체계: ${profile.tiers.map(t => t.name).join(' → ')}`);
+  },
   switchMode: async mode => { const s = state(); if (switchMode(s, mode, settings())) { await saveState(); afterChange(); toast(`${MODES[mode].icon} ${MODES[mode].ko}(으)로 바꿨어요.`); } else { toast('이 형식으로는 바꿀 수 없어요 (결투는 적이 1명일 때만).', 'warning'); afterChange(); } },
   stop: async () => { const s = state(); if (stopBattle(s, 'stopped', settings())) { await saveState(); afterChange(); toast('전투를 중단했어요.'); } },
   genSheet: (extra, instruction = '') => work(async () => {
@@ -558,6 +591,24 @@ function avatarChoices() {
   const ids = c.groupId ? (c.groups?.find(g => g.id === c.groupId)?.members ?? []).map(av => c.characters.findIndex(ch => ch.avatar === av)) : [c.characterId];
   for (const i of ids) { const ch = c.characters?.[i]; if (ch?.avatar && ch.avatar !== 'none') out.push({ label: ch.name, src: thumb('avatar', ch.avatar) }); }
   return out.filter(a => safePortrait(a.src)).slice(0, 6);
+}
+
+/** Rank names changed (preset / rule set): move every stored sheet to the rank at the same relative position. */
+function remapTiers(s, oldTiers = [], newTiers = []) {
+  const same = oldTiers.length === newTiers.length && oldTiers.every((t, i) => t.name === newTiers[i]?.name);
+  if (same || !newTiers.length) return;
+  const map = name => {
+    const i = oldTiers.findIndex(t => t.name === name);
+    if (i < 0) return name;
+    const r = oldTiers.length > 1 ? i / (oldTiers.length - 1) : 0;
+    return newTiers[Math.round(r * (newTiers.length - 1))].name;
+  };
+  const fix = sh => { if (sh?.tier) sh.tier = map(sh.tier); };
+  fix(s.player);
+  for (const c of s.companions ?? []) fix(c);
+  for (const r of Object.values(s.roster ?? {})) fix(r);
+  const c = deps().codex;
+  for (const e of c.list()) if (e.sheet?.tier && map(e.sheet.tier) !== e.sheet.tier) c.put({ ...e, sheet: { ...e.sheet, tier: map(e.sheet.tier) } });
 }
 
 /** Short lines describing registered characters, used as the yardstick for new ones. */

@@ -18,6 +18,9 @@ export const STATUS = {
   taunt:   { ko: '도발', en: 'Taunt',    taunt: true, turns: 2 },
   fear:    { ko: '공포', en: 'Fear',     dmgOut: 0.7, turns: 2 },
   exhausted: { ko: '탈진', en: 'Exhausted', skip: true, turns: 2 },
+  // Combo triggers: harmless alone, they set up other moves (bonusIf) or take more damage.
+  mark:    { ko: '표식', en: 'Marked',   turns: 3 },
+  vulnerable: { ko: '취약', en: 'Vulnerable', dmgIn: 1.35, turns: 2 },
 };
 
 const words = groups => {
@@ -34,6 +37,7 @@ const STATUS_WORDS = words({
   blind: ['blind', 'blinded', '실명', '암흑', '시야차단'], silence: ['silence', 'silenced', '침묵', '봉인'],
   confuse: ['confuse', 'confused', 'confusion', '혼란'], shield: ['shield', 'barrier', 'ward', '보호막', '배리어', '실드', '방벽'],
   taunt: ['taunt', 'provoke', '도발'], fear: ['fear', 'terror', 'intimidated', '공포', '위축'],
+  mark: ['mark', 'marked', 'brand', '표식', '낙인', '표적'], vulnerable: ['vulnerable', 'expose', 'exposed', '취약', '무방비'],
 });
 export const statusId = raw => (STATUS[raw] ? raw : STATUS_WORDS.get(norm(raw)) ?? null);
 
@@ -194,16 +198,57 @@ export const DEFAULT_PROFILE = Object.freeze({
   map: { pow: 'STR', mag: 'INT', def: 'END', res: '(END+INT)/2', spd: 'AGI', acc: 'SEN', luk: 'LUK' },
   hpPerStat: null,
   tiers: [
-    { name: '일반인', hp: [80, 120], sp: [0, 10], stat: [8, 12] },
-    { name: '하급', hp: [150, 300], sp: [20, 50], stat: [15, 28] },
-    { name: '중급', hp: [400, 800], sp: [60, 150], stat: [35, 65] },
-    { name: '상급', hp: [900, 1600], sp: [180, 400], stat: [70, 130] },
-    { name: '최상급', hp: [1800, 3500], sp: [450, 900], stat: [140, 240] },
-    { name: '전설', hp: [4000, 8000], sp: [1000, 2000], stat: [260, 420] },
+    { name: '일반인', hp: [80, 120], sp: [0, 10], stat: [8, 12], desc: '훈련 안 된 민간인·짐승' },
+    { name: '하급', hp: [150, 300], sp: [20, 50], stat: [15, 28], desc: '견습·신참·잡졸, 막 싸움을 배운 수준' },
+    { name: '중급', hp: [400, 800], sp: [60, 150], stat: [35, 65], desc: '숙련된 전투원·정식 모험가·정규병' },
+    { name: '상급', hp: [900, 1600], sp: [180, 400], stat: [70, 130], desc: '이름난 실력자·엘리트·간부급' },
+    { name: '최상급', hp: [1800, 3500], sp: [450, 900], stat: [140, 240], desc: '한 지역·세력의 정점, 최강자 반열' },
+    { name: '전설', hp: [4000, 8000], sp: [1000, 2000], stat: [260, 420], desc: '세계관 최상위, 신화·전설 속 존재' },
   ],
   elements: ['불', '물', '얼음', '전기', '바람', '대지', '어둠', '빛'],
   notes: '',
 });
+
+/* ---------- Tier presets ----------
+ * Rank names are only labels; the numbers (HP/SP/stat ranges) keep the same scale so sheets stay comparable.
+ * A world with its own ranks (헌터 F~S, 무협 삼류~화경…) should keep them — these are for worlds without. */
+const scaleTiers = (names) => {
+  const base = DEFAULT_PROFILE.tiers;
+  return names.map(([name, desc], i) => {
+    const pos = names.length > 1 ? (i / (names.length - 1)) * (base.length - 1) : 0;
+    const lo = base[Math.floor(pos)], hi = base[Math.ceil(pos)], w = pos - Math.floor(pos);
+    const mix = k => [0, 1].map(j => Math.round(lo[k][j] + (hi[k][j] - lo[k][j]) * w));
+    return { name, hp: mix('hp'), sp: mix('sp'), stat: mix('stat'), desc };
+  });
+};
+export const TIER_PRESETS = {
+  generic: { ko: '범용 6단계 (일반인~전설)', tiers: DEFAULT_PROFILE.tiers },
+  pokemon: { ko: '포켓몬 레벨대 (Lv.10~Lv.100)', tiers: scaleTiers([
+    ['Lv.10', '입문 — 갓 출발한 트레이너·흔한 야생 개체'], ['Lv.25', '중견 — 배지 몇 개, 동네에선 강한 편'],
+    ['Lv.45', '베테랑 — 숙련 트레이너·간부급 조직원'], ['Lv.65', '관장급 — 체육관 관장·사천왕 후보'],
+    ['Lv.85', '챔피언급 — 사천왕·챔피언'], ['Lv.100', '전설 — 전설·환상 급 존재'],
+  ]) },
+  hunter: { ko: '헌터 랭크 (F~S)', tiers: scaleTiers([
+    ['F', '각성 직후·최하급'], ['E', '신참 헌터'], ['D', '일반 헌터'], ['C', '숙련 헌터·중견 길드원'],
+    ['B', '정예·길드 간부'], ['A', '국가급 전력'], ['S', '국가 최상위·재앙급'],
+  ]) },
+};
+const sameTierNames = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((t, i) => (t?.name ?? t) === (b[i]?.name ?? b[i]));
+/** Apply a preset. Returns { profile, map } where map(oldTierName) → new tier name (by relative position). */
+export function applyTierPreset(profile, key) {
+  const preset = TIER_PRESETS[key];
+  if (!preset) return { profile, map: x => x };
+  const old = profile.tiers ?? [];
+  const next = preset.tiers.map(t => ({ ...t, hp: [...t.hp], sp: [...t.sp], stat: [...t.stat] }));
+  const map = name => {
+    const i = old.findIndex(t => t.name === name);
+    if (i < 0) return name;
+    const r = old.length > 1 ? i / (old.length - 1) : 0;
+    return next[Math.round(r * (next.length - 1))].name;
+  };
+  return { profile: normalizeProfile({ ...profile, tiers: next }), map };
+}
+export const isDefaultTiers = p => sameTierNames(p?.tiers, DEFAULT_PROFILE.tiers);
 
 /**
  * Character picture: an https/relative URL (loaded from where it lives, nothing stored) or a small
@@ -238,6 +283,7 @@ function buildProfile(raw) {
   }
   const tiers = (Array.isArray(p.tiers) && p.tiers.length ? p.tiers : DEFAULT_PROFILE.tiers).map(t => ({
     name: plain(t.name ?? '?') || '?', hp: range(t.hp, [100, 200]), sp: range(t.sp, [0, 50]), stat: range(t.stat, [10, 20]),
+    ...(t.desc ? { desc: plain(t.desc, 80) } : {}),
   }));
   return {
     name: plain(p.name ?? '사용자 룰') || '사용자 룰', stats, map, tiers,
@@ -253,7 +299,10 @@ function buildProfile(raw) {
 }
 
 export function setTypeSystem(profile, system) {
-  return normalizeProfile({ ...profile, typeSystem: system, chart: system === 'pokemon' ? undefined : profile.typeSystem === 'pokemon' ? undefined : profile.chart, stab: system === 'pokemon' ? 1.5 : 1.2 });
+  // Untouched generic ranks read oddly next to Pokémon rules: swap in the level bands (custom world ranks stay).
+  const tiers = system === 'pokemon' && isDefaultTiers(profile) ? TIER_PRESETS.pokemon.tiers
+    : system !== 'pokemon' && sameTierNames(profile.tiers, TIER_PRESETS.pokemon.tiers) ? DEFAULT_PROFILE.tiers : profile.tiers;
+  return normalizeProfile({ ...profile, tiers, typeSystem: system, chart: system === 'pokemon' ? undefined : profile.typeSystem === 'pokemon' ? undefined : profile.chart, stab: system === 'pokemon' ? 1.5 : 1.2 });
 }
 
 /* ---------- Element chart (attacker element → defender element → multiplier) ---------- */
@@ -320,6 +369,7 @@ export function parseSkillLine(line, { prefersMagic = false } = {}) {
     else if (/^(필중|sure)$/.test(t)) out.acc = 100;
     else if ((x = /^(?:비용|cost|sp|mp|소모)(\d+)$/.exec(t)) || (x = /^(\d+)(?:sp|mp)$/.exec(t))) out.cost = +x[1];
     else if ((x = /^(?:쿨|쿨타임|cd|cooldown)(\d)$/.exec(t))) out.cooldown = +x[1];
+    else if (/^(1회|1회한정|전투1회)$/.test(t)) out.once = true;   // "1회" = once per battle ("2회"/"3연타" = hits)
     else if ((x = /^(\d)(?:연타|회|hits?|타)$/.exec(t)) || (x = /^(?:x|×)(\d)$/.exec(t))) out.hits = +x[1];
     else if (/^(광역|전체|적전체|aoe|all)$/.test(t)) out.target = 'enemies';
     else if (/^(단일|single)$/.test(t)) out.target = 'enemy';
@@ -333,6 +383,20 @@ export function parseSkillLine(line, { prefersMagic = false } = {}) {
     else if (/^(대상|상대|적|target|enemy)$/.test(t)) ctx = 'target';
     else if ((x = /^(?:회복|heal)(\d{1,3})%?$/.exec(t))) heal = +x[1];
     else if ((x = /^(?:흡수|흡혈|drain)(\d{1,3})%?$/.exec(t))) out.drain = +x[1] / 100;
+    else if ((x = /^(?:반동|recoil)(\d{1,2})%?$/.exec(t))) out.recoil = +x[1] / 100;
+    else if ((x = /^(?:hp소모|체력소모|피소모|hpcost)(\d{1,2})%?$/.exec(t))) out.hpCost = +x[1];
+    else if (/^(1회|소멸|exhaust|once)$/.test(t)) out.once = true;
+    else if (/^(교체|유턴|pivot|switch)$/.test(t)) out.pivot = true;
+    else if (/^(방어막기|프로텍트|protect)$/.test(t)) { out.kind = 'guard'; out.protect = true; }
+    else if (/^(후퇴|후열로)$/.test(t)) out.move = 'back';
+    else if (/^(돌진|전열로)$/.test(t)) out.move = 'front';
+    else if (/^(끌어당기기|pull)$/.test(t)) out.pull = true;
+    else if ((x = /^(?:조건|추가|vs)[:：]?(.+?)[×x*](\d(?:\.\d)?)(소모)?$/i.exec(tok))) {
+      const cond = x[1].toLowerCase();
+      const c = /^(반피|빈사|lowhp)$/.test(cond) ? { selfHpBelow: 0.5 } : /^(풀피|fullhp)$/.test(cond) ? { targetFullHp: true } : /^(충전|charging)$/.test(cond) ? { targetCharging: true }
+        : /^(상태|any)$/.test(cond) ? { status: 'any' } : statusId(cond) ? { status: statusId(cond) } : null;
+      if (c) out.bonusIf = { ...c, mul: +x[2], ...(x[3] ? { consume: true } : {}) };
+    }
     else if ((x = /^(.+?)([+\-]\d)$/.exec(tok)) || (x = /^(.+?)(\d)(업|다운|up|down)$/i.exec(tok))) {
       const key = STAGE_ALIAS[x[1]] ?? stageKey(x[1]);
       if (!key) continue;
@@ -382,11 +446,44 @@ export function skillLine(k, system = 'world') {
   if (k.selfHeal) parts.push(`회복${k.selfHeal}%`);
   if (k.drain) parts.push(`흡수${Math.round(k.drain * 100)}%`);
   if (k.crit) parts.push('급소');
+  if (k.recoil) parts.push(`반동${Math.round(k.recoil * 100)}%`);
+  if (k.hpCost) parts.push(`HP소모${k.hpCost}%`);
+  if (k.bonusIf) parts.push(`조건:${bonusLabel(k.bonusIf)}×${k.bonusIf.mul}${k.bonusIf.consume ? '소모' : ''}`);
+  if (k.once) parts.push('1회');
+  if (k.pivot) parts.push('교체');
+  if (k.protect) parts.push('프로텍트');
+  if (k.move) parts.push(k.move === 'back' ? '후퇴' : '돌진');
+  if (k.pull) parts.push('끌어당기기');
   if (k.charge) parts.push('충전');
   if (k.cooldown) parts.push(`쿨${k.cooldown}`);
   if (k.range === 'ranged' && k.kind === 'physical') parts.push('원거리');
   parts.push(`비용${k.cost}`);
   return `${k.name}: ${parts.join(' ')}${k.desc ? ` (${k.desc})` : ''}`;
+}
+
+/** Short Korean label of a bonusIf condition (also used by the card UI). */
+export function bonusLabel(c) {
+  if (!c) return '';
+  if (c.selfHpBelow) return '반피';
+  if (c.targetFullHp) return '풀피';
+  if (c.targetCharging) return '충전';
+  if (c.status === 'any') return '상태';
+  return STATUS[c.status]?.ko ?? String(c.status ?? '');
+}
+const BONUS_KO = c => (c.selfHpBelow ? '내 HP 절반 이하일 때' : c.targetFullHp ? '대상 HP가 가득일 때' : c.targetCharging ? '대상이 충전 중일 때' : c.status === 'any' ? '대상이 상태이상일 때' : `대상이 ${STATUS[c.status]?.ko ?? c.status}일 때`);
+export const bonusText = c => (c ? `${BONUS_KO(c)} 위력 ×${c.mul}${c.consume ? ` (${c.status === 'any' ? '상태' : STATUS[c.status]?.ko ?? ''} 소모)` : ''}` : '');
+
+function normalizeBonus(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const mul = clamp(num(raw.mul ?? raw.multiplier, 1.5), 1.1, 2);
+  let c = null;
+  if (raw.selfHpBelow != null) c = { selfHpBelow: clamp(num(raw.selfHpBelow, 0.5), 0.2, 0.6) };
+  else if (raw.targetFullHp) c = { targetFullHp: true };
+  else if (raw.targetCharging) c = { targetCharging: true };
+  else if (raw.status) { const id = raw.status === 'any' ? 'any' : statusId(raw.status); if (id) c = { status: id }; }
+  if (!c) return null;
+  if (raw.consume && c.status) c.consume = true;
+  return { ...c, mul };
 }
 
 function range(v, d) {
@@ -528,6 +625,22 @@ export function normalizeSkill(raw, { maxSp = 100, prefersMagic = false } = {}) 
     cooldown: clamp(Math.round(num(s.cooldown ?? s.cd, 0)), 0, 9),
     desc: String(s.desc ?? s.description ?? '').slice(0, 200),
   };
+  // Trade-offs and combo hooks (Pokémon recoil/U-turn/Protect, Slay the Spire exhaust & conditional damage).
+  const damaging = ['physical', 'magic'].includes(finalKind);
+  const recoil = damaging ? clamp(num(s.recoil, 0), 0, 0.5) : 0;
+  if (recoil) out.recoil = Math.round(recoil * 100) / 100;
+  const hpCost = clamp(Math.round(num(s.hpCost ?? s.hpcost, 0)), 0, 50);
+  if (hpCost) out.hpCost = hpCost;
+  if (s.once || s.exhaust) out.once = true;
+  const bonus = damaging ? normalizeBonus(s.bonusIf ?? s.bonus) : null;
+  if (bonus) out.bonusIf = bonus;
+  if (s.pivot || s.switchAfter) out.pivot = true;
+  if (finalKind === 'guard' && (s.protect || /프로텍트|protect|완전\s*방어|간파|detect/i.test(name))) out.protect = true;
+  const mv = norm(s.move ?? s.moveRow ?? '');
+  if (['back', '후열', '후퇴'].includes(mv)) out.move = 'back'; else if (['front', '전열', '돌진'].includes(mv)) out.move = 'front';
+  if (s.pull && damaging) out.pull = true;
+  // A "debuff" that also deals damage is really an attack with a secondary effect.
+  if (finalKind === 'debuff' && power > 0) { out.kind = 'magic'; out.range = 'ranged'; }
   const rg = norm(s.range ?? '');
   out.range = ['melee', '근접', 'close'].includes(rg) ? 'melee' : ['ranged', '원거리', 'far', 'range'].includes(rg) ? 'ranged'
     : finalKind === 'physical' && !RANGED_HINT.test(name) ? 'melee' : 'ranged';
@@ -550,6 +663,9 @@ export function autoCost(skill, maxSp) {
   if (skill.status && ['physical', 'magic'].includes(skill.kind)) c += 4;
   if (skill.priority > 0) c += 3;
   if (skill.cooldown) c *= 0.85;
+  if (skill.hpCost) c *= Math.max(0.2, 1 - skill.hpCost / 20);   // paid in blood instead of resource
+  if (skill.once) c *= 0.8;
+  if (skill.pivot) c += 2;
   return Math.max(0, Math.round(c * unit));
 }
 
@@ -643,8 +759,23 @@ export function normalizeSheet(raw, profile, { side = 'enemy', seed = '' } = {})
     style: r.style ? String(r.style) : '',
     shape: r.shape ? String(r.shape) : '', gender: r.gender ? String(r.gender) : '', portrait: safePortrait(r.portrait),
     actions: clamp(Math.round(num(r.actions, threat === 'boss' ? 1 : 1)), 1, 3),
+    trait: traitId(r.trait ?? r.role_passive ?? r.passiveTag),
   };
 }
+
+/* ---------- Role traits (one fixed passive per fighter, engine-owned) ---------- */
+export const TRAITS = {
+  intimidate: { ko: '위협', desc: '등장할 때 맞은편 전원 공격 -1' },
+  vanguard: { ko: '선봉', desc: '전열에 있으면 받는 피해 -20%' },
+  opportunist: { ko: '기회주의', desc: '상태이상에 걸린 적에게 피해 +25%' },
+  medic: { ko: '의무병', desc: '회복량 +30%' },
+  avenger: { ko: '복수', desc: '아군이 쓰러진 뒤 공격 +1 (1회)' },
+};
+const TRAIT_WORDS = words({
+  intimidate: ['intimidate', '위협', '위압', '위협감'], vanguard: ['vanguard', 'tank', '선봉', '탱커', '수호'],
+  opportunist: ['opportunist', '기회주의', '약점공략', '틈새'], medic: ['medic', 'healer', '의무병', '치유사', '힐러'], avenger: ['avenger', '복수', '복수자'],
+});
+export const traitId = raw => (raw ? (TRAITS[raw] ? raw : TRAIT_WORDS.get(norm(raw)) ?? null) : null);
 
 function rowOf(raw, skills, stats, profile) {
   const k = norm(raw ?? '');
@@ -697,14 +828,23 @@ export function auditSheet(sheet, profile, { bonusTier = 0, clampStats: clampIn 
   const damaging = k => ['physical', 'magic'].includes(k.kind);
   for (const k of sheet.skills) {
     if (damaging(k)) {
-      const isSig = !sigUsed && ((k.cooldown ?? 0) >= 3 || k.charge);
+      const isSig = !sigUsed && ((k.cooldown ?? 0) >= 3 || k.charge || k.once);
       if (isSig) sigUsed = true;
-      cap(k, 'power', isSig ? sigPow : maxPow, '위력');
+      // A real price buys power: recoil, paying HP, a self-debuff, or once per battle.
+      const selfDown = Object.values(k.selfStages ?? {}).filter(v => v < 0).reduce((a, v) => a - v, 0);
+      const paid = ((k.recoil ?? 0) >= 0.25 ? 15 : (k.recoil ?? 0) >= 0.1 ? 8 : 0) + ((k.hpCost ?? 0) >= 10 ? 12 : 0) + (selfDown >= 2 ? 15 : selfDown ? 8 : 0) + (k.once && !isSig ? 25 : 0);
+      cap(k, 'power', (isSig ? sigPow : maxPow) + Math.min(30, paid), '위력');
+      if (k.bonusIf) {
+        // Conditional bursts are the point of combos, but the condition must be real.
+        const lim = k.bonusIf.consume ? 1.8 : k.bonusIf.selfHpBelow || k.bonusIf.targetFullHp ? 1.4 : 1.6;
+        if (k.bonusIf.mul > lim) { notes.push(`${k.name} 조건 배율 ×${k.bonusIf.mul}→×${lim}`); k.bonusIf.mul = lim; }
+      }
+      if (k.pivot) cap(k, 'power', Math.round(maxPow * 0.75), '교체기 위력');
       if ((k.hits ?? 1) > 1) { cap(k, 'hits', 3, '타수'); cap(k, 'power', Math.round(maxPow * 0.4), '타당 위력'); }
       if (k.target === 'enemies') cap(k, 'power', Math.round(maxPow * 0.8), '광역 위력');
       if (k.priority > 0) { cap(k, 'priority', r >= 0.5 ? 2 : 1, '우선도'); cap(k, 'power', r >= 0.8 ? 60 : 50, '선공기 위력'); }
       if (k.status) {
-        const lim = HARD_CC.includes(k.status.id) ? 20 : (k.power ?? 0) >= 60 ? 30 : 50;
+        const lim = HARD_CC.includes(k.status.id) ? 20 : k.status.id === 'mark' ? 100 : k.status.id === 'vulnerable' ? ((k.power ?? 0) >= 60 ? 50 : 100) : (k.power ?? 0) >= 60 ? 30 : 50;
         if (k.status.chance > lim) { notes.push(`${k.name} ${k.status.id} 확률 ${k.status.chance}%→${lim}%`); k.status.chance = lim; }
       }
       if (k.selfStages) {
@@ -727,14 +867,18 @@ export function auditSheet(sheet, profile, { bonusTier = 0, clampStats: clampIn 
       if (k.status && HARD_CC.includes(k.status.id) && (k.acc ?? 95) > 75) { notes.push(`${k.name} 명중 ${k.acc ?? 95}→75`); k.acc = 75; }
     }
   }
-  // About one attack in four carries a secondary effect (at least one when there are 2+ attacks).
+  // Free secondary effects: up to half of the attacks. Effects that come with a price
+  // (a self-debuff, recoil, HP cost) or that set up a combo (mark/vulnerable) don't count against it.
   const att = sheet.skills.filter(damaging);
-  const withFx = att.filter(k => k.status || k.stages || k.selfStages || k.drain || k.selfHeal);
-  const allow = Math.max(att.length >= 2 ? 1 : 0, Math.round(att.length / 4));
+  const priced = k => k.recoil || k.hpCost || Object.values(k.selfStages ?? {}).some(v => v < 0);
+  const combo = k => ['mark', 'vulnerable'].includes(k.status?.id);
+  const withFx = att.filter(k => (k.status || k.stages || k.selfStages || k.drain || k.selfHeal) && !priced(k) && !combo(k));
+  const allow = Math.max(att.length >= 2 ? 1 : 0, Math.ceil(att.length / 2));
   for (const k of withFx.slice(allow).reverse()) {
-    notes.push(`${k.name} 부가효과 제거 (기술 ¼ 규칙)`);
+    notes.push(`${k.name} 부가효과 제거 (무상 부가효과는 공격기 절반까지)`);
     for (const f of ['status', 'stages', 'selfStages', 'drain', 'selfHeal']) delete k[f];
   }
+  if (att.length >= 2 && att.filter(k => k.once).length > 1) for (const k of att.filter(x => x.once).slice(1)) { notes.push(`${k.name} 1회 제한 해제 (1회기는 하나만)`); delete k.once; cap(k, 'power', maxPow, '위력'); }
   if (clampStats && tiers[idx]) {
     const t = tiers[idx];
     const [lo, hi] = t.stat ?? [0, Infinity];
