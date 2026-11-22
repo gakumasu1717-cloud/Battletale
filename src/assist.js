@@ -41,7 +41,7 @@ export function fitInput(messages, settings) {
     for (let guard = 0; guard < 80; guard++) {
       msgs[ui].content = parts.join('\n');
       if (total() <= limit) break;
-      const idx = parts.map((p, i) => ({ i, p })).filter(x => group.re.test(head(x.p)) && !/^(task|rule set|answer|modes|honesty)/i.test(head(x.p)) && x.p.length > MIN_KEEP)
+      const idx = parts.map((p, i) => ({ i, p })).filter(x => group.re.test(head(x.p)) && !/^(task|rule set|answer|modes|honesty|primary|world brief)/i.test(head(x.p)) && x.p.length > MIN_KEEP)
         .sort((a, b) => b.p.length - a.p.length)[0]?.i;
       if (idx == null) break;
       const p = parts[idx];

@@ -223,6 +223,7 @@ const SETTINGS = [
     { key: 'showThreat', type: 'check', label: '위협도 표시' },
     { key: 'autoPlay', type: 'select', label: '전투 메시지 자동 넘김', options: [['0', '끔 (탭해서 넘김)'], ['900', '빠르게'], ['1300', '보통 (기본)'], ['1900', '느리게']], hint: '탭하면 언제든 바로 다음으로' },
     { key: 'showFab', type: 'check', label: '화면에 떠 있는 ⚔️ 버튼도 쓰기', hint: '기본은 채팅창 옆 마법봉(🪄) 메뉴에서 열어요' },
+    { key: 'optIn', type: 'check', label: '새 채팅은 켜기 전까지 쉬기 (마법봉 → BattleTale로 활성화)', hint: '켜면 처음 여는 채팅엔 아무것도 주입하지 않아요. 이미 시트·전투·기초 설정이 있는 채팅은 그대로 켜져 있어요.' },
     { key: 'exclude', type: 'text', label: '제외할 캐릭터 (쉼표)', ph: '예: 일상봇, 비서' },
   ]],
   ['🤖 보조모델', [
@@ -705,13 +706,26 @@ function rulesTab(s) {
     return `<div class="bt-section"><div class="bt-sub">룰 프로필 JSON 편집</div><textarea id="bt-json" class="text_pole bt-json">${h(JSON.stringify(p, null, 2))}</textarea>
       <div class="bt-row"><button class="menu_button" data-act="save-json" data-v="rules">저장</button><button class="menu_button" data-act="cancel-json">취소</button></div></div>`;
   }
-  return `<div class="bt-section">
+  const bf = s.brief?.parts;
+  const chartRows = p.typeSystem === 'pokemon' ? [] : Object.entries(p.chart ?? {}).map(([a, row]) => {
+    const by = m => Object.entries(row).filter(([, v]) => (m === 2 ? v > 1 : m === 0 ? v === 0 : v > 0 && v < 1)).map(([d]) => h(typeName(d)));
+    const st = by(2), wk = by(0.5), no = by(0);
+    return st.length || wk.length || no.length ? `<div>· <b>${h(typeName(a))}</b>${st.length ? ` → 강함: ${st.join(', ')}` : ''}${wk.length ? ` · 약함: ${wk.join(', ')}` : ''}${no.length ? ` · 무효: ${no.join(', ')}` : ''}</div>` : '';
+  }).filter(Boolean);
+  const briefBox = `<div class="bt-section"><div class="bt-sub">🧭 기초 설정 ${tip('마법봉 메뉴의 BattleTale 또는 아래 버튼: 로어북·디스크립션·페르소나·최근 대화를 한 번 읽어 속성·상성표·등급 체계·전투 방식을 요약해 둬요. 시트·전투 구성·상시 프롬프트가 이 요약을 같이 써요.')}</div>
+      ${bf ? `${[['전투 방식', bf.combat], ['등급 체계', bf.ranks], ['속성·상성', bf.elements], ['나', bf.player]].filter(([, v]) => v).map(([k, v]) => `<div class="bt-note"><b>${k}</b> · ${h(v)}</div>`).join('')}
+        ${bf.storyteller ? `<details class="bt-note"><summary>메인 모델에 상시로 주는 메모</summary><pre class="bt-pre">${h(bf.storyteller)}</pre></details>` : ''}
+        <div class="sd-hint">만든 시각: ${new Date(s.brief.at).toLocaleString()}</div>`
+        : '<div class="bt-note">아직 없어요. 만들어 두면 시트 등급·속성 판단이 정확해지고 상시 프롬프트가 가벼워져요.</div>'}
+      <div class="bt-row"><button class="menu_button" data-act="setup" ${busy ? 'disabled' : ''}>${bf ? '🔄 기초 설정 다시 만들기' : '🧭 기초 설정 만들기'}</button></div></div>`;
+  return `${briefBox}<div class="bt-section">
       <div class="bt-fname">${h(p.name)} ${s.profile ? '' : '<small>(기본값)</small>'}</div>
       <div class="bt-note">스탯: ${p.stats.map(x => h(x.label && x.label !== x.key ? `${x.key}(${x.label})` : x.key)).join(', ')} · 체력 ${h(p.hpLabel)} · 자원 ${h(p.spLabel)}</div>
       <div class="bt-note">계산: ${Object.entries(p.map).map(([k, v]) => `${DERIVED_KO[k]}=${h(v)}`).join(', ')}</div>
       <div class="bt-note">등급: ${p.tiers.map(t => `<span title="${h(t.desc ?? '')}">${h(t.name)}(${t.hp[0]}~${t.hp[1]})</span>`).join(' → ')}</div>
       ${p.tiers.some(t => t.desc) ? `<details class="bt-note"><summary>등급별 기준</summary>${p.tiers.map(t => `<div>· <b>${h(t.name)}</b>${t.aliases?.length ? ` <small>(= ${t.aliases.map(h).join(' / ')})</small>` : ''} — ${h(t.desc ?? '(설명 없음)')}</div>`).join('')}</details>` : ''}
       ${p.elements?.length ? `<div class="bt-note">속성: ${p.elements.map(h).join(', ')}</div>` : ''}
+      ${chartRows.length ? `<details class="bt-note"><summary>상성표 (공격 → 방어)</summary>${chartRows.join('')}</details>` : ''}
       ${p.notes ? `<div class="bt-note">${h(p.notes)}</div>` : ''}
     </div>
     <div class="bt-section"><div class="bt-sub">상성 체계</div>
@@ -946,6 +960,7 @@ function onClick(e) {
     case 'gen-sheet': return Promise.resolve(api.genSheet(document.getElementById('bt-sheet-extra')?.value?.trim() ?? '')).then(() => { api.ui.sheetMode = 'view'; refreshPanel(); });
     case 'import-stat': return api.importStat();
     case 'gen-rules': return api.genRules();
+    case 'setup': return api.setup?.();
     case 'reset-rules': return api.edit(s => { s.profile = null; });
     case 'edit-json': editing = v; return refreshPanel();
     case 'cancel-json': editing = null; return refreshPanel();

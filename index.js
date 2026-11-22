@@ -6,9 +6,9 @@ import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEn
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
-  playLocal, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
+  playLocal, setupChat, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
 } from './src/game.js';
-import { sheetMessages, castMessages, stateMessages } from './src/prompts.js';
+import { sheetMessages, castMessages, stateMessages, briefText } from './src/prompts.js';
 // 타이밍 리듬게임은 보류 중 (요청에 따라 비활성화). 다시 켜려면 아래 import와 modeAct의 타이밍 블록 주석을 해제.
 // import { runTiming } from './src/timing.js';
 import { mountPanel, togglePanel, refreshPanel, refreshTrace, renderCards, settingsHtml, setFab, beginTurn, endTurn, toggleDock, refreshDock } from './src/ui.js';
@@ -16,7 +16,7 @@ import { mountPanel, togglePanel, refreshPanel, refreshTrace, renderCards, setti
 const NAME = 'battletale';
 const PROMPT_KEY = 'BATTLETALE';
 const DEFAULTS = {
-  enabled: true, exclude: '',
+  enabled: true, exclude: '', optIn: false,
   auxSource: 'main', auxProfile: '', auxUrl: '', auxKey: '', auxModel: '', auxMaxTokens: 10000, auxTemp: 0.4, auxTopP: null, auxReasoning: '', auxJsonMode: false, auxExtra: '', auxHeaders: '', auxProfilePreset: false, auxOverride: false, auxProfileModel: '', auxMaxInput: 16000, castScene: 20, sheetScene: 4, castBatch: 4, difficulty: 'normal', spCostScale: '1.3', auxCommands: true, sceneSize: 3, forgeLore: 'auto',
   startMode: 'hybrid', startTrigger: 'button', suggestStart: true, statTag: 'stat', statSync: 'all', trackChanges: true, loreBooks: '', loreBudget: 14000,
   length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
@@ -57,6 +57,8 @@ function enabledHere() {
   if (!c.chatId) return false;
   const st = state();
   if (st?.disabled) return false;
+  // Opt-in: new chats stay untouched until the user turns BattleTale on (wand menu); chats already in use count as on.
+  if (s.optIn && !(st?.activated || st?.brief || st?.player || st?.battle)) return false;
   const names = String(s.exclude ?? '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
   const ch = c.characters?.[c.characterId];
   if (ch && names.includes(String(ch.name).toLowerCase())) return false;
@@ -132,6 +134,7 @@ function deps() {
     matchLore: text => matchLore(settings(), text),
     trace: (...a) => trace(...a),
     character: characterText,
+    mentions: names => mentions(ctx().chat, names, { strip: stripBlocks, lookback: 60 }),
     persona: () => ({ name: ctx().name1 || 'User', text: personaText() }),
     statFields: lastStatFields,
     scene: (n = settings().sceneSize ?? 3) => recentScene(ctx().chat, n, stripBlocks),
@@ -475,7 +478,7 @@ const panelApi = {
       // Canon for rank judgement: the card (the bot may BE this character, or describe them) and story lines that mention them.
       const names = [name, ...String(aliases ?? '').split(',')].map(x => x.trim()).filter(Boolean);
       const seen = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(10, Number(settings().castScene) || 20) * 3 });
-      const raw = await deps().auxJson(sheetMessages({ profile, lore, persona: '', personaName: name, npc: true, keepSkills: concept, tier, current, instruction, roster: rosterBrief(name), card: characterText(), scene: seen }), { maxTokens: 2400 });
+      const raw = await deps().auxJson(sheetMessages({ profile, own: lore, persona: concept, personaName: name, npc: true, tier, current, instruction, roster: rosterBrief(name), card: characterText(), story: seen, brief: briefText(s.brief) }), { maxTokens: 2400 });
       if (raw.__truncated) toast('⚠ 보조모델 답이 중간에 잘렸어요. 받은 부분까지만 반영했어요 (⚙ 최대 응답 토큰을 늘려보세요).', 'warning');
       Object.assign(raw, { name, desc: raw.desc || concept.slice(0, 200) });
       if (tier) raw.tier = tier;
@@ -508,7 +511,7 @@ const panelApi = {
       const limit = Math.max(1, Math.min(8, Number(settings().castBatch) || 4));
       const includePlayer = !s.player;
       toast(`🧭 인물을 찾아 바로 시트까지 만드는 중… (최대 ${limit}명${includePlayer ? ' + 나' : ''})`);
-      const r = await deps().auxJson(castMessages({ profile, personaName: persona.name, persona: persona.text, character: characterText(), lore, history, existing: existing ? existing.split('\n') : [], limit, includePlayer }), { maxTokens: 9000 });
+      const r = await deps().auxJson(castMessages({ profile, personaName: persona.name, persona: persona.text, character: characterText(), lore, history, existing: existing ? existing.split('\n') : [], limit, includePlayer, brief: briefText(s.brief) }), { maxTokens: 9000 });
       const known = new Set(deps().codex.list().flatMap(e => [e.name, ...(Array.isArray(e.sheet?.aliases) ? e.sheet.aliases : [])]).map(x => String(x).trim()));
       const list = (Array.isArray(r?.characters) ? r.characters : []).filter(c => c?.name && !known.has(String(c.name).trim()) && (includePlayer || c.role !== 'player')).slice(0, limit + (includePlayer ? 1 : 0));
       const fresh = [];
@@ -575,6 +578,8 @@ const panelApi = {
     else syncFromStatus(s, f, 'all');
     await saveState(); afterChange(); toast('📥 상태창 값을 가져왔어요.');
   },
+  setup: () => runSetup({ ask: false }),
+  brief: () => state()?.brief ?? null,
   genRules: () => work(async () => {
     const s = state();
     try { await ensureProfile(s, deps(), { force: true }); toast('📜 룰 분석 완료! 시트도 새 룰로 다시 만들면 좋아요.', 'success'); } catch (e) { toast(`룰 분석 실패: ${e.message}`, 'error'); }
@@ -707,6 +712,70 @@ async function auxModelList() {
   refreshPanel();
 }
 
+/* ---------------- One-time setup (wand menu) ---------------- */
+async function askYesNo(html, ok, no) {
+  const c = ctx();
+  try {
+    if (typeof c.callGenericPopup === 'function' && c.POPUP_TYPE) {
+      const r = await c.callGenericPopup(html, c.POPUP_TYPE.CONFIRM, '', { okButton: ok, cancelButton: no });
+      return r === (c.POPUP_RESULT?.AFFIRMATIVE ?? 1) || r === true;
+    }
+  } catch (e) { console.warn('[BattleTale] popup', e); }
+  return window.confirm(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+}
+
+const SETUP_WHAT = '세계관 로어북 · 캐릭터 디스크립션 · 페르소나 · 최근 대화를 가볍게 읽고<br><b>속성·상성표 · 등급/강함 체계 · 전투 방식</b>을 짧은 기초 설정으로 정리해 둬요.<br>이후 시트·전투·상시 프롬프트는 이 요약을 써서 더 가볍고 일관되게 돌아가요.';
+
+/** Turn BattleTale on for this chat and build the world brief (rules, ranks, elements + chart, how fights work). */
+async function runSetup({ ask = true } = {}) {
+  if (!ctx().chatId) return toast('채팅을 먼저 열어주세요.', 'warning');
+  const s = state();
+  if (ask) {
+    const on = enabledHere();
+    const html = s.brief ? `<h3>⚔ BattleTale 기초 설정 다시 만들기</h3><p>세계관을 다시 읽어 정리해요. 지금 룰(등급·속성·상성)은 새 분석으로 바뀌고, 캐릭터 시트는 그대로예요.</p>`
+      : on ? `<h3>⚔ 이 채팅의 BattleTale 기초 설정을 만들까요?</h3><p>${SETUP_WHAT}</p>`
+        : `<h3>⚔ 이 채팅에서 BattleTale을 활성화할까요?</h3><p>${SETUP_WHAT}</p>`;
+    if (!await askYesNo(html, s.brief ? '다시 만들기' : on ? '만들기' : '활성화', '취소')) return;
+  }
+  s.disabled = false;
+  s.activated = true;
+  if (!settings().enabled) setSetting('enabled', true);
+  await saveState(); afterChange();
+  if (!effectiveAuxReady()) { toast('활성화했어요. 기초 설정은 ⚙ 설정에서 보조모델을 연결한 뒤 룰 탭의 "🧭 기초 설정"으로 만들 수 있어요.', 'warning'); togglePanel(true); return; }
+  await work(async () => {
+    const hadPlayer = !!s.player;
+    try {
+      toast('🧭 세계관을 읽고 기초 설정을 만드는 중…');
+      await setupChat(s, deps());
+      const p = s.profile;
+      toast(`📜 기초 설정 완료 — ${p.name} · 등급 ${p.tiers.length}단계${p.elements?.length ? ` · 속성 ${p.elements.length}종` : ''}${!hadPlayer && s.player ? ` · ${s.player.name} 시트 (${s.player.tier})` : ''}`, 'success');
+      if (hadPlayer) toast('기존 캐릭터 시트는 그대로 뒀어요. 새 기준으로 다시 만들려면 캐릭터 탭에서 🤖 다시 만들기를 눌러주세요.');
+    } catch (e) { toast(`기초 설정 실패: ${e.message}`, 'error'); }
+  });
+  await saveState(); afterChange(); togglePanel(true);
+}
+
+async function onWand() {
+  if (!ctx().chatId) return toast('채팅을 먼저 열어주세요.', 'warning');
+  const s = state();
+  if (!enabledHere() || !s?.brief) return runSetup();
+  togglePanel(true);
+}
+
+/** Entry in SillyTavern's wand (extensions) menu next to the chat box. */
+function mountWand() {
+  const menu = document.getElementById('extensionsMenu');
+  if (!menu || document.getElementById('bt-wand')) return;
+  const el = document.createElement('div');
+  el.id = 'bt-wand';
+  el.className = 'list-group-item flex-container flexGap5 interactable';
+  el.tabIndex = 0;
+  el.title = 'BattleTale';
+  el.innerHTML = '<div class="fa-solid fa-shield-halved extensionsMenuExtensionButton"></div><span>BattleTale</span>';
+  el.addEventListener('click', () => { onWand(); });
+  menu.appendChild(el);
+}
+
 /* ---------------- Slash commands ---------------- */
 function registerCommands() {
   const c = ctx();
@@ -737,6 +806,7 @@ function registerCommands() {
   reg('bt-end', r => panelApi.stop(r), '진행 중인 전투 중단');
   reg('bt-panel', () => togglePanel(), 'BattleTale 패널 열기/닫기');
   reg('bt-sheet', extra => panelApi.genSheet(extra), '보조모델로 내 캐릭터 시트 (재)생성');
+  reg('bt-setup', () => runSetup(), '이 채팅에서 BattleTale 켜기 + 기초 설정 (속성·상성·등급·전투 방식) 만들기');
   reg('bt-rules', () => panelApi.genRules(), '보조모델로 세계관 룰 (재)분석');
   reg('bt-status', () => { const s = state(); const b = s?.battle; return b ? JSON.stringify(b.fighters.map(f => ({ name: f.name, hp: `${f.hp}/${f.maxHp}`, sp: `${f.sp}/${f.maxSp}` }))) : (s?.player ? `${s.player.name} HP ${s.player.hp}/${s.player.maxHp}` : 'no data'); }, '현재 전투/시트 상태 반환');
 }
@@ -750,7 +820,7 @@ function registerCommands() {
   const onReady = () => {
     if (booted) return;
     booted = true;
-    for (const step of [bindSettings, () => mountPanel(panelApi), registerCommands, () => { try { if (localStorage.getItem('bt-dock') === '1') toggleDock(true); } catch { /* ignore */ } }, afterChange]) {
+    for (const step of [bindSettings, () => mountPanel(panelApi), mountWand, registerCommands, () => { try { if (localStorage.getItem('bt-dock') === '1') toggleDock(true); } catch { /* ignore */ } }, afterChange]) {
       try { step(); } catch (e) { console.error('[BattleTale] boot step failed', e); }
     }
   };
@@ -763,7 +833,7 @@ function registerCommands() {
   ev.on(T.MESSAGE_SWIPED, () => setTimeout(() => processMessage(ctx().chat.length - 1), 50));
   ev.on(T.MESSAGE_EDITED, idx => { const m = ctx().chat?.[idx]; if (m && !m.is_user) processMessage(idx); else { const s = state(); if (s && syncHistory(s, ctx().chat, settings()).changed) { saveState(); afterChange(); } } });
   ev.on(T.MESSAGE_DELETED, () => { const s = state(); if (s && syncHistory(s, ctx().chat, settings()).changed) { toast('메시지 삭제에 맞춰 전투를 되돌렸어요.', 'warning'); saveState(); } afterChange(); });
-  ev.on(T.CHAT_CHANGED, () => { forgetActivated(); ui.actor = null; ui.target = null; setPrompt(''); afterChange(); });
+  ev.on(T.CHAT_CHANGED, () => { mountWand(); forgetActivated(); ui.actor = null; ui.target = null; setPrompt(''); afterChange(); });
   for (const t of [T.CHARACTER_MESSAGE_RENDERED, T.USER_MESSAGE_RENDERED, T.MORE_MESSAGES_LOADED, T.MESSAGE_UPDATED]) if (t) ev.on(t, renderAll);
   if (T.WORLD_INFO_ACTIVATED) ev.on(T.WORLD_INFO_ACTIVATED, rememberActivated);
   console.log('[BattleTale] loaded');

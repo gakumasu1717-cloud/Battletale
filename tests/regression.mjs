@@ -389,6 +389,46 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.ok(!reg.spec.threatFit, 'registered characters are never scaled');
 });
 
+/* 29 */ await test('기초 설정: 룰·상성표·세계관 요약을 한 번에 만들고 시트까지', async () => {
+  const calls = [];
+  const fake = { ...deps, auxReady: () => true, persona: () => ({ name: '한결', text: '프로기오 등급의 화염 마도사. 기사단 소속 10년.' }),
+    matchLore: async () => ({ text: '### 마력 등급\n인치오 < 프로기오 < 도미누스' }), mentions: () => '',
+    auxJson: async msgs => {
+      const u = msgs[1].content; calls.push(u);
+      if (/"brief"/.test(u)) return { name: '마탑 세계', stats: ['STR', 'INT', 'AGI', 'END', 'SEN', 'LUK'], elements: ['화염', '빙결'],
+        chart: { 화염: { 빙결: 2 }, 빙결: { 화염: 0.5 } },
+        tiers: [{ name: '인치오', hp: [150, 300], sp: [20, 50], stat: [15, 28] }, { name: '프로기오', hp: [400, 800], sp: [60, 150], stat: [35, 65] }, { name: '도미누스', hp: [900, 1600], sp: [180, 400], stat: [70, 130] }],
+        brief: { combat: '마법 중심', ranks: '마력 5등급', elements: '화염은 빙결에 강함', player: '한결은 프로기오', storyteller: ['등급 이름을 그대로 쓴다', '주문엔 영창이 필요'] } };
+      return { name: '한결', tierReason: '"프로기오" → 프로기오', tier: '프로기오', hp: 600, sp: 100, stats: { STR: 40, INT: 60, AGI: 40, END: 40, SEN: 40, LUK: 30 }, elements: ['화염'], skills: [{ name: '화염구', kind: 'magic', power: 70, cost: 20, element: '화염' }] };
+    } };
+  const s = G.stateOf({});
+  await G.setupChat(s, fake);
+  assert.equal(s.profile.tiers[1].name, '프로기오');
+  assert.ok(Object.keys(s.profile.chart).length, 'world chart kept');
+  assert.equal(s.brief.parts.ranks, '마력 5등급');
+  assert.equal(s.brief.parts.storyteller.split('\n').length, 2);
+  assert.ok(s.activated && s.player && s.player.tier === '프로기오');
+  assert.ok(s.player.elements.length, 'player got a type');
+  const sheetPrompt = calls[1];
+  assert.ok(sheetPrompt.indexOf('PRIMARY SOURCE') < sheetPrompt.indexOf('Fairness'), 'persona comes first');
+  assert.match(sheetPrompt, /마력 등급/); assert.match(sheetPrompt, /World brief/); assert.match(sheetPrompt, /"elements" is REQUIRED/);
+});
+
+/* 30 */ await test('요약 사용: 상시 주입은 짧은 메모만, 입력 줄이기는 페르소나를 건드리지 않는다', async () => {
+  const Pr = await import(here + 'prompts.js');
+  const A = await import(here + 'assist.js').catch(() => null);
+  const t = Pr.worldPrompt({ mode: 'hybrid', profile: PROFILE, brief: '등급 이름을 그대로 쓴다' });
+  assert.match(t, /World combat notes/); assert.match(t, /등급 이름을/);
+  assert.ok(t.length < 2600, `world prompt too long: ${t.length}`);
+  if (A) {
+    const persona = '페르소나 설명 '.repeat(300);
+    const msgs = Pr.sheetMessages({ profile: PROFILE, persona, personaName: '한결', lore: '로어 '.repeat(6000), scene: '대화 '.repeat(3000) });
+    const fit = A.fitInput(msgs, { auxMaxInput: 6000 });
+    assert.ok(fit.cut.length, 'something was cut');
+    assert.ok(fit.messages[1].content.includes(persona.trim()), 'persona kept whole');
+  }
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

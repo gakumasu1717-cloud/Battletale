@@ -1,9 +1,9 @@
 // Game controller: everything between "chat happened" and "engine resolved".
 // Kept free of SillyTavern globals so it can be tested with plain objects.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
+import { normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL, threatOf, createBattle } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
-import { ruleMessages, sheetMessages, forgeMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
+import { ruleMessages, setupMessages, briefText, sheetMessages, forgeMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
 import { MODES, modeOf } from './modes/index.js';
 import { quickBlocks } from './modes/shared.js';
 import { hashStr, clone, norm, num, clamp, uid } from './util.js';
@@ -54,6 +54,8 @@ export function stateOf(meta) {
   s.lastResult ??= '';
   s.disabled ??= false;
   s.roster ??= {};
+  s.brief ??= null;        // world brief from the one-time setup
+  s.activated ??= false;   // the user turned BattleTale on for this chat (wand menu)
   if (s.battle && !s.battle.st) s.battle = null;   // v1 battle format → drop
   return s;
 }
@@ -105,7 +107,11 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   if (deps.auxReady()) {
     deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
     try {
-      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier }), { maxTokens: 2400 });
+      // The persona and the lorebook entries about the player come first; the general lore is only context.
+      const own = deps.matchLore ? ((await deps.matchLore(`${persona.name}
+${persona.text}`).catch(() => null))?.text ?? '') : '';
+      const story = deps.mentions?.([persona.name]) ?? '';
+      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -120,6 +126,34 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   }
   if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: fixedTier || profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
   return applyPlayerSheet(s, deps, raw, { statFields, partial });
+}
+
+/**
+ * One-time setup of a chat: read lore, card, persona and recent story once, and keep the rule set
+ * (stats, ranks, elements + matchup chart) plus a compressed world brief that later prompts reuse.
+ */
+export async function setupChat(s, deps, { player = true } = {}) {
+  if (!deps.auxReady()) throw new Error('보조모델이 필요해요');
+  const persona = deps.persona();
+  const fields = deps.statFields?.();
+  const n = Math.max(4, Math.min(20, Number(deps.settings?.()?.castScene) || 12));
+  const raw = await deps.auxJson(setupMessages({ lore: await deps.lore(), character: deps.character(), persona: persona.text, personaName: persona.name, history: deps.scene?.(n) ?? '', statTag: fields ? JSON.stringify(fields) : '' }), { maxTokens: 4000 });
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.tiers)) throw new Error('보조모델 답에 등급 체계가 없어요');
+  const pokemon = s.profile?.typeSystem === 'pokemon' || deps.settings?.()?.ruleSet === 'pokemon';
+  let profile = normalizeProfile(raw);
+  if (pokemon) profile = setTypeSystem(profile, 'pokemon');
+  s.profile = profile;
+  deps.cache?.set(profile);
+  const b = raw.brief && typeof raw.brief === 'object' ? raw.brief : {};
+  const line = (v, max) => String(Array.isArray(v) ? v.join(' ') : v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+  const teller = (Array.isArray(b.storyteller) ? b.storyteller : String(b.storyteller ?? '').split(/\n+/)).map(x => String(x).trim()).filter(Boolean).slice(0, 4).map(x => x.slice(0, 160)).join('\n');
+  s.brief = { at: Date.now(), parts: { combat: line(b.combat, 500), ranks: line(b.ranks, 400), elements: line(b.elements, 300), player: line(b.player, 300), storyteller: teller } };
+  s.activated = true;
+  s.disabled = false;
+  deps.trace?.('setup', `기초 설정 · ${profile.name}`, `${briefText(s.brief)}\n\n[메인 모델용]\n${teller || '(없음)'}`);
+  // A sheet made before the setup was judged without it; only build one when there is none (edits are kept).
+  if (player && !s.player) await ensurePlayer(s, deps);
+  return s.brief;
 }
 
 /** Turn a raw (aux model) sheet into the player's sheet: normalize, audit, keep the portrait. */
@@ -341,7 +375,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
     const fl = deps.settings().forgeLore ?? 'auto';
     const lore = fl === 'never' ? '' : matched.important || fl === 'always' ? matched.text : '';
     deps.toast?.(lore ? `📖 월드인포 ${matched.names.length}개 참고: ${matched.names.slice(0, 3).join(', ')}` : '⚔️ 최근 대화만 보고 적을 구성해요', 'info');
-    const json = await deps.auxJson(forgeMessages({ profile, lore, scene, party, hint, inventory: s.inventory.map(i => `${i.name} ×${i.count}`).join(', '), modes: allowed, codex, difficulty: deps.settings().difficulty ?? 'normal' }), { maxTokens: 3500 });
+    const json = await deps.auxJson(forgeMessages({ profile, lore, scene, party, hint, inventory: s.inventory.map(i => `${i.name} ×${i.count}`).join(', '), modes: allowed, codex, difficulty: deps.settings().difficulty ?? 'normal', brief: briefText(s.brief) }), { maxTokens: 3500 });
     return resolveRegistered(s, parseBattleBody(JSON.stringify(json)) ?? fallbackSpec(hint, s), deps, deps.settings());
   } catch (e) {
     deps.toast?.(`적 생성 실패 → 간이 생성 사용 (${e.message})`, 'warning');
@@ -822,7 +856,7 @@ export function promptFor(s, { lastUser, settings, deps = null }) {
     return b.history.length ? idlePrompt(b, profile, opts) : startPrompt(b, profile, opts);
   }
   const registered = (deps?.codex?.list() ?? []).map(e => e.name).slice(0, 15);
-  return worldPrompt({ mode: settings.startMode, player: s.player, party: s.companions, profile, statusWindow: opts.statusWindow, changes: settings.trackChanges, lastResult: s.lastResult, registered, inventory: s.inventory ?? [], fightGuard: settings.fightGuard !== false });
+  return worldPrompt({ mode: settings.startMode, player: s.player, party: s.companions, profile, statusWindow: opts.statusWindow, changes: settings.trackChanges, lastResult: s.lastResult, registered, inventory: s.inventory ?? [], fightGuard: settings.fightGuard !== false, brief: s.brief?.parts?.storyteller ?? '' });
 }
 
 export const threatKo = b => THREAT_LABEL[b?.threat?.level] ?? '';

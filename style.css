@@ -1113,3 +1113,6 @@
 .bt-tip { cursor: pointer; }
 .pk-bb { flex: 1 1 0; }
 .pk-bb.ic { flex: 0 0 34px; padding: 5px 0; font-size: 14px; }
+
+/* v0.16 world brief */
+.bt-pre{white-space:pre-wrap;font:inherit;margin:4px 0 0;opacity:.85}

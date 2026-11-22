@@ -20,7 +20,54 @@ ${persona || '(none)'}
 ${statTag ? `\n## The story's current status window for the player\n${statTag}\n` : ''}
 ## Task
 Work out how this world measures combat power and answer with ONE JSON object:
-{
+${RULE_SCHEMA}
+}
+${RULE_NOTES}`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+/* ====================== Aux model: one-time setup of a chat (rules + world brief) ====================== */
+/**
+ * Read the world once (lore, card, persona, recent story) and keep (1) the engine's rule set and
+ * (2) a compressed brief that later prompts reuse instead of re-reading everything.
+ */
+export function setupMessages({ lore, character, persona, personaName = '{{user}}', history = '', statTag = '' }) {
+  const system = `You set up a turn-based combat engine for a roleplay chat. You read the world once and write (1) the rules the engine needs and (2) a compressed brief that later prompts reuse instead of rereading everything. Be faithful to the lore: use its own names, ranks and numbers. Output only JSON.`;
+  const user = `## World lore / rules (excerpts)
+${lore || '(none)'}
+
+## Character card
+${character || '(none)'}
+
+## Player persona ("${personaName}" = {{user}})
+${persona || '(none)'}
+${statTag ? `\n## The story's current status window for the player\n${statTag}\n` : ''}${history ? `\n## Story so far (most recent last)\n${history}\n` : ''}
+## Task
+Answer with ONE JSON object:
+${RULE_SCHEMA},
+  "brief": {
+    "combat": "2-4 sentences: how fights actually work in this world (magic / tech / martial arts / monsters, what decides a fight, how lethal it is, typical tactics)",
+    "ranks": "1-3 sentences: the rank ladder(s), how they line up with each other, how big a one-rank gap is",
+    "elements": "1-2 sentences: the element/attribute system and its key matchups — or 'none'",
+    "player": "1-2 sentences: the standing of {{user}} per the persona/lore/story — quote any stated rank, plus role, fighting style and element",
+    "storyteller": "at most 4 short lines for the storyteller model: world-specific combat vocabulary and conventions to keep consistent (rank names, how powers look and cost). No generic writing advice."
+  }
+}
+${RULE_NOTES}
+- "chart" and "elements" describe THIS world. If the lore has no element system, invent none: "elements": [] and "chart": {}.
+- The brief is reused for every later fight: dense facts, no filler. Write it in the language the lore uses.`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+/** The stored world brief as compact text for aux prompts. */
+export function briefText(brief) {
+  if (!brief) return '';
+  const b = brief.parts ?? brief;
+  return [['Combat', b.combat], ['Ranks', b.ranks], ['Elements', b.elements], ['{{user}}', b.player]]
+    .filter(([, v]) => v && String(v).trim() && !/^none$/i.test(String(v).trim())).map(([k, v]) => `${k}: ${String(v).trim()}`).join('\n');
+}
+
+const RULE_SCHEMA = `{
   "name": "short name of this rule set",
   "stats": [{"key": "STR", "label": "힘"}, ...],     // the world's own attribute names (4-8). If the world has none, invent fitting ones.
   "hpLabel": "HP", "spLabel": "SP",                  // names of health and of the resource skills spend (mana, stamina, aether…)
@@ -30,12 +77,10 @@ Work out how this world measures combat power and answer with ONE JSON object:
   "tiers": [ {"name": "F", "aliases": ["the same rank in the world's OTHER rank systems"], "desc": "who sits at this rank in THIS world, one short line (e.g. 'fresh guild recruits, street thugs')", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the world's OWN rank names when it has them (hunter F~S, martial-arts realms, guild ranks, named magic-power grades…). Worlds often have SEVERAL ladders at once (e.g. a hunter grade AND a mana grade with its own names like Inchio < Progio < Dominus < Arcanum < Exceedus): pick the main one for "name" and line the others up in "aliases" by what the lore says they correspond to. Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10). "desc" is required: it is how later sheets decide who belongs where.
   "elements": ["불", "물", ...],                        // elements/attributes that exist in this world (may be empty)
   "pokeMap": {"<each world element>": "<closest of the 18 Pokémon types>"},   // so the Pokémon rule set can be switched on without losing types
-  "notes": "1-3 sentences on how fights work in this world (rank gaps, magic vs. tech, lethality)"
-}
-pow=physical attack, mag=magical/special attack, def=physical defense, res=magical/mental resistance, spd=speed & evasion, acc=accuracy/perception, luk=luck & criticals.
+  "chart": {"<attacking element>": {"<defending element>": 2}},   // matchups between the elements above: 2 = strong, 0.5 = weak, 0 = no effect. Only non-neutral pairs. From the lore when it states them, otherwise sensible from what each element is. {} when there are no elements.
+  "notes": "1-3 sentences on how fights work in this world (rank gaps, magic vs. tech, lethality)"`;
+const RULE_NOTES = `pow=physical attack, mag=magical/special attack, def=physical defense, res=magical/mental resistance, spd=speed & evasion, acc=accuracy/perception, luk=luck & criticals.
 Write names and labels in the language the lore uses.`;
-  return [{ role: 'system', content: system }, { role: 'user', content: user }];
-}
 
 /* ====================== Aux model: character sheets ====================== */
 export const SHEET_SCHEMA = `{
@@ -80,38 +125,49 @@ const SKILL_GUIDE = `Skill design guide — rank sets the budget, the archetype 
 const FAIRNESS = `Fairness rules (strict, two sides):
 - CANON WINS. If the character card, the world info or the story states a character's standing (a famous assassin, a guild master, a dragon, a top-ranked hunter, "the strongest in the city"), place them at the rank that standing means in this world's tier list — read each tier's description. Do not shrink canon characters to a "safe" low rank; when evidence is thin, judge from their role in the story and pick the middle, not the bottom.
 - STATED RANK IS CANON. A rank written for a character in ANY of the world's rank systems — numbered grades ("3등급"), guild/hunter ranks ("B랭크"), named magic-power grades (e.g. "프로기오", "Dominus"), realms, levels, a status window's rank field — is a fact of the world, even for the player character. Read the persona, card, description and lore for such wording, then find the tier it corresponds to by tier names, aliases, descriptions and the order of that ladder in the lore. If the tier list lacks that ladder, place the rank by its relative position (e.g. the 2nd of 5 mana grades ≈ the 2nd fifth of the tier list) and explain the mapping in tierReason.
-- WISHES DON'T. Vague praise and power fantasies ("a genius", "the strongest", "can beat anyone") never buy extra power: without a stated rank or canon standing, a rookie is a rookie however cool the concept sounds.
+- THE DESCRIPTION IS CANON, TOO. The persona / character description and the lorebook are the world's facts, not wishes — also for the player. Concrete facts in them set the rank: a stated rank, a title or post (captain, guild master, court mage), achievements (defeated X, survived Y), years of training or service, named powers and what they can do, how others in the world treat them.
+- WISHES DON'T. Only vague praise with no concrete fact behind it ("a genius", "the strongest", "can beat anyone") and the user's wish list buy nothing: without a stated rank or concrete canon facts, a rookie is a rookie however cool the concept sounds.
+- NO LOWBALLING. The bottom two tiers are only for characters the sources show as untrained, new, weak or ordinary. A trained, professional or notable fighter is at least the middle tier, higher when the facts say so. When unsure between two tiers, take the one the concrete facts support — not the lower one by default.
 - Stats stay inside their tier's range and skills inside the rank budget.
 - Nobody gets an answer to every situation (no "counters everything", no free full heals, no instant wins). Real characters have gaps: a fragile caster, a slow bruiser, a melee fighter with no ranged option.
 - If the user listed skills, treat them as a WISH LIST: keep their names and flavor, but set power, priority, accuracy and effects by the rank budget, and drop or weaken anything above it.`;
 
-export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '' }) {
+/** Which types a sheet must pick from, so nobody (the player included) ends up typeless. */
+const typeRule = profile => (profile.typeSystem === 'pokemon'
+  ? `- "elements" is REQUIRED for every character, the player too: 1-2 of the 18 Pokémon types (${Object.values(POKE_KO).join(', ')}) that fit their powers, weapon, element or nature — read the description and lore for it. Only a plain human with no powers or gear is 노말.`
+  : profile.elements?.length
+    ? `- "elements" is REQUIRED for every character, the player too: 1-2 of THIS world's elements (${profile.elements.join(', ')}) that fit their powers, magic, weapon or nature — read the description and lore for it. Leave it empty only if they truly have no attribute. "ptypes" is still filled.`
+    : '');
+
+export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '', own = '', brief = '', story = '' }) {
   const maxSkills = profile.typeSystem === 'pokemon' ? 4 : 6;
-  const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance and never favor the player. Output only JSON.`;
+  const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance in both directions: you neither inflate nor shrink anyone. What the character's description and the lorebook say about them is canon. Output only JSON.`;
+  const who = npc ? `the character "${personaName}"` : `the player character "${personaName}" ({{user}})`;
   const user = `## Rule set
 ${profileText(profile)}
-
-${lore ? `## World info for this character (canonical rank and abilities)\n${lore}\n` : ''}${card ? `## Character card (canon setting — may describe this character)\n${card}\n` : ''}
-## Who to build: ${npc ? `the character "${personaName}"` : `the player character "${personaName}"`}${tier ? ` — rank: ${tier} (FIXED by the user/world — use exactly this tier, its stat/HP ranges and its skill budget)` : ''}
-${persona || '(no description)'}${keepSkills ? `\n\n## The user's description and wished-for skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}` : ''}
-${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
+${brief ? `\n## World brief (this world's combat basics)\n${brief}\n` : ''}
+## PRIMARY SOURCE — who ${who} is. Canon: read every line before judging rank, type and skills${tier ? `\nRank: ${tier} (FIXED by the user/world — use exactly this tier, its stat/HP ranges and its skill budget)` : ''}
+${persona || '(no description)'}${own ? `\n\n### Lorebook entries about them, their abilities and their ranks (canon)\n${own}` : ''}${story ? `\n\n### What the story so far shows them doing\n${story}` : ''}
+${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${keepSkills ? `\n## The user's wished-for concept and skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}\n` : ''}${lore ? `\n## World info (general rules, ranks, places — for context)\n${lore}\n` : ''}${card ? `\n## Character card (${npc ? 'canon setting — may describe this character' : 'the world and the other main character — may mention {{user}}'})\n${card}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
 ## Task
 Answer with ONE JSON object in this shape:
 ${SHEET_SCHEMA}
-- Use the status window's numbers when given. Otherwise write "tierReason" first, decide the rank from the canon (card, world info, story) and the tier descriptions, then pick values inside that tier's ranges.
+- Use the status window's numbers when given. Otherwise write "tierReason" first: quote the lines of the PRIMARY SOURCE (description, their lorebook entries, the story) that show their rank or strength, map them to the tier list, then pick values inside that tier's ranges.
+- The PRIMARY SOURCE outranks everything else in this prompt. Skills, type and fighting style come from what it describes (named techniques, magic, weapons, training), not from generic tropes.
 - If the status window lists skills, turn each into a skill entry with fitting mechanics (keep its name).
+${typeRule(profile)}
 ${FAIRNESS}
 ${SKILL_GUIDE.replace('${maxSkills}', maxSkills)}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
 /* ====================== Aux model: finding the main cast ====================== */
-export function castMessages({ profile, personaName, persona, character, lore, history, existing = [], limit = 4, includePlayer = true }) {
+export function castMessages({ profile, personaName, persona, character, lore, history, existing = [], limit = 4, includePlayer = true, brief = '' }) {
   const system = 'You read a roleplay setup and its story so far, find the characters who matter in fights, and build a fair combat sheet for each, faithful to the world\'s ranks. Output only JSON.';
   const user = `## Rule set (ranks)
 ${profileText(profile)}
-
-## The player ({{user}} = "${personaName}")
+${brief ? `\n## World brief (this world's combat basics)\n${brief}\n` : ''}
+## PRIMARY SOURCE — the player ({{user}} = "${personaName}"), canon description
 ${persona || '(no description)'}
 
 ## Character card(s)
@@ -138,6 +194,7 @@ Answer with ONE JSON object:
 ${includePlayer ? '- The player entry comes first with role "player".' : '- The player is already done; do not list them.'}
 - "name" is the exact name used in the story. Write "tierReason" before "tier" for every character.
 - Keep sheets compact: ${profile.typeSystem === 'pokemon' ? 4 : '4-6'} skills each, short descs.
+${typeRule(profile)}
 ${FAIRNESS}
 ${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
@@ -151,7 +208,7 @@ export const DIFFICULTY = {
   nightmare: { ko: '악몽', ai: 'brutal', stance: 'Difficulty NIGHTMARE: the fight is stacked against {{user}}. Enemies exploit the party\'s weaknesses — choose enemy types and skills that hit the party\'s weak types and resist its main attack types, target its fragile members, and disable its healer. Prefer ambushes ("initiative": "enemy") and terrain that hurts the party. Enemies are as strong as the setting can justify; bosses one rank higher.' },
 };
 
-export function forgeMessages({ profile, lore, scene, party, hint, inventory, modes = ['party', 'duel', 'stealth'], codex = '', difficulty = 'normal' }) {
+export function forgeMessages({ profile, lore, scene, party, hint, inventory, modes = ['party', 'duel', 'stealth'], codex = '', difficulty = 'normal', brief = '' }) {
   const system = `You are the game master's referee. You turn the story's situation into an honest game encounter for a rules engine. You do not care whether the player wins. Output only JSON.`;
   const modeGuide = {
     party: '"party": a group fight or any fight against monsters/several enemies; turn-based with skills, rows and enemy intents.',
@@ -160,7 +217,7 @@ export function forgeMessages({ profile, lore, scene, party, hint, inventory, mo
   };
   const user = `## Rule set
 ${profileText(profile)}
-
+${brief ? `\n## World brief (this world's combat basics)\n${brief}\n` : ''}
 ${lore ? `## World info for the named characters/places in this scene — read carefully, they keep this canonical strength\n${lore}\n` : ''}
 ## The player's side (the yardstick for ordinary enemies)
 ${party}
@@ -374,53 +431,42 @@ export function idlePrompt(b, profile, opts = {}) {
   ].filter(Boolean).join('\n');
 }
 
-/** Always-on rule: major fights go through the engine; the main model never settles them in prose. */
+/** Always-on rule: major fights go through the engine; the main model never settles them in prose. Kept short — it rides on every message. */
 const FIGHT_DISCIPLINE = mode => [
   '[Combat discipline — highest priority, overrides style instructions]',
-  '- A fight is MAJOR when any of these holds: a named character takes part; the opponent is dangerous or not clearly weaker than {{user}}; someone could be seriously hurt, captured or killed; or the outcome matters to the story. Major fights are NEVER resolved in prose.',
-  `- For a major fight: write the build-up and stop right before the first blow lands${mode === 'manual' ? '. {{user}} will start the battle engine' : mode === 'main' ? ', then add the <bt-battle> block' : ', then add the <bt-start> tag'}. Do not write who hits or misses, wounds, knockouts, deaths, disarms, escapes, captures, surrenders or who wins.`,
-  '- No skipping past a fight: no time jumps or summaries such as "after a fierce battle…", "moments later the bandits lay defeated", "{{user}} easily overpowered them", and no fight ending off-screen.',
-  '- Never decide the attacks, defenses or injuries of {{user}}, and never let an NPC "win" before the engine has run.',
-  '- Only trivial scuffles with no real danger (a shove, a drunk swinging wildly, a coward fleeing at once) may be narrated briefly, still without serious harm.',
-  '- Once the engine has resolved a fight, its result is final; describe that result and nothing else.',
+  `- MAJOR fights (a named character, a foe not clearly weaker than {{user}}, real risk of injury/capture/death, or story stakes) are never resolved in prose: write the build-up and stop right before the first blow${mode === 'manual' ? ' ({{user}} starts the engine)' : mode === 'main' ? ', then add the <bt-battle> block' : ', then add the <bt-start> tag'}. No hits, misses, wounds, KOs, escapes, captures or winners.`,
+  '- No skipping past a fight ("after a fierce battle…", "moments later they lay defeated", fights ending off-screen). Never decide the actions or injuries of {{user}}.',
+  '- Only harmless scuffles may be narrated briefly. A result from the engine is final.',
 ];
 
-export function worldPrompt({ mode, player, party, profile, statusWindow, changes, lastResult, registered = [], inventory = [], fightGuard = true }) {
+export function worldPrompt({ mode, player, party, profile, statusWindow, changes, lastResult, registered = [], inventory = [], fightGuard = true, brief = '' }) {
   const out = ['<battle_engine>'];
   if (mode === 'main') {
     out.push('[Fights in this story are resolved by an external turn-based dice engine.]',
-      'When a fight is about to begin (an attack, ambush, duel or monster encounter), write the build-up and stop right before the first blow. End that response with exactly one block:',
-      '<bt-battle>', 'mode: party|duel|stealth', 'place: where', 'flee: yes|no', 'initiative: player|enemy|normal', 'enemy: Name | tier <tier> | threat minion|normal|elite|boss | row front|back | skills skill A, skill B', 'ally: Name | tier <tier> (only NPCs who fight beside {{user}})', 'goal: (stealth) what {{user}} must reach', '</bt-battle>',
-      'Build enemies from what really exists in the scene and the lore, not to match {{user}}\'s strength.',
-      `Tiers: ${profile.tiers.map(t => t.name).join(', ')}. One enemy line per combatant.`, 'Never narrate the outcome of a fight yourself.');
+      'When a fight is about to begin, write the build-up, stop before the first blow and end with one block:',
+      '<bt-battle>', 'mode: party|duel|stealth', 'place: where', 'flee: yes|no', 'initiative: player|enemy|normal', 'enemy: Name | tier <tier> | threat minion|normal|elite|boss | row front|back | skills A, B', 'ally: Name | tier <tier> (NPCs fighting beside {{user}})', 'goal: (stealth) what {{user}} must reach', '</bt-battle>',
+      `Enemies come from the scene and the lore. Tiers: ${profile.tiers.map(t => t.name).join(', ')}. One enemy line per combatant.`);
   } else if (mode === 'hybrid') {
     out.push('[Fights in this story are resolved by an external turn-based dice engine.]',
-      'When a confrontation is about to begin — a fight, an ambush, a duel, or {{user}} starting to sneak past enemies or being chased — write the build-up and stop right before the first blow or the first step. End that response with:',
+      'When a confrontation is about to begin (fight, ambush, duel, sneaking past enemies, a chase) — or the scene is ALREADY dangerous — write the build-up, stop before the first blow or step, and end the response with its own line:',
       '<bt-start>who is involved and what kind of confrontation, in a few words</bt-start>',
-      'This also applies when the scene is ALREADY dangerous (the story opened mid-crisis, enemies are closing in, {{user}} is cornered): add the tag in this response; do not wait for a cleaner moment.',
-      'Example: …the bandits draw their blades and fan out around the cart.\n<bt-start>3 bandits ambush {{user}} at the cart</bt-start>',
-      'Put the tag on its own line at the very end, written exactly like that (it is hidden from the reader). Never narrate the outcome of a fight yourself.');
+      'e.g. …the bandits draw their blades.\n<bt-start>3 bandits ambush {{user}} at the cart</bt-start>');
   } else if (mode === 'manual' && fightGuard) {
     out.push('[Fights in this story are resolved by an external turn-based dice engine that {{user}} starts by hand.]');
   }
   if (fightGuard) out.push('', ...FIGHT_DISCIPLINE(mode));
+  if (brief) out.push('', '[World combat notes — keep consistent]', String(brief).trim().slice(0, 700));
   if (player) {
-    out.push('', `[{{user}}'s condition — authoritative]`, fighterLine(player, profile, { lang: 'en' }));
+    out.push('', `[{{user}}'s condition — authoritative${statusWindow ? '; use these exact HP/SP values in any status window' : ''}]`, fighterLine(player, profile, { lang: 'en' }));
     for (const c of party ?? []) out.push(fighterLine(c, profile, { lang: 'en' }));
     out.push(`Bag: ${inventory.filter(i => i.count > 0).map(i => `${i.name} ×${i.count}`).join(', ') || '(empty)'}`);
-    if (statusWindow) out.push('Use these exact HP/SP values in any status window.');
   }
   if (changes) {
-    out.push('', 'Keep {{user}}\'s condition like a game master. Whenever the story changes HP/SP, items, stats or skills outside battle, add at the end a <bt-change> block, with amounts that match what happened:',
-      '- a full night\'s sleep or a long safe rest → hp: full, sp: full, status: clear',
-      '- a short break, a meal, catching breath → hp: +15%..+30%, sp: +20%..+40%',
-      '- first aid, a potion, healing magic → as strong as described (hp: +40%, or full for a miracle); used consumables → item: Name -1',
-      '- new wounds, poison, exhaustion, spent mana → hp: -10%..-40%, sp: -20%..-60% (never to 0 outside a fight unless the story says they collapse)',
-      '- companions the same way: hp: Name +30%',
-      '<bt-change>', 'hp: +200 | -50 | +30% | full', 'sp: +30 | -40% | full', 'status: clear', 'item: Item name +1', 'stat: STR +2', 'skill: Skill name: physical 60 <type> (what it does)', 'upgrade: Skill name power +10', 'join: Name | tier <tier>', 'leave: Name',
-      'npc: Name | stat AGI +5 | learn Skill: magic 70 <type> | upgrade Skill power +10 | tier B', '</bt-change>', 'Only the lines that apply. npc: is for registered characters who grow stronger in the story. The values above are already up to date — write only new changes. Never output <bt-change> during a battle.');
+    out.push('', 'Outside battle, when the story changes HP/SP, status, items, stats or skills, end with a <bt-change> block (only new changes, amounts matching the scene: long rest → hp/sp full + status: clear; short break +15..30%; potion/healing as described; wounds/exhaustion -10..40%, never 0 unless they collapse; companions: hp: Name +30%):',
+      '<bt-change>', 'hp: +30% | -50 | full', 'sp: full | -40%', 'status: clear', 'item: Name +1', 'stat: STR +2', 'skill: Name: physical 60 <type> (what it does)', 'upgrade: Name power +10', 'join: Name | tier <tier>', 'leave: Name',
+      'npc: Name | stat AGI +5 | learn Skill: magic 70 <type> | tier B', '</bt-change>');
   }
-  if (registered.length) out.push('', `[Registered characters — their stats and skills are stored by the engine: ${registered.join(', ')}]`);
+  if (registered.length) out.push('', `[Registered characters (stats kept by the engine): ${registered.join(', ')}]`);
   if (lastResult) out.push('', `[Last battle: ${lastResult}]`);
   out.push('</battle_engine>');
   return out.length > 2 ? out.join('\n') : '';
