@@ -617,6 +617,44 @@ function statGrid(stats, p) {
   return `<div class="sk-stats">${p.stats.map(x => `<span><small>${h(x.label || x.key)}</small><b>${stats?.[x.key] ?? '-'}</b></span>`).join('')}</div>`;
 }
 
+/* ---------- Character / codex: a profile card to look at, edit and AI forms only on request ---------- */
+const modeBtns = (cur, prefix, { busy = false } = {}) => `<div class="pc-btns">
+  <button class="pc-mb ${cur === 'edit' ? 'on' : ''}" data-act="${prefix}-mode" data-v="${cur === 'edit' ? 'view' : 'edit'}" title="숫자·타입·초상화 직접 수정">✏️ 편집</button>
+  <button class="pc-mb ${cur === 'ai' ? 'on' : ''}" data-act="${prefix}-mode" data-v="${cur === 'ai' ? 'view' : 'ai'}" ${busy ? 'disabled' : ''} title="AI로 다시 만들기·고치기">✨ AI</button></div>`;
+
+function bar(cur, max, cls, label) {
+  const w = Math.max(0, Math.min(100, Math.round((cur / Math.max(1, max)) * 100)));
+  return `<div class="pc-bar ${cls}"><div style="width:${w}%"></div><span>${h(label)} ${cur}/${max}</span></div>`;
+}
+
+/** Card: picture (click to change) · name · rank · types · trait, HP/SP bars, stat chips. */
+function profileCard(sh, p, { target, sub = '', btns = '', current = true }) {
+  const sys = p.typeSystem;
+  const pic = sh.portrait?.src ? `<img src="${h(sh.portrait.src)}" class="${sh.portrait.pixel ? 'px' : ''}" alt="" referrerpolicy="no-referrer">` : `<span class="pc-ph">${h((sh.name ?? '?').slice(0, 1))}</span>`;
+  const trait = sh.trait && TRAITS[sh.trait] ? `<span class="pc-trait" title="${h(TRAITS[sh.trait].desc)}">${h(TRAITS[sh.trait].ko)}</span>` : '';
+  const open = api.ui.picOpen === target;
+  return `<div class="bt-section pc-card">
+    <div class="pc-head"><button class="pc-pic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 바꾸기">${pic}</button>
+      <div class="pc-id"><div class="pc-name"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(t => `<span class="pk-tdot t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}${trait}</div>${sub ? `<div class="pc-sub">${sub}</div>` : ''}</div>
+      ${btns}</div>
+    ${open ? portraitControls(target, sh.portrait) : ''}
+    ${bar(current ? sh.hp : sh.maxHp, sh.maxHp, 'hp', p.hpLabel)}${sh.maxSp ? bar(current ? sh.sp : sh.maxSp, sh.maxSp, 'sp', p.spLabel) : ''}
+    ${statGrid(sh.stats, p)}
+  </div>`;
+}
+
+/** Compact skill list for the card view: one line + up to 3 effect tags; the description is the tooltip. */
+function skillView(skills, p) {
+  if (!skills?.length) return '<div class="bt-empty">아직 기술이 없어요.</div>';
+  return skills.map(k => {
+    const c = skillCard(k, { sys: p.typeSystem, spLabel: p.spLabel });
+    const pow = c.power != null ? `${k.kind === 'magic' ? '✦' : '⚔'}${c.power}${k.hits > 1 ? `×${k.hits}` : ''}` : { heal: `✚${k.power}%`, buff: '▲강화', debuff: '▼방해', guard: '⛨방어', revive: '✚부활', cleanse: '❖정화' }[k.kind] ?? '';
+    return `<div class="pc-skill" style="--tc:${TYPE_HEX[c.type] ?? '#8a8c8a'}" title="${h(k.desc || skillLine(k, p.typeSystem))}">
+      <div class="pc-sl1"><i class="sk-dot"></i><b>${h(k.name)}</b><span class="pc-pow">${h(pow)}</span><em>${k.cost ? `${k.cost}` : '무료'}</em></div>
+      ${c.lines.length ? `<div class="pc-sl2">${c.lines.slice(0, 3).map(l => `<span>${h(l)}</span>`).join('')}${c.lines.length > 3 ? `<span>+${c.lines.length - 3}</span>` : ''}</div>` : ''}</div>`;
+  }).join('');
+}
+
 function sheetTab(s) {
   const p = profileOf(s);
   const me = s.player;
@@ -626,35 +664,31 @@ function sheetTab(s) {
       <div class="bt-row"><button class="menu_button" data-act="save-json" data-v="player">저장</button><button class="menu_button" data-act="cancel-json">취소</button></div></div>`;
   }
   const concept = s.playerConcept ?? '';
-  const sheetBtns = `<div class="bt-sub">🧬 AI로 시트 만들기 ${tip('숫자(위력·확률·스탯)는 AI가 세계관 등급에 맞춰 정하고, 등급을 넘는 건 자동으로 깎여요. 상태창이 있으면 그 수치를 그대로 써요.')}</div>
+  const aiForm = `<div class="bt-section pc-form"><div class="bt-sub">✨ AI로 ${me ? '다시 만들기' : '시트 만들기'} ${tip('숫자(위력·확률·스탯)는 AI가 세계관 등급에 맞춰 정하고, 등급을 넘는 건 자동으로 깎여요. 상태창이 있으면 그 수치를 그대로 써요.')}</div>
       <textarea class="text_pole" id="bt-sheet-extra" rows="3" placeholder="어떤 전투 스타일인지 자유롭게 적어주세요.&#10;예) 쌍검을 쓰는 속도형 검사. 번개를 두른 돌진기, 상대 방어를 깎는 연속베기 같은 느낌">${h(concept)}</textarea>
-      <div class="bt-row bt-wrap">
-      <button class="menu_button bt-send" data-act="gen-sheet" ${busy ? 'disabled' : ''}>🧬 ${me ? '🎲 리롤' : 'AI로 시트 생성'}</button>
-      <button class="menu_button" data-act="import-stat">📥 상태창에서 불러오기</button>
-      <button class="menu_button" data-act="edit-json" data-v="player">🔧 JSON</button></div>`;
-  if (!me) return `<div class="bt-section"><div class="bt-empty">아직 전투 시트가 없어요. 첫 전투 때 자동으로 만들어지거나, 지금 만들 수 있어요.</div>${sheetBtns}</div>`;
-  const stats = p.stats.map(x => `<label class="bt-stat">${h(x.label || x.key)}<input type="number" data-act="stat" data-v="${h(x.key)}" value="${me.stats[x.key] ?? 0}"></label>`).join('');
-  const _unused = me.skills.map((k, i) => `<div class="bt-skillrow"><b>${h(k.name)}</b> <small>${KIND_KO[k.kind]}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''} · ${TARGET_KO[k.target]} · ${k.cost}${h(p.spLabel)}${k.element && !['none', 'physical'].includes(k.element) ? ` · ${h(ELEMENT_KO[k.element] ?? k.element)}` : ''}${k.status ? ` · ${h(STATUS[k.status.id]?.ko)} ${k.status.chance}%` : ''}${k.cooldown ? ` · 쿨${k.cooldown}` : ''}</small>${k.desc ? `<div class="bt-note">${h(k.desc)}</div>` : ''}<button class="bt-mini" data-act="del-skill" data-v="${i}">✕</button></div>`).join('');
-  const comps = s.companions.map((c, i) => `<div class="bt-skillrow"><b>${h(c.name)}</b> <small>[${h(c.tier)}] ${h(p.hpLabel)} ${c.hp}/${c.maxHp}</small><button class="bt-mini" data-act="del-comp" data-v="${i}">✕</button></div>`).join('') || '';
-  const inv = s.inventory.map((it, i) => `<div class="bt-skillrow">${h(it.name)} ×${it.count} <small>${h(ITEM_KIND_KO[(it.spec ?? inferItem(it.name))?.kind] ?? '전투 효과 없음')}</small><button class="bt-mini" data-act="inv" data-v="${i}" data-d="1">＋</button><button class="bt-mini" data-act="inv" data-v="${i}" data-d="-1">－</button></div>`).join('');
-  return `<div class="bt-section">
-      <div class="bt-fname">${h(me.name)} <small>[${h(me.tier || '-')}]</small> ${typesFor(me, p.typeSystem).map(t => `<span class="pk-tdot t-${typeIn(t, p.typeSystem)}">${h(typeName(t, p.typeSystem))}</span>`).join('')}</div>
-      <div class="bt-note">타입 — 🎮 포켓몬: ${typesFor(me, 'pokemon').map(t => h(typeName(t, 'pokemon'))).join('/')} · 🌍 세계관: ${typesFor(me, 'world').map(t => h(typeName(t, 'world'))).join('/') || '무속성'}${!me.elements?.length && !me.ptypes?.length ? ' <small>(기술 속성으로 추정)</small>' : ''}</div>
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="gen-sheet" ${busy ? 'disabled' : ''}>${me ? '🎲 리롤' : '🧬 AI로 시트 생성'}</button>
+        <button class="menu_button" data-act="import-stat">📥 상태창에서 불러오기</button></div>
+      ${me ? `<div class="bt-sub" style="margin-top:8px">✍️ 수정 지시</div>
+      <textarea class="text_pole" id="bt-sheet-instr" rows="2" placeholder="예) 섬광 베기를 원거리기로 / 회복기 하나 넣어줘 / 기술 이름 더 멋있게"></textarea>
+      <button class="menu_button" data-act="sheet-revise" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button>` : ''}</div>`;
+  if (!me) return `<div class="bt-section"><div class="bt-empty">아직 전투 시트가 없어요. 첫 전투 때 자동으로 만들어지거나, 지금 만들 수 있어요.</div></div>${aiForm}`;
+  const mode = ['edit', 'ai'].includes(api.ui.sheetMode) ? api.ui.sheetMode : 'view';
+  const comps = s.companions.map((c, i) => `<span class="pc-chip">${h(c.name)} <small>[${h(c.tier || '?')}] ${c.hp}/${c.maxHp}</small>${mode === 'edit' ? `<button class="bt-mini" data-act="del-comp" data-v="${i}">✕</button>` : ''}</span>`).join('');
+  const bag = mode === 'edit'
+    ? s.inventory.map((it, i) => `<div class="bt-skillrow">${h(it.name)} ×${it.count} <small>${h(ITEM_KIND_KO[(it.spec ?? inferItem(it.name))?.kind] ?? '전투 효과 없음')}</small><button class="bt-mini" data-act="inv" data-v="${i}" data-d="1">＋</button><button class="bt-mini" data-act="inv" data-v="${i}" data-d="-1">－</button></div>`).join('')
+    : s.inventory.map(it => `<span class="pc-chip" title="${h(ITEM_KIND_KO[(it.spec ?? inferItem(it.name))?.kind] ?? '전투 효과 없음')}">${h(it.name)} ×${it.count}</span>`).join('');
+  const card = profileCard(me, p, { target: 'player', btns: modeBtns(mode, 'sheet', { busy }), sub: me.weak?.length || me.resist?.length ? `약점 ${me.weak.map(e => ELEMENT_KO[e] ?? e).join(', ') || '-'} · 저항 ${me.resist.map(e => ELEMENT_KO[e] ?? e).join(', ') || '-'}` : '' });
+  const editForm = mode !== 'edit' ? '' : `<div class="bt-section pc-form"><div class="bt-sub">✏️ 직접 수정</div>
       <div class="bt-row"><input type="text" class="text_pole" id="bt-type-in" data-enter="set-type" placeholder="${p.typeSystem === 'pokemon' ? '타입 바꾸기 (예: 불꽃/격투)' : '속성 바꾸기 (예: 불/빛)'}"><button class="menu_button" data-act="set-type">타입 적용</button></div>
-      ${portraitControls('player', me.portrait)}
       <div class="bt-row"><label>${h(p.hpLabel)}<input type="number" data-act="num" data-v="hp" value="${me.hp}">/<input type="number" data-act="num" data-v="maxHp" value="${me.maxHp}"></label></div>
       <div class="bt-row"><label>${h(p.spLabel)}<input type="number" data-act="num" data-v="sp" value="${me.sp}">/<input type="number" data-act="num" data-v="maxSp" value="${me.maxSp}"></label></div>
-      <div class="bt-stats">${stats}</div>
-      ${me.weak?.length || me.resist?.length ? `<div class="bt-note">약점: ${me.weak.map(e => ELEMENT_KO[e] ?? e).join(', ') || '-'} / 저항: ${me.resist.map(e => ELEMENT_KO[e] ?? e).join(', ') || '-'}</div>` : ''}
-    </div>
-    <div class="bt-section"><div class="bt-sub">기술</div>${skillRows(me.skills, p, { del: true })}
-      <div class="bt-sub" style="margin-top:8px">✍️ 수정 지시</div>
-      <textarea class="text_pole" id="bt-sheet-instr" rows="2" placeholder="예) 섬광 베기를 원거리기로 / 회복기 하나 넣어줘 / 기술 이름 더 멋있게"></textarea>
-      <button class="menu_button" data-act="sheet-revise" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button></div>
-    <div class="bt-section"><div class="bt-sub">함께 다니는 인물 ${tip('따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고 장면에 있는 도감 인물을 아군·적으로 넣어요. 여기 있는 사람은 「요즘 같이 다님」으로 참고만 해요.')}</div>${comps || '<div class="bt-empty">없음</div>'}</div>
-    <div class="bt-section"><div class="bt-sub">인벤토리</div>${inv || '<div class="bt-note">비어 있음</div>'}
-      <div class="bt-row"><input type="text" class="text_pole" id="bt-new-item" data-enter="add-item" placeholder="아이템 추가 (예: 하급 포션)"><button class="menu_button" data-act="add-item">추가</button></div></div>
-    <div class="bt-section">${sheetBtns}</div>`;
+      <div class="bt-stats">${p.stats.map(x => `<label class="bt-stat">${h(x.label || x.key)}<input type="number" data-act="stat" data-v="${h(x.key)}" value="${me.stats[x.key] ?? 0}"></label>`).join('')}</div>
+      <button class="menu_button" data-act="edit-json" data-v="player" style="margin-top:6px">🔧 JSON</button></div>`;
+  return `${card}${editForm}${mode === 'ai' ? aiForm : ''}
+    <div class="bt-section"><div class="bt-sub">기술</div>${mode === 'edit' ? skillRows(me.skills, p, { del: true }) : skillView(me.skills, p)}</div>
+    <div class="bt-section"><div class="bt-sub">함께 다니는 인물 ${tip('따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고 장면에 있는 도감 인물을 아군·적으로 넣어요. 여기 있는 사람은 「요즘 같이 다님」으로 참고만 해요.')}</div>${comps ? `<div class="pc-chips">${comps}</div>` : '<div class="bt-empty">없음</div>'}</div>
+    <div class="bt-section"><div class="bt-sub">가방</div>${bag ? (mode === 'edit' ? bag : `<div class="pc-chips">${bag}</div>`) : '<div class="bt-empty">비어 있음</div>'}
+      ${mode === 'edit' ? '<div class="bt-row"><input type="text" class="text_pole" id="bt-new-item" data-enter="add-item" placeholder="아이템 추가 (예: 하급 포션)"><button class="menu_button" data-act="add-item">추가</button></div>' : ''}</div>`;
 }
 
 function rulesTab(s) {
@@ -719,38 +753,51 @@ function codexEditor(s, p, id, list) {
   const sh = entry ? api.rosterOf(entry) : null;
   const grown = entry && api.hasRoster(entry);
   const busy = api.busy();
-  const sys = p.typeSystem;
-  const preview = sh ? `<div class="bt-section cx-sheet">
-      <div class="cx-head"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(x => `<span class="pk-tdot t-${typeIn(x, sys)}">${h(typeName(x, sys))}</span>`).join('')}${entry.locked ? '<span class="cx-lock">🔒</span>' : ''}</div>
-      <div class="bt-note">${h(p.hpLabel)} ${sh.maxHp} · ${h(p.spLabel)} ${sh.maxSp}${grown ? ' · 📈 이 채팅에서 성장한 값' : ''}${sh.trait && TRAITS[sh.trait] ? ` · 특성 <b>${h(TRAITS[sh.trait].ko)}</b> (${h(TRAITS[sh.trait].desc)})` : ''}</div>
-      ${portraitControls(`codex:${entry.id}`, sh.portrait)}
-      ${statGrid(sh.stats, p)}
-      <div class="bt-sub">기술</div>${skillRows(sh.skills, p)}
-    </div>` : '';
-  return `<div class="bt-section"><button class="menu_button" data-act="codex-back">← 목록</button></div>
-    ${preview}
-    <div class="bt-section">
-      <div class="bt-sub">${sh ? '📝 설명 (리롤할 때 써요)' : '📝 캐릭터 설명'}</div>
-      <label class="bt-f">이름</label><input type="text" class="text_pole" id="bt-cx-name" value="${h(sh?.name ?? '')}">
-      <div class="bt-row"><label>등급<select id="bt-cx-tier" class="text_pole"><option value="">AI가 세계관 보고 판단</option>${p.tiers.map(t => `<option value="${h(t.name)}" ${sh?.tier === t.name ? 'selected' : ''}>${h(t.name)}</option>`).join('')}</select></label>
-        <label>외형<select id="bt-cx-shape" class="text_pole"><option value="">자동</option>${Object.entries(SHAPE_KO).map(([k, v]) => `<option value="${k}" ${sh?.shape === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div>
-      <label class="bt-f">별칭 (쉼표)</label><input type="text" class="text_pole" id="bt-cx-alias" value="${h((sh?.aliases ?? []).join(', '))}" placeholder="예: 오스샷, Elias">
-      <label class="bt-f">어떤 캐릭터인지 (자유롭게) ${tip('스킬 이름이나 느낌만 적어도 돼요. 타입·위력·우선도·확률·스탯은 AI가 정하고, 세계관 등급을 넘는 건 자동으로 깎여요.')}</label>
-      <textarea class="text_pole" id="bt-cx-desc" rows="4" placeholder="예) 총사. 바람을 두른 속사가 주특기고, 빠르게 쏘는 신속사격과 뒤로 빠지며 방어를 올리고 조금 회복하는 백스탭을 써요.">${h(entry?.concept ?? sh?.desc ?? '')}</textarea>
-    </div>
-    ${entry ? `<div class="bt-section"><div class="bt-sub">✍️ 수정 지시 ${tip('등급 예산과 공정성 규칙이 지시보다 우선이라, 너무 센 요청은 깎여서 들어가요.')}</div>
+  const ROLE = { player: '🙋 나', companion: '🤝 동료', rival: '⚔️ 라이벌', enemy: '👹 적', boss: '💀 보스', npc: '👤 NPC' };
+  const mode = !entry ? 'new' : ['edit', 'ai'].includes(api.ui.cxMode) ? api.ui.cxMode : 'view';
+  const back = `<div class="bt-section"><button class="menu_button" data-act="codex-back">← 목록</button></div>`;
+  const tierSel = (fixedLabel = 'AI가 세계관 보고 판단') => `<label>등급<select id="bt-cx-tier" class="text_pole"><option value="">${fixedLabel}</option>${p.tiers.map(t => `<option value="${h(t.name)}" ${sh?.tier === t.name && mode !== 'ai' ? 'selected' : ''} title="${h(t.desc ?? '')}">${h(t.name)}</option>`).join('')}</select></label>`;
+  const descBox = `<label class="bt-f">어떤 캐릭터인지 (자유롭게) ${tip('스킬 이름이나 느낌만 적어도 돼요. 타입·위력·우선도·확률·스탯은 AI가 정하고, 세계관 등급을 넘는 건 자동으로 깎여요.')}</label>
+      <textarea class="text_pole" id="bt-cx-desc" rows="4" placeholder="예) 총사. 바람을 두른 속사가 주특기고, 빠르게 쏘는 신속사격과 뒤로 빠지며 방어를 올리고 조금 회복하는 백스탭을 써요.">${h(entry?.concept ?? sh?.desc ?? '')}</textarea>`;
+  const idFields = `<label class="bt-f">이름</label><input type="text" class="text_pole" id="bt-cx-name" value="${h(sh?.name ?? '')}">
+      <div class="bt-row">${tierSel()}<label>외형<select id="bt-cx-shape" class="text_pole"><option value="">자동</option>${Object.entries(SHAPE_KO).map(([k, v]) => `<option value="${k}" ${sh?.shape === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div>
+      <label class="bt-f">별칭 (쉼표)</label><input type="text" class="text_pole" id="bt-cx-alias" value="${h((sh?.aliases ?? []).join(', '))}" placeholder="예: 오스샷, Elias">`;
+  if (mode === 'new') {
+    return `${back}<div class="bt-section pc-form"><div class="bt-sub">📝 새 캐릭터</div>${idFields}${descBox}
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-gen" data-v="" ${busy ? 'disabled' : ''}>🤖 AI로 생성해서 등록</button></div></div>`;
+  }
+  const sub = [entry.role ? ROLE[entry.role] ?? h(entry.role) : '', entry.locked ? '🔒 잠금' : '', grown ? '📈 이 채팅에서 성장' : '', s.companions.some(c => c.codexId === entry.id) ? '🤝 같이 다님' : ''].filter(Boolean).join(' · ');
+  const card = profileCard(sh, p, { target: `codex:${entry.id}`, sub, btns: modeBtns(mode, 'cx', { busy }), current: !!grown });
+  // AI actions read name/shape/aliases from the page: keep them as hidden fields when the form is closed.
+  const hidden = `<input type="hidden" id="bt-cx-name" value="${h(sh.name)}"><input type="hidden" id="bt-cx-shape" value="${h(sh.shape ?? '')}"><input type="hidden" id="bt-cx-alias" value="${h((sh.aliases ?? []).join(', '))}">`;
+  const aiForm = mode !== 'ai' ? '' : `<div class="bt-section pc-form"><div class="bt-sub">✨ AI로 다시 만들기</div>${hidden}
+      <div class="bt-row">${tierSel('AI가 다시 판단')}</div>${descBox}
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-gen" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>🎲 리롤 (설명으로 새로)</button></div>
+      <div class="bt-sub" style="margin-top:8px">✍️ 수정 지시 ${tip('등급 예산과 공정성 규칙이 지시보다 우선이라, 너무 센 요청은 깎여서 들어가요.')}</div>
       <textarea class="text_pole" id="bt-cx-instr" rows="2" placeholder="예) 원거리 위주로 바꿔줘 / 회복기 빼고 방어 버프 넣어줘 / 신속사격 위력 좀 올려줘"></textarea>
-      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-revise" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button><button class="menu_button" data-act="codex-gen" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>🎲 리롤 (설명으로 새로)</button></div>
-      ${(entry.history ?? []).length ? `<div class="bt-note">지난 지시: ${entry.history.slice(-3).map(x => h(x.instruction)).join(' · ')}</div>` : ''}
-</div>` : ''}
-    <div class="bt-section bt-row bt-wrap">
-      ${entry ? '' : `<button class="menu_button bt-send" data-act="codex-gen" data-v="" ${busy ? 'disabled' : ''}>🤖 AI로 생성해서 등록</button>`}
-      ${entry ? `<button class="menu_button" data-act="codex-lock" data-v="${h(entry.id)}" data-on="${entry.locked ? '0' : '1'}">${entry.locked ? '🔓 잠금 해제' : '🔒 잠금 (스토리 변경 차단)'}</button>
-
+      <button class="menu_button" data-act="codex-revise" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button>
+      ${(entry.history ?? []).length ? `<div class="sd-hint">지난 지시: ${entry.history.slice(-3).map(x => h(x.instruction)).join(' · ')}</div>` : ''}</div>`;
+  const editForm = mode !== 'edit' ? '' : `<div class="bt-section pc-form"><div class="bt-sub">✏️ 직접 수정</div>${idFields}${descBox}
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-save" data-v="${h(entry.id)}">💾 저장 (AI 없이)</button></div>
+      <div class="bt-row bt-wrap pc-manage"><button class="menu_button" data-act="codex-lock" data-v="${h(entry.id)}" data-on="${entry.locked ? '0' : '1'}">${entry.locked ? '🔓 잠금 해제' : '🔒 잠금 (스토리 변경 차단)'}</button>
         ${grown ? `<button class="menu_button" data-act="codex-promote" data-v="${h(entry.id)}">📈 성장 → 기본판</button><button class="menu_button" data-act="codex-reset" data-v="${h(entry.id)}">↺ 성장 초기화</button>` : ''}
-        <button class="menu_button bt-danger" data-act="codex-del" data-v="${h(entry.id)}">삭제</button>` : ''}
-    </div>
-    ${entry ? `<details class="bt-section"><summary class="bt-note">🔧 고급: JSON 직접 수정</summary><textarea id="bt-cx-json" class="text_pole bt-json">${h(JSON.stringify(entry.sheet, null, 1))}</textarea><button class="menu_button" data-act="codex-json" data-v="${h(entry.id)}">저장</button></details>` : ''}`;
+        <button class="menu_button bt-danger" data-act="codex-del" data-v="${h(entry.id)}">삭제</button></div>
+      <details><summary class="sd-hint">🔧 JSON 직접 수정</summary><textarea id="bt-cx-json" class="text_pole bt-json">${h(JSON.stringify(entry.sheet, null, 1))}</textarea><button class="menu_button" data-act="codex-json" data-v="${h(entry.id)}">저장</button></details></div>`;
+  return `${back}${card}${editForm}${aiForm}
+    <div class="bt-section"><div class="bt-sub">기술</div>${skillView(sh.skills, p)}</div>
+    ${sh.desc && mode === 'view' ? `<div class="bt-section"><div class="sd-hint">${h(sh.desc)}</div></div>` : ''}`;
+}
+
+/** Save the codex form as typed (no AI): name, rank, look, aliases, description. */
+function saveCodexForm(id) {
+  const entry = api.codex().find(e => e.id === id);
+  if (!entry) return;
+  const val = k => document.getElementById(k)?.value?.trim() ?? '';
+  const sh = api.rosterOf(entry);
+  const name = val('bt-cx-name') || sh.name;
+  const concept = document.getElementById('bt-cx-desc')?.value?.trim() ?? entry.concept ?? '';
+  const raw = { ...entry.sheet, name, tier: val('bt-cx-tier') || entry.sheet.tier, shape: val('bt-cx-shape'), aliases: val('bt-cx-alias').split(',').map(x => x.trim()).filter(Boolean) };
+  return api.saveCodex({ ...entry, concept }, raw).then(() => { api.ui.cxMode = 'view'; refreshPanel(); });
 }
 
 function saveSkillLines() {
@@ -841,12 +888,12 @@ function onClick(e) {
       const instr = document.getElementById('bt-cx-instr')?.value?.trim();
       if (!instr) return api.toast('어떻게 고칠지 적어주세요.', 'warning');
       return api.genCodex({ id: v, name: val('bt-cx-name'), concept: document.getElementById('bt-cx-desc')?.value?.trim() ?? '', tier: val('bt-cx-tier'), shape: val('bt-cx-shape'), aliases: val('bt-cx-alias'), instruction: instr })
-        .then(e => { if (e?.id) { editing = `codex:${e.id}`; refreshPanel(); } });
+        .then(e => { if (e?.id) { editing = `codex:${e.id}`; api.ui.cxMode = 'view'; refreshPanel(); } });
     }
     case 'sheet-revise': {
       const instr = document.getElementById('bt-sheet-instr')?.value?.trim();
       if (!instr) return api.toast('어떻게 고칠지 적어주세요.', 'warning');
-      return api.genSheet(document.getElementById('bt-sheet-extra')?.value?.trim() ?? '', instr);
+      return Promise.resolve(api.genSheet(document.getElementById('bt-sheet-extra')?.value?.trim() ?? '', instr)).then(() => { api.ui.sheetMode = 'view'; refreshPanel(); });
     }
     case 'compact': api.ui.compact = !api.ui.compact; try { localStorage.setItem('bt-compact', api.ui.compact ? '1' : ''); } catch { /* private mode */ } return refreshPanel();
     case 'settings-open': api.ui.settingsOpen = true; return refreshPanel();
@@ -860,7 +907,10 @@ function onClick(e) {
     case 'start': return api.start(val('bt-hint'), val('bt-mode-pick') || null);
     case 'send-result': return api.sendResult(val('bt-result-comment'));
     case 'dismiss-result': return api.dismissResult();
-    case 'codex-open': editing = `codex:${v}`; return refreshPanel();
+    case 'codex-open': editing = `codex:${v}`; api.ui.cxMode = 'view'; api.ui.picOpen = null; return refreshPanel();
+    case 'sheet-mode': api.ui.sheetMode = v; return refreshPanel();
+    case 'cx-mode': api.ui.cxMode = v; return refreshPanel();
+    case 'pc-pic': api.ui.picOpen = api.ui.picOpen === v ? null : v; return refreshPanel();
     case 'codex-new': editing = 'codex:new'; return refreshPanel();
     case 'codex-back': editing = null; return refreshPanel();
     case 'codex-save': return saveCodexForm(v);
@@ -868,7 +918,7 @@ function onClick(e) {
       const name = val('bt-cx-name');
       if (!name) return api.toast('이름을 적어주세요.', 'warning');
       return api.genCodex({ id: v || null, name, concept: document.getElementById('bt-cx-desc')?.value?.trim() ?? '', tier: val('bt-cx-tier'), shape: val('bt-cx-shape'), aliases: val('bt-cx-alias') })
-        .then(e => { if (e?.id) { editing = `codex:${e.id}`; refreshPanel(); } });
+        .then(e => { if (e?.id) { editing = `codex:${e.id}`; api.ui.cxMode = 'view'; refreshPanel(); } });
     }
     case 'codex-json': {
       let j; try { j = JSON.parse(document.getElementById('bt-cx-json').value); } catch (err) { return api.toast(`JSON 오류: ${err.message}`, 'error'); }
@@ -883,7 +933,7 @@ function onClick(e) {
     case 'skills-save': return saveSkillLines();
     case 'rule-set': return api.setRuleSet(v);
     case 'stop': return api.stop();
-    case 'gen-sheet': return api.genSheet(document.getElementById('bt-sheet-extra')?.value?.trim() ?? '');
+    case 'gen-sheet': return Promise.resolve(api.genSheet(document.getElementById('bt-sheet-extra')?.value?.trim() ?? '')).then(() => { api.ui.sheetMode = 'view'; refreshPanel(); });
     case 'import-stat': return api.importStat();
     case 'gen-rules': return api.genRules();
     case 'reset-rules': return api.edit(s => { s.profile = null; });
