@@ -6,7 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "BattleTale",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "homePage": "",
   "auto_update": false,
   "generate_interceptor": "battleTaleInterceptor"

@@ -587,6 +587,14 @@
 .sd-tools .menu_button { font-size: 12px; padding: 4px 8px; margin: 0; }
 .sd-test { font-size: 11px; padding: 5px 7px; border-radius: 6px; word-break: break-all; }
 .sd-test.ok { background: #1f3b26; color: #9fe8a8; } .sd-test.bad { background: #43211c; color: #ffb4a8; }
+.sd-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.sd-tab { background: transparent; border: 1px solid #ffffff22; color: inherit; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px; opacity: .75; }
+.sd-tab.on { background: #e8a33d; border-color: #e8a33d; color: #1b1712; font-weight: 700; opacity: 1; }
+.sd-basic { padding: 4px 0 2px; }
+.sd-adv { margin-top: 10px; border-top: 1px solid #ffffff1a; padding-top: 4px; }
+.sd-adv > summary { cursor: pointer; font-weight: 700; padding: 6px 0; opacity: .85; }
+.bt-tip { display: inline-block; font-size: 11px; line-height: 1; padding: 1px 3px; margin-left: 2px; border-radius: 50%; opacity: .55; cursor: help; font-weight: 400; vertical-align: middle; }
+.bt-tip:hover, .bt-tip:focus { opacity: 1; }
 .sd-x { margin-left: auto; background: #ffffff14; border: 1px solid #ffffff2a; color: inherit; border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 12px; }
 #bt-panel .bt-gear { display: inline-block !important; margin-left: auto; }
 

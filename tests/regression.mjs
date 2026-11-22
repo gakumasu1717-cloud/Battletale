@@ -135,6 +135,15 @@ const snap = s => JSON.stringify({ st: s.battle.st, inv: s.inventory, n: s.battl
     assert.ok((panel?.innerHTML ?? '').length > 500, 'panel did not render');
     assert.ok(!/onerror|onmouseover|<script/i.test(panel.innerHTML), `unescaped markup in ${tab}`);
   }
+  // Settings drawer: essentials + collapsed advanced, and rules / trace pages moved inside it.
+  api.ui.tab = 'battle'; api.ui.settingsOpen = true;
+  for (const [page, needle] of [['set', '고급 설정'], ['rules', '등급 체계'], ['trace', '파이프라인 점검']]) {
+    api.ui.sdPage = page; ui.refreshPanel();
+    assert.ok(panel.innerHTML.includes(needle), `drawer page ${page} missing "${needle}"`);
+    // The rules page prints the (already de-tagged) profile name as text, so look for real tags/attributes.
+    assert.ok(!/<[a-z]+\b[^>]*\son(error|load|mouseover)=|<script/i.test(panel.innerHTML), `unescaped markup in drawer ${page}`);
+  }
+  assert.ok(!/data-v="rules">룰</.test(panel.innerHTML), 'rules should no longer be a top tab');
 });
 
 /* 8 */ await test('아군 충전기는 모았다가 다음 턴에 반드시 발동한다', () => {

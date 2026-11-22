@@ -156,11 +156,13 @@ export function refreshPanel() {
   if (!p || p.classList.contains('bt-hidden') || !api) return;
   const s = api.state();
   if (!s) { p.innerHTML = '<div class="bt-empty">채팅을 열어주세요.</div>'; return; }
-  const tabs = [['battle', '전투'], ['sheet', '캐릭터'], ['codex', '도감'], ['rules', '룰'], ['trace', '🔍']].map(([k, l]) => `<button class="bt-tab ${tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}</button>`).join('');
-  const body = tab === 'battle' ? battleTab(s) : tab === 'sheet' ? sheetTab(s) : tab === 'codex' ? codexTab(s) : tab === 'trace' ? traceTab(s) : rulesTab(s);
+  // Everyday tabs only; rules and the trace log live in the ⚙ drawer.
+  if (tab === 'rules' || tab === 'trace') { api.ui.settingsOpen = true; api.ui.sdPage = tab; tab = 'battle'; }
+  const tabs = [['battle', '전투'], ['sheet', '캐릭터'], ['codex', '도감']].map(([k, l]) => `<button class="bt-tab ${tab === k ? 'on' : ''}" data-act="tab" data-v="${k}">${l}</button>`).join('');
+  const body = tab === 'sheet' ? sheetTab(s) : tab === 'codex' ? codexTab(s) : battleTab(s);
   const keep = p.querySelector('.sd-body')?.scrollTop ?? 0;
   p.classList.toggle('bt-compact', !!api.ui.compact && tab === 'battle');
-  p.innerHTML = `<div class="bt-head"><b>⚔️ BattleTale</b><div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear" data-act="settings-open" title="설정">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml() : ''}`;
+  p.innerHTML = `<div class="bt-head"><b>⚔️ BattleTale</b><div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear" data-act="settings-open" title="설정 · 룰 · 점검">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
   const sd = p.querySelector('.sd-body'); if (sd) sd.scrollTop = keep;
   animateBars(p);
   // Popups and HP slides play once per turn, not on every redraw.
@@ -170,37 +172,37 @@ export function refreshPanel() {
 
 /* ---------- Settings drawer (inside the panel) ---------- */
 const SETTINGS = [
-  ['🎮 기본', [
-    { key: 'enabled', type: 'check', label: '사용 (모든 채팅·모든 봇)' },
-    { key: 'playMode', type: 'select', label: '진행 방식', options: [['panel', '🎮 패널에서만 진행 → 결과만 이야기로'], ['chat', '💬 턴마다 채팅으로 서술']] },
-    { key: 'ruleSet', type: 'select', label: '상성 체계 (새 채팅 기본값)', options: [['world', '🌍 세계관 속성'], ['pokemon', '🎮 포켓몬 18타입·공식 상성표']] },
+  ['🎮 플레이', [
+    { key: 'enabled', basic: true, type: 'check', label: '사용 (모든 채팅·모든 봇)' },
+    { key: 'playMode', basic: true, type: 'select', label: '진행 방식', options: [['panel', '🎮 패널에서만 진행 → 결과만 이야기로'], ['chat', '💬 턴마다 채팅으로 서술']] },
+    { key: 'ruleSet', basic: true, type: 'select', label: '상성 체계 (새 채팅 기본값)', options: [['world', '🌍 세계관 속성'], ['pokemon', '🎮 포켓몬 18타입·공식 상성표']] },
     { key: 'mode.party', type: 'check', label: '⚔️ 파티전' }, { key: 'mode.duel', type: 'check', label: '🤺 1:1 대결 (포켓몬 싱글)' }, { key: 'mode.stealth', type: 'check', label: '🫥 잠입 (퍼즐)' },
     { key: 'resultDetail', type: 'select', label: '결과 전송 기본값', options: [['summary', '📋 전투 요약'], ['result', '🏁 승패만'], ['full', '📜 전체 로그']] },
-    { key: 'difficulty', type: 'select', label: '난이도', options: [['easy', '🙂 쉬움 — 공정한 전투, 기습 없음, AI 가끔 실수'], ['normal', '⚔️ 기본 — 유저 편향 없음, 기습·지형에 대비'], ['hard', '😠 어려움 — 강한 적·연계, 전술 없으면 돌파 불가'], ['nightmare', '💀 악몽 — 약점 저격·기습·불리한 지형, AI 최상']], hint: '적 구성(보조모델)과 적 AI, 기습·지형 확률이 같이 바뀌어요' },
+    { key: 'difficulty', basic: true, type: 'select', label: '난이도', options: [['easy', '🙂 쉬움 — 공정한 전투, 기습 없음, AI 가끔 실수'], ['normal', '⚔️ 기본 — 유저 편향 없음, 기습·지형에 대비'], ['hard', '😠 어려움 — 강한 적·연계, 전술 없으면 돌파 불가'], ['nightmare', '💀 악몽 — 약점 저격·기습·불리한 지형, AI 최상']], hint: '적 구성(보조모델)과 적 AI, 기습·지형 확률이 같이 바뀌어요' },
     { key: 'spCostScale', type: 'select', label: '기력 소모 배율', options: [['1', '×1.0 (가볍게)'], ['1.3', '×1.3 (기본)'], ['1.6', '×1.6 (빡빡하게)'], ['2', '×2.0 (템템처럼 매 턴 고민)']], hint: '기술 비용에 곱해져요. 잡몹은 기력 없이 싸우고, 엘리트·보스·도감 캐릭터만 기력을 써요.' },
     { key: 'showThreat', type: 'check', label: '위협도 표시' },
     { key: 'showFab', type: 'check', label: '화면에 떠 있는 ⚔️ 버튼도 쓰기', hint: '기본은 채팅창 옆 마법봉(🪄) 메뉴에서 열어요' },
     { key: 'exclude', type: 'text', label: '제외할 캐릭터 (쉼표)', ph: '예: 일상봇, 비서' },
   ]],
   ['🤖 보조모델', [
-    { key: 'auxSource', type: 'select', label: '연결 방식', options: [['profile', '🔌 실리태번 연결 프로필'], ['openai', '🛠 커스텀 (OpenAI 호환 API)'], ['main', '♻️ 메인 API 그대로 (조용히 생성)'], ['none', '🚫 안 씀 (규칙 기반만)']] },
-    { key: 'auxProfile', type: 'profile', label: '연결 프로필', show: s => s.auxSource === 'profile' },
+    { key: 'auxSource', basic: true, type: 'select', label: '연결 방식', options: [['profile', '🔌 실리태번 연결 프로필'], ['openai', '🛠 커스텀 (OpenAI 호환 API)'], ['main', '♻️ 메인 API 그대로 (조용히 생성)'], ['none', '🚫 안 씀 (규칙 기반만)']] },
+    { key: 'auxProfile', basic: true, type: 'profile', label: '연결 프로필', show: s => s.auxSource === 'profile' },
     { key: 'auxProfileModel', type: 'text', label: '모델 직접 입력 (비우면 프로필 모델 그대로)', ph: '예: gemini-4-hydrogen', hint: '프로필의 API·키는 그대로 쓰고 모델 이름만 바꿔서 요청해요', show: s => s.auxSource === 'profile' },
     { key: 'auxProfilePreset', type: 'check', label: '프로필의 프리셋·인스트럭트도 같이 보내기', hint: '보통 끄는 게 좋아요 (보조 작업엔 롤플 프롬프트가 방해돼요)', show: s => s.auxSource === 'profile' },
     { key: 'auxOverride', type: 'check', label: '아래 샘플링 값으로 프로필 값 덮어쓰기', show: s => s.auxSource === 'profile' },
-    { key: 'auxUrl', type: 'text', label: 'API 주소', ph: 'https://openrouter.ai/api/v1', show: s => s.auxSource === 'openai' },
-    { key: 'auxKey', type: 'password', label: 'API 키', show: s => s.auxSource === 'openai' },
-    { key: 'auxModel', type: 'model', label: '모델', ph: 'google/gemini-2.5-flash', show: s => s.auxSource === 'openai' },
+    { key: 'auxUrl', basic: true, type: 'text', label: 'API 주소', ph: 'https://openrouter.ai/api/v1', show: s => s.auxSource === 'openai' },
+    { key: 'auxKey', basic: true, type: 'password', label: 'API 키', show: s => s.auxSource === 'openai' },
+    { key: 'auxModel', basic: true, type: 'model', label: '모델', ph: 'google/gemini-2.5-flash', show: s => s.auxSource === 'openai' },
     { key: 'auxTemp', type: 'number', label: '온도 (temperature)', min: 0, max: 2, step: 0.05, show: s => s.auxSource === 'openai' || (s.auxSource === 'profile' && s.auxOverride) },
     { key: 'auxTopP', type: 'number', label: 'Top P (비우면 기본값)', min: 0, max: 1, step: 0.05, show: s => s.auxSource === 'openai' || (s.auxSource === 'profile' && s.auxOverride) },
     { key: 'auxMaxTokens', type: 'number', label: '최대 응답 토큰 (권장 10000 — 추론 모델은 더)', min: 1000, max: 64000, step: 500, show: s => s.auxSource !== 'none' },
-    { key: 'auxMaxInput', type: 'number', label: '최대 입력 토큰 (0 = 제한 없음)', min: 0, max: 200000, step: 1000, hint: '넘치면 대화 기록 → 로어북 → 카드·페르소나 순으로 줄여요. 룰·출력 형식은 안 잘려요. 실제 투입량은 🔍 점검 탭에서 확인', show: s => s.auxSource !== 'none' },
+    { key: 'auxMaxInput', type: 'number', label: '최대 입력 토큰 (0 = 제한 없음)', min: 0, max: 200000, step: 1000, hint: '넘치면 대화 기록 → 로어북 → 카드·페르소나 순으로 줄여요. 룰·출력 형식은 안 잘려요. 실제 투입량은 위 🔍 점검에서 확인', show: s => s.auxSource !== 'none' },
     { key: 'auxReasoning', type: 'select', label: '추론 강도 (지원 모델만)', options: [['', '보내지 않음'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']], show: s => s.auxSource === 'openai' },
     { key: 'auxJsonMode', type: 'check', label: 'JSON 모드 강제 (response_format)', hint: '지원 안 하는 API면 끄세요', show: s => s.auxSource === 'openai' },
     { key: 'auxExtra', type: 'textarea', label: '추가 요청 본문 (JSON)', ph: '{"provider": {"order": ["Google"]}}', show: s => s.auxSource === 'openai' },
     { key: 'auxHeaders', type: 'textarea', label: '추가 헤더 (JSON)', ph: '{"HTTP-Referer": "https://sillytavern.app"}', show: s => s.auxSource === 'openai' },
     { key: 'auxCommands', type: 'check', label: '채팅 모드에서 유저 말 → 명령 해석에 사용', show: s => s.auxSource !== 'none' },
-    { type: 'auxtools', show: s => s.auxSource !== 'none' },
+    { type: 'auxtools', basic: true, show: s => s.auxSource !== 'none' },
   ]],
   ['📖 전투 시작 · 로어', [
     { key: 'startTrigger', type: 'select', label: '전투 신호가 오면', options: [['button', '메시지 아래 「⚔️ 전투 시작」 버튼 (추천)'], ['auto', '바로 자동 시작']] },
@@ -225,7 +227,8 @@ const SETTINGS = [
     { key: 'depth', type: 'number', label: '프롬프트 주입 깊이', min: 0, max: 20, step: 1 },
   ]],
 ];
-const DEFAULT_OPEN = { '🎮 기본': true, '🤖 보조모델': true };
+const DEFAULT_OPEN = {};
+const BASIC_ORDER = ['enabled', 'playMode', 'difficulty', 'ruleSet', 'auxSource', 'auxProfile', 'auxUrl', 'auxKey', 'auxModel', undefined];
 
 function settingValue(set, key) { return key.startsWith('mode.') ? set.modes?.[key.slice(5)] !== false : set[key]; }
 
@@ -252,15 +255,29 @@ function fieldHtml(f, set) {
   return `<label class="sd-row"><span>${h(f.label)}</span>${input}${hint}</label>`;
 }
 
-function drawerHtml() {
+/** Settings drawer: ⚙ settings (essentials + collapsed advanced) | 📜 this chat's rules | 🔍 pipeline trace. */
+function drawerHtml(s) {
   const set = api.settings();
   api.ui.sdOpen ??= { ...DEFAULT_OPEN };
-  return `<div class="bt-drawer"><div class="sd-head"><b>⚙️ 설정</b><button class="sd-x" data-act="settings-close">✕ 닫기</button></div>
-    <div class="sd-body">${SETTINGS.map(([g, fields]) => `<details class="sd-group" data-group="${h(g)}" ${api.ui.sdOpen[g] ? 'open' : ''}><summary>${g}</summary>${fields.map(f => fieldHtml(f, set)).join('')}</details>`).join('')}
-    <div class="sd-hint" style="margin-top:8px">채팅별 룰(스탯·등급·상성)은 「룰」 탭, 내 시트는 「캐릭터」 탭에서 바꿔요.</div></div></div>`;
+  const page = ['set', 'rules', 'trace'].includes(api.ui.sdPage) ? api.ui.sdPage : 'set';
+  const pages = [['set', '⚙ 설정'], ['rules', '📜 룰'], ['trace', '🔍 점검']].map(([k, l]) => `<button class="sd-tab ${page === k ? 'on' : ''}" data-act="sd-page" data-v="${k}">${l}</button>`).join('');
+  let body;
+  if (page === 'rules') body = s ? rulesTab(s) : '<div class="bt-empty">채팅을 열면 보여요.</div>';
+  else if (page === 'trace') body = traceTab(s);
+  else {
+    const all = SETTINGS.flatMap(([, fields]) => fields);
+    const basic = all.filter(f => f.basic).sort((a, b) => BASIC_ORDER.indexOf(a.key) - BASIC_ORDER.indexOf(b.key));
+    const adv = SETTINGS.map(([g, fields]) => [g, fields.filter(f => !f.basic)]).filter(([, f]) => f.length);
+    body = `<div class="sd-basic">${basic.map(f => fieldHtml(f, set)).join('')}</div>
+      <details class="sd-adv" data-group="__adv" ${api.ui.sdOpen.__adv ? 'open' : ''}><summary>🛠 고급 설정</summary>
+        ${adv.map(([g, fields]) => `<details class="sd-group" data-group="${h(g)}" ${api.ui.sdOpen[g] ? 'open' : ''}><summary>${g}</summary>${fields.map(f => fieldHtml(f, set)).join('')}</details>`).join('')}
+      </details>`;
+  }
+  return `<div class="bt-drawer"><div class="sd-head"><div class="sd-tabs">${pages}</div><button class="sd-x" data-act="settings-close">✕</button></div>
+    <div class="sd-body">${body}</div></div>`;
 }
 
-export function refreshTrace() { if (tab === 'trace') refreshPanel(); }
+export function refreshTrace() { if (api?.ui?.settingsOpen && api.ui.sdPage === 'trace') refreshPanel(); }
 
 const TRACE_ICON = { inject: '📤', detect: '🔎', start: '⚔️', aux: '🤖', change: '📝', stat: '📊', balance: '⚖️', error: '❗' };
 const TRACE_KO = { inject: '주입', detect: '감지', start: '구성', aux: '보조', change: '변수', stat: '상태창', balance: '밸런스', error: '오류' };
@@ -276,7 +293,7 @@ function traceTab(s) {
   ];
   return `<div class="bt-section"><div class="bt-sub">파이프라인 점검</div>
     ${steps.map(([a, b, ok]) => `<div class="tr-step ${ok ? 'ok' : ''}"><b>${a}</b><span>${h(b)}</span><i>${ok ? '✔ 동작 확인' : '… 아직 기록 없음'}</i></div>`).join('')}
-    <div class="bt-note">채팅을 진행하면 아래에 무엇을 주입했고, 무엇을 감지했고, 보조모델이 뭐라고 답했는지 쌓여요 (최근 40개, 새로고침하면 지워짐).</div></div>
+    <div class="sd-hint">주입·감지·보조모델 응답 최근 40개 (새로고침하면 지워짐)</div></div>
   <div class="tr-filter">${['', 'inject', 'detect', 'start', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_ICON[k]} ${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
   ${shown.length ? shown.map(x => `<details class="tr-item k-${x.kind}"><summary>${TRACE_ICON[x.kind] ?? '•'} <b>${h(x.title)}</b> <small>${new Date(x.t).toLocaleTimeString()}</small></summary>${x.detail ? `<pre>${h(x.detail)}</pre>` : '<div class="bt-note">(내용 없음)</div>'}</details>`).join('') : '<div class="bt-empty">아직 기록이 없어요. 채팅을 한 번 보내보세요.</div>'}`;
 }
@@ -351,7 +368,7 @@ function battleTab(s) {
   const p = profileOf(s);
   const b = s.battle;
   const busy = api.busy();
-  if (s.disabled) return '<div class="bt-empty">이 채팅에서는 꺼져 있어요. 룰 탭에서 다시 켤 수 있어요.</div>';
+  if (s.disabled) return '<div class="bt-empty">이 채팅에서는 꺼져 있어요. ⚙ → 📜 룰에서 다시 켤 수 있어요.</div>';
   const panelMode = api.settings().playMode !== 'chat';
   if (b && b.status !== 'active' && panelMode && (b.resultPending || !b.resultKey) && b.resultKey !== 'dismissed') return resultScreen(s, b);
   if (!b || b.status !== 'active') {
@@ -552,6 +569,9 @@ async function shrinkImage(file, pixel) {
   return out;
 }
 
+/** Help text that stays out of the way: a small ⓘ with a tooltip. */
+const tip = text => `<span class="bt-tip" title="${h(text)}" tabindex="0">ⓘ</span>`;
+
 function statGrid(stats, p) {
   return `<div class="sk-stats">${p.stats.map(x => `<span><small>${h(x.label || x.key)}</small><b>${stats?.[x.key] ?? '-'}</b></span>`).join('')}</div>`;
 }
@@ -565,9 +585,8 @@ function sheetTab(s) {
       <div class="bt-row"><button class="menu_button" data-act="save-json" data-v="player">저장</button><button class="menu_button" data-act="cancel-json">취소</button></div></div>`;
   }
   const concept = s.playerConcept ?? '';
-  const sheetBtns = `<div class="bt-sub">🧬 AI로 시트 만들기</div>
+  const sheetBtns = `<div class="bt-sub">🧬 AI로 시트 만들기 ${tip('숫자(위력·확률·스탯)는 AI가 세계관 등급에 맞춰 정하고, 등급을 넘는 건 자동으로 깎여요. 상태창이 있으면 그 수치를 그대로 써요.')}</div>
       <textarea class="text_pole" id="bt-sheet-extra" rows="3" placeholder="어떤 전투 스타일인지 자유롭게 적어주세요.&#10;예) 쌍검을 쓰는 속도형 검사. 번개를 두른 돌진기, 상대 방어를 깎는 연속베기 같은 느낌">${h(concept)}</textarea>
-      <div class="bt-note">숫자(위력·확률·스탯)는 AI가 세계관 등급에 맞춰 정하고, 등급을 넘는 건 자동으로 깎여요. 상태창이 있으면 그 수치를 그대로 써요.</div>
       <div class="bt-row bt-wrap">
       <button class="menu_button bt-send" data-act="gen-sheet" ${busy ? 'disabled' : ''}>🧬 ${me ? '🎲 리롤' : 'AI로 시트 생성'}</button>
       <button class="menu_button" data-act="import-stat">📥 상태창에서 불러오기</button>
@@ -591,7 +610,7 @@ function sheetTab(s) {
       <div class="bt-sub" style="margin-top:8px">✍️ 수정 지시</div>
       <textarea class="text_pole" id="bt-sheet-instr" rows="2" placeholder="예) 섬광 베기를 원거리기로 / 회복기 하나 넣어줘 / 기술 이름 더 멋있게"></textarea>
       <button class="menu_button" data-act="sheet-revise" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button></div>
-    <div class="bt-section"><div class="bt-sub">함께 다니는 인물</div><div class="bt-note">따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고, 장면에 있는 도감 인물을 아군·적으로 알아서 넣어요. 여기 있는 사람은 "요즘 같이 다님"으로 참고만 해요.</div>${comps}</div>
+    <div class="bt-section"><div class="bt-sub">함께 다니는 인물 ${tip('따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고 장면에 있는 도감 인물을 아군·적으로 넣어요. 여기 있는 사람은 「요즘 같이 다님」으로 참고만 해요.')}</div>${comps || '<div class="bt-empty">없음</div>'}</div>
     <div class="bt-section"><div class="bt-sub">인벤토리</div>${inv || '<div class="bt-note">비어 있음</div>'}
       <div class="bt-row"><input type="text" class="text_pole" id="bt-new-item" data-enter="add-item" placeholder="아이템 추가 (예: 하급 포션)"><button class="menu_button" data-act="add-item">추가</button></div></div>
     <div class="bt-section">${sheetBtns}</div>`;
@@ -617,9 +636,9 @@ function rulesTab(s) {
       <div class="bt-row bt-wrap"><button class="menu_button ${p.typeSystem !== 'pokemon' ? 'bt-on' : ''}" data-act="rule-set" data-v="world">🌍 세계관 속성</button>
       <button class="menu_button ${p.typeSystem === 'pokemon' ? 'bt-on' : ''}" data-act="rule-set" data-v="pokemon">🎮 포켓몬식 상세 룰</button></div>
       <div class="bt-note">${p.typeSystem === 'pokemon' ? `18타입 (${Object.values(POKE_KO).join('·')}) · 공식 상성표 (2배/0.5배/무효, 겹치면 4배) · 자속 1.5배 · 물리/특수 분리 · 우선도 · 배율이 큰 만큼 기본 피해는 낮게` : '세계관 속성 + 간이 상성표 · 자속 1.2배'}</div></div>
-    <div class="bt-section"><div class="bt-sub">등급 체계</div>
+    <div class="bt-section"><div class="bt-sub">등급 체계 ${tip('세계관에 고유 랭크(헌터 F~S, 무협 경지 등)가 있으면 AI 룰 분석이 그 이름을 그대로 써요. 프리셋을 바꾸면 등록된 캐릭터 등급도 같은 위치의 새 등급으로 옮겨요.')}</div>
       <div class="bt-row bt-wrap">${Object.entries(TIER_PRESETS).map(([k, v]) => `<button class="menu_button ${p.tiers.map(t => t.name).join('|') === v.tiers.map(t => t.name).join('|') ? 'bt-on' : ''}" data-act="tier-preset" data-v="${k}" ${busy ? 'disabled' : ''}>${h(v.ko)}</button>`).join('')}</div>
-      <div class="bt-note">세계관에 고유 랭크(헌터 F~S, 무협 경지 등)가 있으면 「AI로 세계관 룰 분석」이 그 이름을 그대로 써요. 프리셋을 바꾸면 이미 등록된 캐릭터 등급도 같은 위치의 새 등급으로 옮겨요.</div></div>
+</div>
     <div class="bt-section bt-row bt-wrap">
       <button class="menu_button" data-act="gen-rules" ${busy ? 'disabled' : ''}>📜 AI로 세계관 룰 분석</button>
       <button class="menu_button" data-act="edit-json" data-v="rules">✏️ JSON</button>
@@ -641,9 +660,9 @@ function codexTab(s) {
   const freshPlayer = fresh.has('player') && s.player ? `<div class="bt-section cx-fresh"><div class="bt-note">🆕 내 시트도 만들었어요: <b>${h(s.player.name)}</b> [${h(s.player.tier || '?')}] — 캐릭터 탭에서 확인·리롤</div></div>` : '';
   // Newly registered first, so a fresh batch can be reviewed (reroll / delete) at a glance.
   const ordered = [...list.filter(e => fresh.has(e.id)), ...list.filter(e => !fresh.has(e.id))];
-  return `<div class="bt-section"><div class="bt-note">한 번 등록한 캐릭터는 이후 이름만 나와도 이 스킬셋 그대로 등장해요. 성장은 채팅별로 기록돼요.</div>
-      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-scan" ${busy ? 'disabled' : ''}>🧭 ${list.length ? '주요 인물 더 찾아서 등록' : '세계관에서 주요 인물 찾아서 등록'}</button><button class="menu_button" data-act="codex-new">＋ 직접 등록</button></div>
-      <div class="bt-note">보조모델이 페르소나·캐릭터 카드·로어북 인물 항목·최근 대화 ${h(api.settings().castScene ?? 20)}개를 읽고, 한 번에 ${api.settings().castBatch ?? 4}명까지 찾아서 시트까지 바로 등록해요. 마음에 안 들면 🎲 리롤 / ✕ 삭제.</div></div>
+  return `<div class="bt-section">
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-scan" ${busy ? 'disabled' : ''}>🧭 ${list.length ? '주요 인물 더 찾아서 등록' : '세계관에서 주요 인물 찾아서 등록'}</button><button class="menu_button" data-act="codex-new">＋ 직접 등록</button>
+      ${tip(`보조모델이 페르소나·캐릭터 카드·로어북 인물 항목·최근 대화 ${api.settings().castScene ?? 20}개를 읽고 한 번에 ${api.settings().castBatch ?? 4}명까지 찾아 시트까지 바로 등록해요. 한 번 등록한 캐릭터는 이름만 나와도 이 스킬셋 그대로 등장하고, 성장은 채팅별로 기록돼요.`)}</div></div>
     ${freshPlayer}
     <div class="bt-section">${ordered.length ? ordered.map(e => {
       const sh = api.rosterOf(e);
@@ -675,15 +694,14 @@ function codexEditor(s, p, id, list) {
       <div class="bt-row"><label>등급<select id="bt-cx-tier" class="text_pole"><option value="">AI가 세계관 보고 판단</option>${p.tiers.map(t => `<option value="${h(t.name)}" ${sh?.tier === t.name ? 'selected' : ''}>${h(t.name)}</option>`).join('')}</select></label>
         <label>외형<select id="bt-cx-shape" class="text_pole"><option value="">자동</option>${Object.entries(SHAPE_KO).map(([k, v]) => `<option value="${k}" ${sh?.shape === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div>
       <label class="bt-f">별칭 (쉼표)</label><input type="text" class="text_pole" id="bt-cx-alias" value="${h((sh?.aliases ?? []).join(', '))}" placeholder="예: 오스샷, Elias">
-      <label class="bt-f">어떤 캐릭터인지 (자유롭게)</label>
+      <label class="bt-f">어떤 캐릭터인지 (자유롭게) ${tip('스킬 이름이나 느낌만 적어도 돼요. 타입·위력·우선도·확률·스탯은 AI가 정하고, 세계관 등급을 넘는 건 자동으로 깎여요.')}</label>
       <textarea class="text_pole" id="bt-cx-desc" rows="4" placeholder="예) 총사. 바람을 두른 속사가 주특기고, 빠르게 쏘는 신속사격과 뒤로 빠지며 방어를 올리고 조금 회복하는 백스탭을 써요.">${h(entry?.concept ?? sh?.desc ?? '')}</textarea>
-      <div class="bt-note">스킬 이름이나 느낌만 적어도 돼요. 타입·위력·우선도·확률·스탯은 AI가 정하고, 세계관 등급을 넘는 건 자동으로 깎여요.</div>
     </div>
-    ${entry ? `<div class="bt-section"><div class="bt-sub">✍️ 수정 지시</div>
+    ${entry ? `<div class="bt-section"><div class="bt-sub">✍️ 수정 지시 ${tip('등급 예산과 공정성 규칙이 지시보다 우선이라, 너무 센 요청은 깎여서 들어가요.')}</div>
       <textarea class="text_pole" id="bt-cx-instr" rows="2" placeholder="예) 원거리 위주로 바꿔줘 / 회복기 빼고 방어 버프 넣어줘 / 신속사격 위력 좀 올려줘"></textarea>
       <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-revise" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button><button class="menu_button" data-act="codex-gen" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>🎲 리롤 (설명으로 새로)</button></div>
       ${(entry.history ?? []).length ? `<div class="bt-note">지난 지시: ${entry.history.slice(-3).map(x => h(x.instruction)).join(' · ')}</div>` : ''}
-      <div class="bt-note">등급 예산과 공정성 규칙은 지시보다 우선이라, 너무 센 요청은 깎여서 들어가요.</div></div>` : ''}
+</div>` : ''}
     <div class="bt-section bt-row bt-wrap">
       ${entry ? '' : `<button class="menu_button bt-send" data-act="codex-gen" data-v="" ${busy ? 'disabled' : ''}>🤖 AI로 생성해서 등록</button>`}
       ${entry ? `<button class="menu_button" data-act="codex-lock" data-v="${h(entry.id)}" data-on="${entry.locked ? '0' : '1'}">${entry.locked ? '🔓 잠금 해제' : '🔒 잠금 (스토리 변경 차단)'}</button>
@@ -791,6 +809,7 @@ function onClick(e) {
     case 'compact': api.ui.compact = !api.ui.compact; try { localStorage.setItem('bt-compact', api.ui.compact ? '1' : ''); } catch { /* private mode */ } return refreshPanel();
     case 'settings-open': api.ui.settingsOpen = true; return refreshPanel();
     case 'settings-close': api.ui.settingsOpen = false; return refreshPanel();
+    case 'sd-page': api.ui.sdPage = v; return refreshPanel();
     case 'aux-test': return api.auxTest?.();
     case 'aux-models': return api.auxModels?.();
     case 'trace-filter': api.ui.traceFilter = v; return refreshPanel();
