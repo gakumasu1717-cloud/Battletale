@@ -857,3 +857,118 @@
 .pc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .pc-chip { font-size: 12px; padding: 2px 8px; border-radius: 12px; background: #ffffff10; display: inline-flex; align-items: center; gap: 4px; }
 .bt-tab { white-space: nowrap; }
+
+/* =====================================================================
+ * v0.14.4 — one dark RPG theme for the whole panel.
+ * Tokens live on #bt-panel; everything below overrides the older parchment /
+ * white-dialog / beige-infobox looks. The battlefield art keeps its colours.
+ * ===================================================================== */
+#bt-panel {
+  --bt-bg: #181a20; --bt-surface: #22252e; --bt-surface2: #2a2e39; --bt-line: #ffffff1c; --bt-line2: #ffffff2e;
+  --bt-text: #e6e7ec; --bt-dim: #9da1ad; --bt-accent: #e8a33d; --bt-accent-ink: #1b1712;
+  --bt-good: #6fd17d; --bt-bad: #ff8a7a; --bt-info: #8fb8ff;
+  background: #181a20f7; color: var(--bt-text); border-color: var(--bt-line2); font-size: 13px;
+}
+#bt-panel .bt-head { border-bottom-color: var(--bt-line); }
+#bt-panel .bt-tab, #bt-panel .bt-x, #bt-panel .bt-mini { background: var(--bt-surface); border: 1px solid var(--bt-line); color: var(--bt-text); }
+#bt-panel .bt-tab.on { background: var(--bt-accent); color: var(--bt-accent-ink); border-color: var(--bt-accent); font-weight: 700; }
+#bt-panel .bt-sub { color: var(--bt-dim); opacity: 1; font-size: 12px; letter-spacing: .2px; }
+#bt-panel .bt-note, #bt-panel .sd-hint { color: var(--bt-dim); opacity: 1; font-size: 12px; }
+#bt-panel .text_pole, #bt-panel select, #bt-panel textarea, #bt-panel input[type=text], #bt-panel input[type=number] { background: #12141a; border: 1px solid var(--bt-line2); color: var(--bt-text); border-radius: 6px; }
+#bt-panel .menu_button { background: var(--bt-surface2); border: 1px solid var(--bt-line2); color: var(--bt-text); border-radius: 7px; }
+#bt-panel .menu_button.bt-send, #bt-panel .menu_button.bt-on { background: var(--bt-accent); border-color: var(--bt-accent); color: var(--bt-accent-ink); font-weight: 700; }
+.bt-drawer { background: var(--bt-bg, #181a20); }
+.sd-group { background: #ffffff05; }
+
+/* battle wrap: no more brown parchment */
+.pk-wrap.lr { background: transparent; }
+.pk-head { font-size: 12.5px; }
+.pk-scene { border: 1px solid var(--bt-line2, #ffffff2e); border-radius: 10px; }
+
+/* info boxes: dark glass over the battlefield */
+.pk-info { background: rgba(20, 22, 28, .86); color: var(--bt-text, #e6e7ec); border: 1px solid #ffffff2a; border-radius: 8px; box-shadow: 0 2px 8px #0006; backdrop-filter: blur(2px); }
+.pk-info.sel { box-shadow: 0 0 0 2px var(--bt-accent, #e8a33d); }
+.pk-name { font-size: 13px; }
+.pk-lv { color: var(--bt-dim, #9da1ad); opacity: 1; font-size: 11px; }
+.pk-hp-track { background: #00000080; border-color: #00000080; }
+.pk-sp span, .pk-posture span { color: var(--bt-text, #e6e7ec); }
+.pk-sp, .pk-posture, .pk-meter { background: #ffffff14; }
+.pk-spl { background: #ffffff14; }
+.pk-note, .pk-info .pk-note { color: #f3c27a; font-size: 11px; }
+.pk-note.charge, .pk-note.release { color: var(--bt-bad, #ff8a7a); }
+.pk-note.tell { color: #c9b8ff; }
+.pk-info .pk-nums { font-size: 11px; color: var(--bt-dim, #9da1ad); }
+.pk-st, .pk-info .pk-chips .pk-st, .pk-info .pk-stage, .pk-stage { font-size: 10.5px; line-height: 14px; }
+.pk-tdot { font-size: 10px; line-height: 14px; }
+.pk-boss { font-size: 10px; }
+.pk-tag { font-size: 10.5px; }
+
+/* message window: slate card with an accent edge instead of the white dialog box */
+.pk-msg, .bt-msgbox { background: var(--bt-surface, #22252e); color: var(--bt-text, #e6e7ec); border: 0; border-left: 3px solid var(--bt-accent, #e8a33d); box-shadow: none; border-radius: 8px; font-weight: 500; font-size: 13.5px; }
+.pk-msg.talk { min-height: 52px; }
+.pk-msg .pk-arrow, .pk-msg .pk-stepn { color: var(--bt-dim, #9da1ad); }
+
+/* plain menu buttons (bag, switch, targets, stealth, mind game): dark cards with a coloured edge */
+.pk-btn { background: var(--bt-surface2, #2a2e39); color: var(--bt-text, #e6e7ec); border: 1px solid var(--bt-line, #ffffff1c); box-shadow: none; }
+.pk-btn b { text-shadow: none; }
+.pk-btn small, .pk-menu:not(.main) .pk-btn small { font-size: 11px; color: var(--bt-dim, #9da1ad); opacity: 1; }
+.pk-btn em, .pk-menu:not(.main) .pk-btn em { font-size: 11px; }
+.pk-btn .pk-fx { font-size: 11px; }
+.pk-btn.plain { background: var(--bt-surface, #22252e); color: var(--bt-text, #e6e7ec); border-color: var(--bt-line, #ffffff1c); }
+.pk-btn.back { background: transparent; color: var(--bt-dim, #9da1ad); border-style: dashed; }
+.pk-btn.m-fight { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #e0503a; }
+.pk-btn.m-bag { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #e0a020; }
+.pk-btn.m-party { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #3fa159; }
+.pk-btn.m-run { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #3a7bd5; }
+.pk-btn.st-strike { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #d8a020; }
+.pk-btn.st-heavy { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #e0503a; }
+.pk-btn.st-guard { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #3a7bd5; }
+.pk-btn.st-evade { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #3fa159; }
+.pk-btn.st-feint { background: var(--bt-surface2, #2a2e39); border-left: 4px solid #8a4ac0; }
+.pk-btn.on { box-shadow: 0 0 0 2px var(--bt-accent, #e8a33d); }
+.pk-menu.c5 .pk-btn small, .pk-menu.c4 .pk-btn small { font-size: 10.5px; }
+
+/* speed order / actor picker / targeting: neutral greys instead of brown */
+.pk-order { font-size: 11px; }
+.pk-order span { background: #ffffff10; }
+.pk-order i, .lr-oc i { font-size: 10px; background: var(--bt-accent, #e8a33d); }
+.lr-order { background: #12141a; border-color: var(--bt-line, #ffffff1c); }
+.lr-ol, .lr-oc em, .lr-hint small { color: var(--bt-dim, #9da1ad); }
+.lr-oc, .lr-actor, .lr-tg { background: var(--bt-surface, #22252e); color: var(--bt-text, #e6e7ec); border-color: var(--bt-line2, #ffffff2e); }
+.lr-oc.enemy { background: #3a1f1f; border-color: #6e2c25; }
+.lr-actor.on { background: var(--bt-accent, #e8a33d); color: var(--bt-accent-ink, #1b1712); border-color: var(--bt-accent, #e8a33d); }
+.lr-hint, .lr-confirm { color: var(--bt-text, #e6e7ec); }
+.lr-confirm { background: var(--bt-surface, #22252e); border-top-color: var(--bt-line2, #ffffff2e); }
+.lr-cancel { background: var(--bt-surface2, #2a2e39); color: var(--bt-dim, #9da1ad); }
+
+/* skill detail card (ⓘ / right-click / long-press) */
+.lr-card { background: var(--bt-surface, #22252e); color: var(--bt-text, #e6e7ec); border: 1px solid var(--bt-line2, #ffffff2e); }
+.lr-card.r-art { background: linear-gradient(170deg, #2e2a22, #22252e); border-color: #e8a93a; }
+.lr-art { background: radial-gradient(circle, #ffffff10, transparent 70%); border-bottom: 1px solid var(--bt-line, #ffffff1c); }
+.lr-pow { color: var(--bt-text, #e6e7ec); text-shadow: none; }
+.lr-kn, .lr-desc { color: var(--bt-dim, #9da1ad); font-size: 10.5px; }
+.lr-fx { color: #c9ccd6; font-size: 11px; }
+.lr-top { font-size: 11px; }
+
+/* inspect sheet */
+.pk-ins-box { background: var(--bt-surface, #22252e); color: var(--bt-text, #e6e7ec); border: 1px solid var(--bt-line2, #ffffff2e); font-size: 12px; }
+.pk-ins-head { font-size: 14px; }
+.pk-ins-x { background: var(--bt-surface2, #2a2e39); }
+.pk-sub { border-bottom-color: var(--bt-line2, #ffffff2e); color: var(--bt-dim, #9da1ad); font-size: 12px; }
+.pk-world { color: var(--bt-dim, #9da1ad); }
+.pk-stats .ps { background: #ffffff0a; }
+.pk-stats .ps small, .pk-stats .ps em { font-size: 10px; color: var(--bt-dim, #9da1ad); }
+.pk-stats .ps b { font-size: 13px; }
+.pk-stats .ps em.up { color: #ff9a7a; } .pk-stats .ps em.down { color: #8fb8ff; }
+.pk-skl { font-size: 11.5px; }
+.pk-mu .bt-type { font-size: 10px; }
+
+/* small text floor elsewhere */
+.sk-stats small { font-size: 10px; }
+.sk-fx span { font-size: 11px; }
+.pk-terr { font-size: 11px; }
+.pz-legend { font-size: 11px; }
+.pk-log .pk-log-t { font-size: 11px; }
+.pk-bar { flex-wrap: nowrap; }
+.pk-bb { flex: 1 1 0; padding: 5px 3px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+#bt-panel .bt-head > b { white-space: nowrap; }
