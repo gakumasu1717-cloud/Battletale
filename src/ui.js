@@ -249,6 +249,7 @@ const SETTINGS = [
     { key: 'startTrigger', type: 'select', label: '전투 신호가 오면', options: [['button', '메시지 아래 「⚔️ 전투 시작」 버튼 (추천)'], ['auto', '바로 자동 시작']] },
     { key: 'suggestStart', type: 'check', label: '신호가 없어도 위험한 장면이면 시작 버튼 제안', hint: '메인 모델이 태그를 빼먹거나, 첫 메시지부터 위기 상황일 때' },
     { key: 'startMode', type: 'select', label: '전투 감지', options: [['hybrid', '메인이 <bt-start> 표시 → 보조가 구성 (추천)'], ['main', '메인이 <bt-battle> 전체 작성'], ['manual', '수동 (버튼·/bt-start)']] },
+    { key: 'fightGuard', type: 'check', label: '주요 전투는 메인 모델이 멋대로 끝내지 않게 (상시 주입)', hint: '네임드·위험한 적·생사가 걸린 싸움은 첫 타격 직전에 멈추고 엔진으로 넘기도록, 전투를 건너뛰는 요약도 금지해요' },
     { key: 'sceneSize', type: 'number', label: '적 구성 때 읽을 최근 메시지 수', min: 1, max: 15, step: 1 },
     { key: 'castScene', type: 'number', label: '인물 찾기 때 읽을 최근 메시지 수', min: 2, max: 60, step: 1 },
     { key: 'sheetScene', type: 'number', label: '내 시트 생성 때 읽을 최근 메시지 수', min: 0, max: 15, step: 1 },
@@ -568,8 +569,8 @@ function resultScreen(s, b) {
       <div class="lr-detail">${[['result', '🏁 승패만', '결과와 최종 상태만'], ['summary', '📋 전투 요약', '명장면 위주'], ['full', '📜 전체 로그', '모든 행동']].map(([k, l, d]) => `<label class="lr-opt ${(b.resultDetail ?? api.settings().resultDetail ?? 'summary') === k ? 'on' : ''}"><input type="radio" name="bt-detail" value="${k}" data-act="result-detail" ${(b.resultDetail ?? api.settings().resultDetail ?? 'summary') === k ? 'checked' : ''}><b>${l}</b><small>${d}</small></label>`).join('')}</div>
       <input type="text" class="text_pole" id="bt-result-comment" data-enter="send-result" placeholder="(선택) 결과와 같이 보낼 한마디 · 예: 숨을 고르며 검을 거둔다">
       <button class="menu_button bt-wide bt-send" data-act="send-result">📨 결과를 이야기로 보내기</button>
-      <div class="bt-note">메인 모델이 이 전투를 한 장면으로 서술해요.</div>
-      <button class="menu_button" data-act="dismiss-result">보내지 않고 닫기</button>
+      <div class="bt-row bt-wrap"><button class="menu_button bt-retry" data-act="retry-battle" ${api.busy() ? 'disabled' : ''} title="전투 전 HP·기력·가방으로 되돌리고 같은 적과 다시 싸워요 (주사위는 새로)">🔁 다시하기${b.retries ? ` (${b.retries}회째)` : ''}</button>
+        <button class="menu_button" data-act="dismiss-result">보내지 않고 닫기</button></div>
     </div></div>`;
 }
 
@@ -665,7 +666,8 @@ function sheetTab(s) {
   }
   const concept = s.playerConcept ?? '';
   const aiForm = `<div class="bt-section pc-form"><div class="bt-sub">✨ AI로 ${me ? '다시 만들기' : '시트 만들기'} ${tip('숫자(위력·확률·스탯)는 AI가 세계관 등급에 맞춰 정하고, 등급을 넘는 건 자동으로 깎여요. 상태창이 있으면 그 수치를 그대로 써요.')}</div>
-      <textarea class="text_pole" id="bt-sheet-extra" rows="3" placeholder="어떤 전투 스타일인지 자유롭게 적어주세요.&#10;예) 쌍검을 쓰는 속도형 검사. 번개를 두른 돌진기, 상대 방어를 깎는 연속베기 같은 느낌">${h(concept)}</textarea>
+      <div class="bt-row"><label>등급<select class="text_pole" data-act="player-tier"><option value="">페르소나·설명에 적힌 등급 → 없으면 AI 판단</option>${p.tiers.map(t => `<option value="${h(t.name)}" ${s.playerTier === t.name ? 'selected' : ''} title="${h(t.desc ?? '')}">${h(t.name)} 고정</option>`).join('')}</select></label></div>
+      <textarea class="text_pole" id="bt-sheet-extra" rows="3" placeholder="어떤 전투 스타일인지 자유롭게 적어주세요.  등급을 적으면(예: 3등급, B랭크) 그대로 써요.&#10;예) 쌍검을 쓰는 속도형 검사. 번개를 두른 돌진기, 상대 방어를 깎는 연속베기 같은 느낌">${h(concept)}</textarea>
       <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="gen-sheet" ${busy ? 'disabled' : ''}>${me ? '🎲 리롤' : '🧬 AI로 시트 생성'}</button>
         <button class="menu_button" data-act="import-stat">📥 상태창에서 불러오기</button></div>
       ${me ? `<div class="bt-sub" style="margin-top:8px">✍️ 수정 지시</div>
@@ -907,6 +909,7 @@ function onClick(e) {
     case 'start': return api.start(val('bt-hint'), val('bt-mode-pick') || null);
     case 'send-result': return api.sendResult(val('bt-result-comment'));
     case 'dismiss-result': return api.dismissResult();
+    case 'retry-battle': return api.retryBattle?.();
     case 'codex-open': editing = `codex:${v}`; api.ui.cxMode = 'view'; api.ui.picOpen = null; return refreshPanel();
     case 'sheet-mode': api.ui.sheetMode = v; return refreshPanel();
     case 'cx-mode': api.ui.cxMode = v; return refreshPanel();
@@ -968,6 +971,7 @@ function onChange(e) {
     return api.setSetting(el.dataset.set, v);
   }
   const act = el.dataset.act;
+  if (act === 'player-tier') return api.edit(s => { s.playerTier = el.value || null; });
   if (act === 'cast-pick') { const c = api.ui.cast?.[Number(el.dataset.i)]; if (c) c.pick = el.checked; return refreshPanel(); }
   if (act === 'pt-url') { const u = el.value.trim(); if (!u) return; if (!/^https:\/\//.test(u)) return api.toast('https:// 로 시작하는 이미지 주소만 돼요.', 'warning'); return api.setPortrait(el.dataset.v, { src: u, pixel: false }); }
   if (act === 'pt-file') {

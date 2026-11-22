@@ -972,3 +972,35 @@
 .pk-bar { flex-wrap: nowrap; }
 .pk-bb { flex: 1 1 0; padding: 5px 3px; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
 #bt-panel .bt-head > b { white-space: nowrap; }
+
+/* ---------- v0.14.5: clean, smaller type ----------
+ * The panel no longer inherits the chat's (often decorative) theme font: one plain Korean sans stack,
+ * a slightly smaller base size, and medium/semibold weights instead of the old 800-900 "game" weights. */
+#bt-panel, #bt-panel button, #bt-panel input, #bt-panel select, #bt-panel textarea, #bt-dock {
+  font-family: 'Pretendard', 'Pretendard Variable', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', system-ui, -apple-system, sans-serif;
+  letter-spacing: -0.1px;
+}
+#bt-panel { font-size: 12.5px; line-height: 1.45; }
+#bt-panel .bt-tab, #bt-panel .bt-x { font-size: 12px; }
+.pk-btn b, .pk-menu.main .pk-btn b { font-size: 13px; font-weight: 600; }
+.pk-menu .pk-btn.sk .sk-l1 b { font-size: 12.5px; font-weight: 600; }
+.pk-btn.sk .sk-tag, .pc-sl2 span { font-size: 10.5px; }
+.pk-btn.sk em.sk-cost, .pc-sl1 em { font-size: 10.5px; font-weight: 600; }
+.pk-bb { font-size: 11.5px; font-weight: 500; }
+.pk-msg, .bt-msgbox { font-size: 13px; font-weight: 400; }
+.pk-msg.idle { font-size: 12px; }
+.pk-name, .pk-info.compact .pk-row1 .pk-name { font-weight: 600; font-size: 12.5px; }
+.pk-title { font-weight: 600; font-size: 13px; }
+.pk-lv, .pk-nums, .pk-info .pk-nums { font-weight: 500; }
+.pk-st, .pk-stage, .pk-tdot, .pk-boss, .cx-tier, .cx-badge, .pk-order i, .lr-oc i { font-weight: 600; }
+.pk-note, .pk-info .pk-note { font-weight: 500; }
+.pk-tag { font-weight: 600; }
+.lr-pow { font: 700 24px/1 inherit; font-family: inherit; }
+.lr-name { font-weight: 600; }
+.pk-sub, #bt-panel .bt-sub { font-weight: 600; }
+.bt-result-title { font-weight: 700; font-size: 20px; }
+.pc-name b { font-weight: 600; font-size: 14px; }
+.pc-sl1 { font-size: 12.5px; }
+.pc-sl1 b { font-weight: 600; }
+.pc-mb, .sd-tab { font-size: 11.5px; }
+.bt-retry { font-weight: 600; }

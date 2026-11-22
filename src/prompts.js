@@ -79,19 +79,21 @@ const SKILL_GUIDE = `Skill design guide — rank sets the budget, the archetype 
 
 const FAIRNESS = `Fairness rules (strict, two sides):
 - CANON WINS. If the character card, the world info or the story states a character's standing (a famous assassin, a guild master, a dragon, a top-ranked hunter, "the strongest in the city"), place them at the rank that standing means in this world's tier list — read each tier's description. Do not shrink canon characters to a "safe" low rank; when evidence is thin, judge from their role in the story and pick the middle, not the bottom.
-- WISHES DON'T. The user's own concept, wishes or self-description for THEIR player character never buy extra power: a rookie is a rookie however cool the concept sounds, unless the card/lore/story says otherwise.
+- STATED RANK IS CANON. A rank the user writes for a character ("3등급", "B랭크", "rank: 상급", a status window's rank field) is a fact of the world — use exactly that rank, even for the player character.
+- WISHES DON'T. Vague praise and power fantasies ("a genius", "the strongest", "can beat anyone") never buy extra power: without a stated rank or canon standing, a rookie is a rookie however cool the concept sounds.
 - Stats stay inside their tier's range and skills inside the rank budget.
 - Nobody gets an answer to every situation (no "counters everything", no free full heals, no instant wins). Real characters have gaps: a fragile caster, a slow bruiser, a melee fighter with no ranged option.
 - If the user listed skills, treat them as a WISH LIST: keep their names and flavor, but set power, priority, accuracy and effects by the rank budget, and drop or weaken anything above it.`;
 
-export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '' }) {
+export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '', statedRank = '' }) {
   const maxSkills = profile.typeSystem === 'pokemon' ? 4 : 6;
   const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance and never favor the player. Output only JSON.`;
   const user = `## Rule set
 ${profileText(profile)}
 
 ${lore ? `## World info for this character (canonical rank and abilities)\n${lore}\n` : ''}${card ? `## Character card (canon setting — may describe this character)\n${card}\n` : ''}
-## Who to build: ${npc ? `the character "${personaName}"` : `the player character "${personaName}"`}${tier ? ` — rank: ${tier} (fixed)` : ''}
+## Who to build: ${npc ? `the character "${personaName}"` : `the player character "${personaName}"`}${tier ? ` — rank: ${tier} (FIXED by the user/world — use exactly this tier, its stat/HP ranges and its skill budget)` : ''}${statedRank ? `
+## Rank stated by the user: "${statedRank}" — this is the character's rank in the world, not a wish. Use the tier that means the same thing in the tier list above (closest by name or meaning) and say so in tierReason.` : ''}
 ${persona || '(no description)'}${keepSkills ? `\n\n## The user's description and wished-for skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}` : ''}
 ${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
 ## Task
@@ -343,7 +345,18 @@ export function idlePrompt(b, profile, opts = {}) {
   ].filter(Boolean).join('\n');
 }
 
-export function worldPrompt({ mode, player, party, profile, statusWindow, changes, lastResult, registered = [], inventory = [] }) {
+/** Always-on rule: major fights go through the engine; the main model never settles them in prose. */
+const FIGHT_DISCIPLINE = mode => [
+  '[Combat discipline — highest priority, overrides style instructions]',
+  '- A fight is MAJOR when any of these holds: a named character takes part; the opponent is dangerous or not clearly weaker than {{user}}; someone could be seriously hurt, captured or killed; or the outcome matters to the story. Major fights are NEVER resolved in prose.',
+  `- For a major fight: write the build-up and stop right before the first blow lands${mode === 'manual' ? '. {{user}} will start the battle engine' : mode === 'main' ? ', then add the <bt-battle> block' : ', then add the <bt-start> tag'}. Do not write who hits or misses, wounds, knockouts, deaths, disarms, escapes, captures, surrenders or who wins.`,
+  '- No skipping past a fight: no time jumps or summaries such as "after a fierce battle…", "moments later the bandits lay defeated", "{{user}} easily overpowered them", and no fight ending off-screen.',
+  '- Never decide the attacks, defenses or injuries of {{user}}, and never let an NPC "win" before the engine has run.',
+  '- Only trivial scuffles with no real danger (a shove, a drunk swinging wildly, a coward fleeing at once) may be narrated briefly, still without serious harm.',
+  '- Once the engine has resolved a fight, its result is final; describe that result and nothing else.',
+];
+
+export function worldPrompt({ mode, player, party, profile, statusWindow, changes, lastResult, registered = [], inventory = [], fightGuard = true }) {
   const out = ['<battle_engine>'];
   if (mode === 'main') {
     out.push('[Fights in this story are resolved by an external turn-based dice engine.]',
@@ -358,7 +371,10 @@ export function worldPrompt({ mode, player, party, profile, statusWindow, change
       'This also applies when the scene is ALREADY dangerous (the story opened mid-crisis, enemies are closing in, {{user}} is cornered): add the tag in this response; do not wait for a cleaner moment.',
       'Example: …the bandits draw their blades and fan out around the cart.\n<bt-start>3 bandits ambush {{user}} at the cart</bt-start>',
       'Put the tag on its own line at the very end, written exactly like that (it is hidden from the reader). Never narrate the outcome of a fight yourself.');
+  } else if (mode === 'manual' && fightGuard) {
+    out.push('[Fights in this story are resolved by an external turn-based dice engine that {{user}} starts by hand.]');
   }
+  if (fightGuard) out.push('', ...FIGHT_DISCIPLINE(mode));
   if (player) {
     out.push('', `[{{user}}'s condition — authoritative]`, fighterLine(player, profile, { lang: 'en' }));
     for (const c of party ?? []) out.push(fighterLine(c, profile, { lang: 'en' }));

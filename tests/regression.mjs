@@ -342,6 +342,40 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   }
 });
 
+/* 25 */ await test('다시하기: 전투 전 HP·가방으로 되돌리고 같은 적과 새 전투', async () => {
+  const s = G.stateOf({}); s.profile = PROFILE; s.player = hero(); s.inventory = [{ name: '하급 포션', count: 2 }];
+  const hp0 = s.player.hp;
+  G.beginBattle(s, { mode: 'party', title: '재도전', enemies: [{ name: '오우거', hp: 99999, stats: { STR: 200, END: 80, AGI: 10 }, skills: ['몽둥이: 물리 90'] }] }, { originIndex: 0, originHash: 'h', settings: SET });
+  const first = s.battle.id;
+  s.player.hp = 1; s.inventory[0].count = 0;            // as if the fight went badly
+  G.stopBattle(s, 'lose', { ...SET, playMode: 'panel' });
+  const b = G.retryBattle(s, SET);
+  assert.ok(b && b.id !== first && b.status === 'active', 'new battle started');
+  assert.equal(s.player.hp, hp0); assert.equal(s.inventory[0].count, 2);
+  assert.equal(b.st.fighters.find(f => f.side === 'enemy').name, '오우거');
+  assert.equal(b.retries, 1);
+  G.stopBattle(s, 'lose', SET); s.battle.resultKey = 'u5:sent';
+  assert.equal(G.retryBattle(s, SET), null, 'no retry after the result went to the story');
+});
+
+/* 26 */ await test('적어 둔 등급(3등급·B랭크·Lv.45)은 그대로 인정, 아이템 이름은 무시', () => {
+  const w = C.normalizeProfile({ tiers: [{ name: '5등급' }, { name: '4등급' }, { name: '3등급' }, { name: '2등급' }, { name: '1등급' }] });
+  assert.equal(C.statedRank(w, '세계관상 3등급 헌터다')?.tier, '3등급');
+  assert.equal(C.statedRank(C.applyTierPreset(C.normalizeProfile({}), 'hunter').profile, 'B랭크 헌터')?.tier, 'B');
+  assert.equal(C.statedRank(C.setTypeSystem(C.normalizeProfile({}), 'pokemon'), 'Lv.45 트레이너')?.tier, 'Lv.45');
+  assert.equal(C.statedRank(C.normalizeProfile({}), '하급 포션을 들고 다닌다'), null);
+  assert.deepEqual(C.statedRank(w, '나는 7등급'), { tier: null, raw: '7등급' });
+});
+
+/* 27 */ await test('상시 주입: 주요 전투를 메인 모델이 끝내지 못하게 한다 (끄기 가능)', async () => {
+  const Pr = await import(here + 'prompts.js');
+  for (const mode of ['hybrid', 'main', 'manual']) {
+    const t = Pr.worldPrompt({ mode, profile: PROFILE, registered: [] });
+    assert.match(t, /Combat discipline/); assert.match(t, /after a fierce battle/);
+  }
+  assert.doesNotMatch(Pr.worldPrompt({ mode: 'hybrid', profile: PROFILE, fightGuard: false }), /Combat discipline/);
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

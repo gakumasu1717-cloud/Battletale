@@ -1,6 +1,6 @@
 // Game controller: everything between "chat happened" and "engine resolved".
 // Kept free of SillyTavern globals so it can be tested with plain objects.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, statedRank, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
 import { ruleMessages, sheetMessages, forgeMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
@@ -98,11 +98,15 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   const persona = deps.persona();
   const statFields = deps.statFields?.();
   const partial = sheetFromStatFields(statFields, profile);
+  // A rank the user fixed in the panel, or wrote into the persona/description ("3등급", "B랭크"), is canon.
+  const stated = s.playerTier ? { tier: s.playerTier, raw: s.playerTier } : statedRank(profile, [extra || s.playerConcept || '', persona.text]);
+  const fixedTier = partial?.tier || (stated?.tier && tierOf(profile, stated.tier)?.name) || '';
+  if (stated) deps.trace?.('balance', `명시된 등급 · ${persona.name}: "${stated.raw}" → ${fixedTier || '(룰 등급표에 없음 → 보조모델이 가장 가까운 등급으로)'}`, '');
   let raw = null;
   if (deps.auxReady()) {
     deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
     try {
-      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction }), { maxTokens: 2400 });
+      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier, statedRank: !fixedTier ? stated?.raw ?? '' : '' }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -113,8 +117,9 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
       if (partial.sp) raw.sp = partial.sp;
       if (partial.tier) raw.tier = partial.tier;
     }
+    if (raw && fixedTier) raw.tier = fixedTier;
   }
-  if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: partial?.tier ?? profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
+  if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: fixedTier || profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
   return applyPlayerSheet(s, deps, raw, { statFields, partial });
 }
 
@@ -407,12 +412,35 @@ export function beginBattle(s, spec0, { originIndex = -1, originHash = '', setti
   const { st, opening } = buildState(s, spec, mode, { seed, settings });
   const M = modeOf(mode);
   const b = {
-    id: `e${uid()}`, mode, st, seed, spec: clone(spec), status: st.status, turn: st.turn, title: spec.title || '', place: spec.place || '',
+    id: `e${uid()}`, mode, st, seed, spec: clone(spec), spec0: clone(spec0), status: st.status,
+    // Everything a retry needs to put back: the party and bag exactly as they were before the fight.
+    pre: clone({ player: s.player, companions: s.companions, inventory: s.inventory, roster: s.roster }), turn: st.turn, title: spec.title || '', place: spec.place || '',
     history: [], originIndex, originHash, loot: spec.loot ?? [], opening, why: spec.why ?? '', threat: M.threat(st),
   };
   s.battle = b;
   s.idle = {};
   return b;
+}
+
+/**
+ * Retry a finished fight that has not been sent to the story yet: put the party, bag and wounds back as they were
+ * before it, and start the same encounter again with a new seed (dice roll differently).
+ */
+export function retryBattle(s, settings = {}) {
+  const b = s.battle;
+  if (!b || b.status === 'active' || b.resultKey && b.resultKey !== 'dismissed') return null;
+  const pre = b.pre ?? (b.partyBefore ? { ...b.partyBefore, inventory: s.inventory, roster: s.roster } : null);
+  if (pre) {
+    s.player = clone(pre.player); s.companions = clone(pre.companions ?? []);
+    s.inventory = clone(pre.inventory ?? s.inventory); s.roster = clone(pre.roster ?? s.roster);
+  }
+  s.archive = s.archive.filter(a => a.id !== b.id);
+  s.lastResult = null;
+  const spec = clone(b.spec0 ?? b.spec);
+  const next = beginBattle(s, spec, { originIndex: b.originIndex, originHash: b.originHash, settings, mode: b.mode });
+  next.retryOf = b.id;
+  next.retries = (b.retries ?? 0) + 1;
+  return next;
 }
 
 /** Switch the game type before the first turn (same encounter, same seed). */
@@ -752,7 +780,7 @@ export function promptFor(s, { lastUser, settings, deps = null }) {
     return b.history.length ? idlePrompt(b, profile, opts) : startPrompt(b, profile, opts);
   }
   const registered = (deps?.codex?.list() ?? []).map(e => e.name).slice(0, 15);
-  return worldPrompt({ mode: settings.startMode, player: s.player, party: s.companions, profile, statusWindow: opts.statusWindow, changes: settings.trackChanges, lastResult: s.lastResult, registered, inventory: s.inventory ?? [] });
+  return worldPrompt({ mode: settings.startMode, player: s.player, party: s.companions, profile, statusWindow: opts.statusWindow, changes: settings.trackChanges, lastResult: s.lastResult, registered, inventory: s.inventory ?? [], fightGuard: settings.fightGuard !== false });
 }
 
 export const threatKo = b => THREAT_LABEL[b?.threat?.level] ?? '';

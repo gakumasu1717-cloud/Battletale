@@ -1,12 +1,12 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset } from './src/catalog.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, statedRank } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaText, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
-  playLocal, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet,
+  playLocal, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
 } from './src/game.js';
 import { sheetMessages, castMessages } from './src/prompts.js';
 // 타이밍 리듬게임은 보류 중 (요청에 따라 비활성화). 다시 켜려면 아래 import와 modeAct의 타이밍 블록 주석을 해제.
@@ -22,7 +22,7 @@ const DEFAULTS = {
   length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
   timingMode: 'off', modes: { party: true, duel: true, stealth: true }, showThreat: true,
-  playMode: 'panel', autoPlay: '1300', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
+  playMode: 'panel', autoPlay: '1300', fightGuard: true, ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
 };
 
 const ctx = () => SillyTavern.getContext();
@@ -396,6 +396,20 @@ const panelApi = {
   },
   command: putCommand,
   modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
+  // Same encounter again from the pre-battle state (only before the result went to the story).
+  retryBattle: async () => {
+    const s = state();
+    const old = s?.battle;
+    if (!old || old.status === 'active') return;
+    const b = retryBattle(s, settings());
+    if (!b) return toast('이미 이야기로 보낸 전투는 다시 할 수 없어요.', 'warning');
+    const m = ctx().chat?.[b.originIndex];
+    if (m) { m.extra = { ...(m.extra ?? {}), battletale: { ...(m.extra?.battletale ?? {}) } }; m.extra.battletale.origin = [...(m.extra.battletale.origin ?? []), b.id]; try { await ctx().saveChat?.(); } catch { /* saved later */ } }
+    ui.msg = null; ui.page = 'main'; ui.openingShown = null; ui.steps = null; ui.lastEvents = null; ui.target = null; ui.targetLocked = false;
+    trace('start', `🔁 다시하기 (${b.retries}회째) · ${b.title || b.mode}`, '');
+    await saveState(); afterChange();
+    toast(`🔁 다시 도전! (${b.retries}회째)`, 'info');
+  },
   dismissResult: async () => { const s = state(); if (s?.battle) { s.battle.resultPending = false; s.battle.resultKey = 'dismissed'; await saveState(); afterChange(); } },
   codex: () => deps().codex.list(),
   rosterOf: entry => rosterSheet(state(), entry),
@@ -423,6 +437,8 @@ const panelApi = {
     try {
       const profile = await ensureProfile(s, deps());
       // Read only this character's own world-info entries (if any), not the whole lorebook.
+      // A rank written into the description ("3등급", "B랭크") is canon: fix it unless one was chosen.
+      if (!tier) { const st = statedRank(profile, concept); if (st?.tier) { tier = st.tier; trace('balance', `명시된 등급 · ${name}: "${st.raw}" → ${tier}`, ''); } }
       const lore = (await matchLore(settings(), [name, aliases, concept].join('\n'))).text;
       toast(`🤖 ${name} 시트 생성 중…${lore ? ' (월드인포 참고)' : ''}`);
       const prev = id ? deps().codex.list().find(x => x.id === id) : null;
