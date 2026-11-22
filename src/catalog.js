@@ -78,9 +78,74 @@ const ELEMENT_WORDS = words({
 /* Pokémon rule set: the official 18 types. World elements map onto them (바람→비행, 대지→땅, 광휘→페어리, 에테르→에스퍼). */
 export const POKE_TYPES = ['normal', 'fire', 'water', 'grass', 'electric', 'ice', 'fighting', 'poison', 'ground', 'flying', 'psychic', 'bug', 'rock', 'ghost', 'dragon', 'dark', 'steel', 'fairy'];
 export const POKE_KO = { normal: '노말', fire: '불꽃', water: '물', grass: '풀', electric: '전기', ice: '얼음', fighting: '격투', poison: '독', ground: '땅', flying: '비행', psychic: '에스퍼', bug: '벌레', rock: '바위', ghost: '고스트', dragon: '드래곤', dark: '악', steel: '강철', fairy: '페어리' };
-const TO_POKE = { wind: 'flying', earth: 'ground', light: 'fairy', aether: 'psychic' };
-const TO_WORLD = { rock: 'earth', ghost: 'dark' };
-export const typeIn = (id, system) => (system === 'pokemon' ? TO_POKE[id] ?? id : TO_WORLD[id] ?? id);
+/* ---------- Converting between the world's elements and the 18 Pokémon types ----------
+ * Every sheet may carry both: `elements` (the world's own words) and `ptypes` (1-2 Pokémon types).
+ * When one is missing it is derived here, so switching the rule set never loses a character's type. */
+const POKE_SET = new Set(POKE_TYPES);
+const TO_POKE = { wind: 'flying', earth: 'ground', light: 'fairy', aether: 'psychic', physical: 'normal', none: 'normal' };
+// Pokémon type → world element candidates, best first (the first one the world actually has wins).
+const TO_WORLD = {
+  normal: [], fighting: ['fighting'], rock: ['rock', 'earth'], ground: ['earth'], flying: ['wind'], fairy: ['light', 'aether'],
+  psychic: ['aether', 'light'], ghost: ['ghost', 'dark'], steel: ['steel', 'earth'], grass: ['grass', 'earth', 'water'],
+  bug: ['bug', 'poison', 'earth'], dragon: ['dragon', 'aether', 'fire'], fire: ['fire'], water: ['water'], ice: ['ice', 'water'],
+  electric: ['electric', 'wind'], poison: ['poison', 'dark'], dark: ['dark'],
+};
+// Words in a world's own element names → the closest Pokémon type (for elements like 성광, 혼돈, 시간).
+const POKE_GUESS = [
+  [/용암|불|화|염|열|태양|fire|flame|heat|lava|sun/i, 'fire'], [/얼음|빙|냉|설|서리|ice|frost|snow/i, 'ice'], [/물|수|해|파도|비|water|sea|tide|rain/i, 'water'],
+  [/뇌|번개|전|electr|thunder|lightning|storm/i, 'electric'], [/바람|풍|하늘|공기|wind|air|sky/i, 'flying'], [/바위|돌|암석|수정|rock|stone|crystal/i, 'rock'],
+  [/땅|대지|흙|모래|earth|sand|ground/i, 'ground'], [/금속|강철|철|기계|metal|steel|iron|machine/i, 'steel'], [/독|부식|산|toxic|poison|venom|acid/i, 'poison'],
+  [/풀|나무|숲|식물|생명|자연|plant|wood|forest|nature|life/i, 'grass'], [/벌레|곤충|bug|insect/i, 'bug'],
+  [/영혼|유령|망령|사령|죽음|저주|ghost|spirit|soul|death|curse|necro/i, 'ghost'], [/용|drag/i, 'dragon'],
+  [/어둠|암흑|그림자|혼돈|공허|악|dark|shadow|chaos|void/i, 'dark'], [/빛|광|신성|성|천|holy|light|divine|radiant|요정|fairy/i, 'fairy'],
+  [/정신|마나|비전|에테르|시간|공간|환상|마법|mind|psy|arcane|aether|time|space|illusion|magic/i, 'psychic'], [/무|격|권|기공|fight|martial|ki/i, 'fighting'],
+];
+const DEFAULT_WORLD = new Set(['fire', 'water', 'ice', 'electric', 'wind', 'earth', 'light', 'dark', 'aether', 'poison']);
+let CUSTOM_POKE = {};   // world element id → Pokémon type, from the rule profile ("pokeMap")
+let WORLD_IDS = null;   // element ids the current world really has
+/** Remember the current world's elements and its Pokémon mapping (called whenever a profile is normalized). */
+export function useTypeProfile(p) {
+  CUSTOM_POKE = {};
+  for (const [k, v] of Object.entries(p?.pokeMap ?? {})) { const t = String(v); const id = POKE_SET.has(t) ? t : Object.keys(POKE_KO).find(x => POKE_KO[x] === t) ?? TO_POKE[elementId(t)] ?? elementId(t); if (POKE_SET.has(id)) CUSTOM_POKE[elementId(k)] = id; }
+  const ids = (p?.elements ?? []).map(elementId).filter(x => x && x !== 'none');
+  WORLD_IDS = ids.length ? new Set(ids) : null;
+}
+export function toPoke(id) {
+  if (!id) return 'normal';
+  if (POKE_SET.has(id)) return id;
+  if (TO_POKE[id]) return TO_POKE[id];
+  if (CUSTOM_POKE[id]) return CUSTOM_POKE[id];
+  for (const [re, t] of POKE_GUESS) if (re.test(id)) return t;
+  return 'normal';
+}
+export function toWorld(id) {
+  if (!id || id === 'normal') return 'none';
+  const have = WORLD_IDS ?? DEFAULT_WORLD;
+  if (have.has(id)) return id;
+  if (!POKE_SET.has(id)) return id;                         // a custom world element: keep it
+  const custom = Object.entries(CUSTOM_POKE).find(([w, t]) => t === id && have.has(w));
+  if (custom) return custom[0];
+  return (TO_WORLD[id] ?? []).find(x => have.has(x)) ?? 'none';
+}
+export const typeIn = (id, system) => (system === 'pokemon' ? toPoke(id) : toWorld(id));
+
+/** The element a character's damaging skills use most (a sheet without a type, e.g. an old persona sheet). */
+function mainSkillElement(f) {
+  const count = {};
+  for (const k of f.skills ?? []) if ((k.kind === 'physical' || k.kind === 'magic') && k.element && !['none', 'physical', 'normal'].includes(k.element)) count[k.element] = (count[k.element] ?? 0) + (k.power || 1);
+  const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+  return top ? [top[0]] : [];
+}
+/** A fighter's types in the active system (Pokémon: 1-2 of the 18, never empty). */
+export function typesFor(f, sys) {
+  if (!f) return sys === 'pokemon' ? ['normal'] : [];
+  if (sys === 'pokemon' && f.ptypes?.length) return [...new Set(f.ptypes.map(toPoke))].slice(0, 2);
+  let raw = (f.elements?.length ? f.elements : [f.element]).filter(x => x && !['none', 'physical'].includes(x));
+  if (!raw.length) raw = mainSkillElement(f);
+  let list = [...new Set(raw.map(x => typeIn(x, sys)))].filter(x => x && !['none', 'physical'].includes(x));
+  if (sys === 'pokemon') { if (list.length > 1) list = list.filter(x => x !== 'normal'); return list.length ? list.slice(0, 2) : ['normal']; }
+  return list.slice(0, 2);
+}
 export const POKEMON_CHART = Object.freeze({
   normal: { rock: 0.5, ghost: 0, steel: 0.5 },
   fire: { fire: 0.5, water: 0.5, grass: 2, ice: 2, bug: 2, rock: 0.5, dragon: 0.5, steel: 2 },
@@ -156,6 +221,11 @@ export function safePortrait(p) {
 export const plain = (v, max = 40) => String(v ?? '').replace(/[<>"'`&\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 export function normalizeProfile(raw) {
+  const out = buildProfile(raw);
+  useTypeProfile(out);
+  return out;
+}
+function buildProfile(raw) {
   const p = raw && typeof raw === 'object' ? raw : {};
   const stats = Array.isArray(p.stats) && p.stats.length
     ? p.stats.map(s => (typeof s === 'string' ? { key: plain(s), label: plain(s) } : { key: plain(s.key ?? s.name ?? ''), label: plain(s.label ?? s.key ?? '') })).filter(s => s.key)
@@ -175,6 +245,7 @@ export function normalizeProfile(raw) {
     hpPerStat: p.hpPerStat ? clamp(num(p.hpPerStat, 0), 2, 80) : null,
     elements: Array.isArray(p.elements) ? p.elements.map(String) : [...DEFAULT_PROFILE.elements],
     notes: String(p.notes ?? ''),
+    pokeMap: p.pokeMap && typeof p.pokeMap === 'object' ? Object.fromEntries(Object.entries(p.pokeMap).slice(0, 24).map(([k, v]) => [plain(k, 20), plain(v, 12)])) : {},
     typeSystem: p.typeSystem === 'pokemon' ? 'pokemon' : 'world',
     chart: p.typeSystem === 'pokemon' ? clone(POKEMON_CHART) : normalizeChart(p.chart),
     stab: p.typeSystem === 'pokemon' ? 1.5 : p.stab != null ? clamp(num(p.stab, 1.2), 1, 2) : 1.2,
@@ -545,12 +616,23 @@ export function normalizeSheet(raw, profile, { side = 'enemy', seed = '' } = {})
     .filter(Boolean).map(s => normalizeSkill(s, { maxSp, prefersMagic })).filter(Boolean).slice(0, 10);
 
   const list = v => (Array.isArray(v) ? v : String(v ?? '').split(/[,/·]+/)).map(x => String(x).trim()).filter(Boolean).map(elementId).filter(e => e !== 'none');
+  let elements = list(r.elements ?? r.element ?? r.types ?? r.type ?? r['속성'] ?? r['타입']).filter(e => e !== 'physical');
+  // No type given (common for a persona): take the element its damaging skills use most.
+  if (!elements.length) {
+    const count = {};
+    for (const k of skills) if ((k.kind === 'physical' || k.kind === 'magic') && k.element && !['none', 'physical', 'normal'].includes(k.element)) count[k.element] = (count[k.element] ?? 0) + (k.power ?? 1);
+    const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+    if (top) elements = [top[0]];
+  }
+  let ptypes = [...new Set(list(r.ptypes ?? r.pokemonTypes ?? r.pokemon_types ?? r['포켓몬타입']).map(toPoke))];
+  if (ptypes.length > 1) ptypes = ptypes.filter(x => x !== 'normal');
+  ptypes = ptypes.slice(0, 2);
   return {
     id: r.id ?? `${side[0]}${hashStr(`${seed}${r.name}${Math.random()}`).slice(0, 5)}`,
     name: String(r.name ?? '???').slice(0, 40), side, isPlayer: !!r.isPlayer,
     tier: tier?.name ?? (r.tier ? String(r.tier) : ''), threat,
     stats, maxHp: Math.round(maxHp), hp: Math.round(hp), maxSp: Math.round(maxSp), sp: Math.round(sp),
-    element: list(r.elements ?? r.element)[0] ?? 'none', elements: list(r.elements ?? r.element), weak: list(r.weak), resist: list(r.resist), immune: list(r.immune),
+    element: elements[0] ?? 'none', elements, ptypes, weak: list(r.weak), resist: list(r.resist), immune: list(r.immune),
     level: r.level != null ? Math.max(1, Math.round(num(r.level, 1))) : null,
     aliases: (Array.isArray(r.aliases) ? r.aliases : String(r.aliases ?? '').split(/[,/]/)).map(x => String(x).trim()).filter(Boolean),
     skills, passives: (Array.isArray(r.passives) ? r.passives : r.passives ? [r.passives] : []).map(String).slice(0, 6),

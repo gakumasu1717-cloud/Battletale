@@ -1,6 +1,6 @@
 // Mode: party turn-based battle (JRPG / Darkest Dungeon / Slay the Spire flavored).
 import * as E from '../engine.js';
-import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, inferItem, typeName, typeIn } from '../catalog.js';
+import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, inferItem, typeName, typeIn, typesFor } from '../catalog.js';
 import { escapeHtml as h, pct, norm, clamp } from '../util.js';
 import { splitBody, autoGrade, seededRng, timingFor, matchWord, fxHtml, aiLevelOf } from './shared.js';
 import { vf, mapOf, skillCard, fxLine } from '../pkui.js';
@@ -247,7 +247,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
       const intent = f.side === 'enemy' && E.active(f) ? intentOf(b, f, 'ko') : null;
       const known = f.side === 'enemy' ? (lvl >= 2 ? f.skills.map(s => s.name) : f.revealed ?? []) : [];
       return `<div class="bt-fighter ${E.active(f) ? '' : 'bt-dead'} ${f.side} ${f.name === target && f.side === 'enemy' ? 'bt-targeted' : ''}" data-act="m:target" data-v="${h(f.name)}">${fxHtml(ctx, f.name)}
-        <div class="bt-fname">${h(f.name)} <small>[${h(f.tier || '?')}]</small> <small class="bt-row-tag">${f.row === 'back' ? '후열' : '전열'}</small>${(f.elements ?? []).filter(e => e && e !== 'none').map(e => `<small class="bt-type t-${typeIn(e, b.typeSystem)}">${h(typeName(e, b.typeSystem))}</small>`).join('')}${f.threat && f.threat !== 'normal' ? ` <small class="bt-threat ${f.threat}">${THREAT_KO[f.threat]}</small>` : ''}${state ? ` <small class="bt-state">${state}</small>` : ''}${f.side === 'enemy' ? ` <small class="bt-intel">${['정보 없음', '관찰됨', '분석 완료'][lvl]}</small>` : ''}</div>
+        <div class="bt-fname">${h(f.name)} <small>[${h(f.tier || '?')}]</small> <small class="bt-row-tag">${f.row === 'back' ? '후열' : '전열'}</small>${typesFor(f, b.typeSystem).map(e => `<small class="bt-type t-${typeIn(e, b.typeSystem)}">${h(typeName(e, b.typeSystem))}</small>`).join('')}${f.threat && f.threat !== 'normal' ? ` <small class="bt-threat ${f.threat}">${THREAT_KO[f.threat]}</small>` : ''}${state ? ` <small class="bt-state">${state}</small>` : ''}${f.side === 'enemy' ? ` <small class="bt-intel">${['정보 없음', '관찰됨', '분석 완료'][lvl]}</small>` : ''}</div>
         <div class="bt-bar hp"><div style="width:${lvl === 0 ? 100 : pct(f.hp, f.maxHp)}%;${lvl === 0 ? 'opacity:.35' : ''}"></div><span>${h(hpLabel)}</span></div>
         ${f.side === 'ally' ? `<div class="bt-bar sp"><div style="width:${pct(f.sp, f.maxSp)}%"></div><span>${h(profile.spLabel)} ${f.sp}/${f.maxSp}</span></div>` : ''}
         <div class="bt-chips">${(f.statuses ?? []).map(s => `<span class="bt-chip ${STATUS[s.id]?.good ? 'good' : 'bad'}">${h(STATUS[s.id]?.ko)} ${s.turns}</span>`).join('')}${Object.entries(f.stages ?? {}).filter(([, v]) => v).map(([k, v]) => `<span class="bt-chip ${v > 0 ? 'good' : 'bad'}">${h(DERIVED_KO[k] ?? k)}${v > 0 ? '▲' : '▼'}${Math.abs(v)}</span>`).join('')}${lvl >= 2 && f.side === 'enemy' && f.weak?.length ? `<span class="bt-chip info">약점 ${f.weak.map(e => ELEMENT_KO[e] ?? e).join('/')}</span>` : ''}</div>

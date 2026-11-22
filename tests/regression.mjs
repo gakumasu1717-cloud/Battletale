@@ -180,6 +180,36 @@ const snap = s => JSON.stringify({ st: s.battle.st, inv: s.inventory, n: s.battl
   assert.equal(P.dangerScore('평화로운 오후, 차를 마셨다'), 0);
 });
 
+/* 13 */ await test('포켓몬 18타입 ↔ 세계관 속성 전환해도 타입이 유지된다', () => {
+  const world = C.normalizeProfile({ elements: ['불', '물', '바람', '대지', '빛', '어둠', '성광'], pokeMap: { '성광': '페어리' } });
+  const hero = C.normalizeSheet({ name: '은휘', elements: ['불', '성광'], hp: 300, stats: {}, skills: ['화염참: 물리 60 불'] }, world, { side: 'ally' });
+  assert.deepEqual(C.typesFor(hero, 'world'), ['fire', '성광']);
+  assert.deepEqual(C.typesFor(hero, 'pokemon'), ['fire', 'fairy']);
+  const mon = C.normalizeSheet({ name: '골렘', elements: ['바위', '강철'], ptypes: ['바위', '강철'], hp: 300, stats: {}, skills: [] }, world, { side: 'enemy' });
+  assert.deepEqual(C.typesFor(mon, 'pokemon'), ['rock', 'steel']);
+  assert.deepEqual(C.typesFor(mon, 'world'), ['earth']);       // the world has no rock/steel → 대지
+  assert.deepEqual(C.typesFor({ elements: [] }, 'pokemon'), ['normal']);
+});
+
+/* 14 */ await test('타입 없는 페르소나는 주력 기술 속성으로 타입이 잡힌다', () => {
+  const pk = C.setTypeSystem(C.normalizeProfile({}), 'pokemon');
+  const me = C.normalizeSheet({ name: '나', hp: 300, stats: {}, skills: ['번개창: 마법 80 전기', '찌르기: 물리 40'] }, pk, { side: 'ally' });
+  assert.deepEqual(C.typesFor(me, 'pokemon'), ['electric']);
+  assert.deepEqual(C.typesFor({ skills: me.skills }, 'pokemon'), ['electric']);   // old sheets without elements too
+});
+
+/* 15 */ await test('아군은 장면에서 정해진 사람만, 안 정했으면 같이 다니는 인물이 합류', () => {
+  const st = G.stateOf({});
+  st.player = C.normalizeSheet({ name: '나', isPlayer: true, hp: 300, stats: {}, skills: ['베기: 물리 60'] }, G.profileOf(st), { side: 'ally' });
+  st.companions = [C.normalizeSheet({ name: '서윤', hp: 250, stats: {}, skills: ['화염: 마법 60 불'] }, G.profileOf(st), { side: 'ally' })];
+  const foe = { name: '고블린', hp: 100, stats: {}, skills: ['찌르기: 물리 40'] };
+  let b = G.beginBattle(st, { mode: 'party', enemies: [foe], allies: [], alliesDecided: true }, { originIndex: 0, settings: {} });
+  assert.deepEqual(b.st.fighters.filter(f => f.side === 'ally').map(f => f.name), ['나']);
+  st.battle = null;
+  b = G.beginBattle(st, { mode: 'party', enemies: [foe], allies: [] }, { originIndex: 0, settings: {} });
+  assert.deepEqual(b.st.fighters.filter(f => f.side === 'ally').map(f => f.name).sort(), ['나', '서윤'].sort());
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

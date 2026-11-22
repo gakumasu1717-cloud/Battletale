@@ -3,7 +3,7 @@
 // When the active fighter faints the player chooses who comes out next (free action).
 // The opponent's moves are not shown in advance — just like Pokémon.
 import * as E from '../engine.js';
-import { STATUS, inferItem, typeName, typeIn } from '../catalog.js';
+import { STATUS, inferItem, typeName, typeIn, typesFor } from '../catalog.js';
 import { norm } from '../util.js';
 import { splitBody, matchWord, aiLevelOf } from './shared.js';
 import { vf, mapOf, skillCard, fxLine } from '../pkui.js';
@@ -97,7 +97,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
 
   status(b, profile, { lang = 'en' } = {}) {
     const ko = lang === 'ko';
-    const line = (f, exact) => `${f.name}${f.tier ? ` [${f.tier}]` : ''}${f.elements?.length ? ` (${f.elements.map(t => typeName(t, b.typeSystem)).join('/')})` : ''}: ${f.down ? (ko ? '기절' : 'FAINTED') : exact ? `${profile.hpLabel} ${f.hp}/${f.maxHp}, ${profile.spLabel} ${f.sp}/${f.maxSp}` : `${profile.hpLabel} ${Math.round(f.hp / f.maxHp * 100)}%`}${f.statuses?.length ? ` | ${f.statuses.map(s => (ko ? STATUS[s.id]?.ko : STATUS[s.id]?.en)).join(' ')}` : ''}${f.bench && !f.down ? (ko ? ' (대기)' : ' (bench)') : ''}`;
+    const line = (f, exact) => `${f.name}${f.tier ? ` [${f.tier}]` : ''}${typesFor(f, b.typeSystem).length ? ` (${typesFor(f, b.typeSystem).map(t => typeName(t, b.typeSystem)).join('/')})` : ''}: ${f.down ? (ko ? '기절' : 'FAINTED') : exact ? `${profile.hpLabel} ${f.hp}/${f.maxHp}, ${profile.spLabel} ${f.sp}/${f.maxSp}` : `${profile.hpLabel} ${Math.round(f.hp / f.maxHp * 100)}%`}${f.statuses?.length ? ` | ${f.statuses.map(s => (ko ? STATUS[s.id]?.ko : STATUS[s.id]?.en)).join(' ')}` : ''}${f.bench && !f.down ? (ko ? ' (대기)' : ' (bench)') : ''}`;
     return [ko ? '[1:1 대결]' : '[1-on-1 battle, singles rules]',
       ...team(b, 'ally').map(f => `- ${line(f, true)}`), ...team(b, 'enemy').map(f => `- ${line(f, (f.intel ?? 1) >= 2)}`)].join('\n');
   },
@@ -158,7 +158,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const bench = E.benchOf(b, 'ally');
     const items = (ctx.inventory ?? []).filter(i => i.count > 0);
     const sys = b.typeSystem;
-    const mate = f => ({ label: f.name, meta: `${f.hp}/${f.maxHp}`, sub: `${(f.elements ?? []).map(t => typeName(t, sys)).join('/') || '-'}${f.statuses?.length ? ` · ${f.statuses.map(s => STATUS[s.id]?.ko).join(' ')}` : ''}`, cls: 'plain', act: 'm:switch', v: f.name });
+    const mate = f => ({ label: f.name, meta: `${f.hp}/${f.maxHp}`, sub: `${typesFor(f, sys).map(t => typeName(t, sys)).join('/') || '-'}${f.statuses?.length ? ` · ${f.statuses.map(s => STATUS[s.id]?.ko).join(' ')}` : ''}`, cls: 'plain', act: 'm:switch', v: f.name });
     if (b.needSwitch) return bench.map(mate);
     if (!me) return [];
     if (page === 'fight') {

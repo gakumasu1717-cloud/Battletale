@@ -7,7 +7,7 @@
 //  - front/back rows: melee only reaches the front line while it stands
 //  - terrain, initiative (ambush) and intel (how much you know) come from the story
 // Physical layer: optional timing grades for the player's attacks and defenses.
-import { STATUS, DERIVED, derive, inferItem, elementId, stageKey, typeIn } from './catalog.js';
+import { STATUS, DERIVED, derive, inferItem, elementId, stageKey, typeIn, typesFor } from './catalog.js';
 import { makeRng, clamp, clone, norm, pct, num } from './util.js';
 
 const STAGE_MIN = -4, STAGE_MAX = 4;
@@ -156,10 +156,7 @@ export const THREAT_LABEL = { overwhelming: '압도적', dangerous: '위험', ev
 /* ---------- Damage math (scale-free) ---------- */
 /** Type effectiveness: chart (attacker element × each defender element) × personal weak/resist/immune. */
 /** Defending types. In the Pokémon rule set an untyped fighter is Normal. */
-export function typesOf(f, sys) {
-  const list = (f.elements?.length ? f.elements : [f.element]).map(x => x && typeIn(x, sys)).filter(x => x && !['none', 'physical'].includes(x));
-  return list.length ? list : sys === 'pokemon' ? ['normal'] : [];
-}
+export function typesOf(f, sys) { return typesFor(f, sys); }
 
 export function elementMul(target, element, b = null) {
   const sys = b?.typeSystem;

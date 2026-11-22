@@ -1,6 +1,6 @@
 // Game controller: everything between "chat happened" and "engine resolved".
 // Kept free of SillyTavern globals so it can be tested with plain objects.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet } from './catalog.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
 import { ruleMessages, sheetMessages, forgeMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
@@ -222,7 +222,11 @@ function editSheet(sheet, op, profile) {
     case 'maxhp': { const v = String(op.value); const n = num(v.replace(/[^\d\-+.]/g, ''), 0); sheet.maxHp = Math.max(1, /^[+\-]/.test(v) ? sheet.maxHp + n : n); sheet.hp = Math.min(sheet.hp, sheet.maxHp); done.push(`최대HP ${sheet.maxHp}`); break; }
     case 'maxsp': { const v = String(op.value); const n = num(v.replace(/[^\d\-+.]/g, ''), 0); sheet.maxSp = Math.max(0, /^[+\-]/.test(v) ? sheet.maxSp + n : n); sheet.sp = Math.min(sheet.sp, sheet.maxSp); break; }
     case 'tier': if (tierOf(profile, op.value)) { sheet.tier = tierOf(profile, op.value).name; done.push(`등급 ${sheet.tier}`); } break;
-    case 'element': sheet.elements = String(op.value).split(/[\/,\s]+/).filter(Boolean).map(elementId); sheet.element = sheet.elements[0] ?? 'none'; done.push(`타입 ${op.value}`); break;
+    case 'element': {
+      const ids = String(op.value).split(/[\/,\s]+/).filter(Boolean).map(elementId).filter(x => x !== 'none').slice(0, 2);
+      if (profile.typeSystem === 'pokemon') sheet.ptypes = [...new Set(ids.map(toPoke))]; else { sheet.elements = ids; sheet.element = ids[0] ?? 'none'; }
+      done.push(`타입 ${op.value}`); break;
+    }
     case 'level': {
       const n = Math.round(num(String(op.value ?? op.who ?? '+1').replace(/[^\d\-+]/g, ''), 1));
       if (!n) break;
@@ -275,7 +279,7 @@ export function joinParty(s, deps, name) {
 function partyFor(s, { solo = false } = {}) {
   const party = [];
   if (s.player) { const p = clone(s.player); if (p.hp <= 0) p.hp = 1; party.push(p); }
-  if (!solo) for (const c of s.companions) if (c.hp > 0) party.push(clone(c));
+  // Allies are no longer fixed: the encounter builder picks registered characters who are really in the scene.
   return party;
 }
 
@@ -307,12 +311,17 @@ export function fallbackSpec(hint, s) {
 export async function forgeSpec(s, deps, { hint = '' } = {}) {
   await ensurePlayer(s, deps);
   const profile = profileOf(s);
-  if (!deps.auxReady()) return resolveRegistered(s, fallbackSpec(hint, s), deps, deps.settings());
+  const withCompanions = spec => spec;
+  if (!deps.auxReady()) return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, deps.settings());
   deps.toast?.('⚔️ 보조모델이 상황을 분석해 적을 구성하는 중…');
-  const party = [s.player, ...s.companions].map(x => sheetText(x, profile)).join('\n');
+  const party = [s.player].filter(Boolean).map(x => sheetText(x, profile)).join('\n');
+  const travelling = new Set(s.companions.map(c => c.codexId).filter(Boolean));
   const allowed = allowedModes(deps.settings());
   try {
-    const codex = (deps.codex?.list() ?? []).slice(0, 40).map(e => { const sh = rosterSheet(s, e); return `- ${e.name}${sh.tier ? ` [${sh.tier}]` : ''}${sh.elements?.length ? ` (${sh.elements.join('/')})` : ''}${sh.desc ? ` — ${sh.desc.slice(0, 60)}` : ''}`; }).join('\n');
+    const codex = [
+      ...(deps.codex?.list() ?? []).slice(0, 40).map(e => { const sh = rosterSheet(s, e); const ty = typesFor(sh, profile.typeSystem).map(t => typeName(t, profile.typeSystem)).join('/'); return `- ${e.name}${sh.tier ? ` [${sh.tier}]` : ''}${ty ? ` (${ty})` : ''}${e.role ? ` · ${e.role}` : ''}${travelling.has(e.id) ? ' · travelling with {{user}} lately' : ''}${sh.hp <= 0 ? ' · knocked out' : ''}${sh.desc ? ` — ${sh.desc.slice(0, 60)}` : ''}`; }),
+      ...s.companions.filter(c => !c.codexId).map(c => `- ${c.name}${c.tier ? ` [${c.tier}]` : ''} · travelling with {{user}} lately`),
+    ].join('\n');
     // Minor fights: the last few messages are enough. Named characters with a world-info entry: read their entries.
     const scene = deps.scene?.(deps.settings().sceneSize ?? 3) ?? '';
     const matched = deps.matchLore ? await deps.matchLore(`${scene}\n${hint}`) : { text: '', names: [], important: false };
@@ -323,7 +332,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
     return resolveRegistered(s, parseBattleBody(JSON.stringify(json)) ?? fallbackSpec(hint, s), deps, deps.settings());
   } catch (e) {
     deps.toast?.(`적 생성 실패 → 간이 생성 사용 (${e.message})`, 'warning');
-    return fallbackSpec(hint, s);
+    return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, deps.settings());
   }
 }
 
@@ -341,11 +350,23 @@ function buildState(s, spec, mode, { seed, settings }) {
   const enemies = spec.enemies.slice(0, 8).map((e, i) => {
     const sh = normalizeSheet(e, profile, { side: 'enemy', seed: `${seed}:e${i}` });
     if (!e.codexId) auditSheet(sh, profile, { clampStats: true, bonusTier: (sh.threat === 'boss' ? 1 : 0) + (settings.difficulty === 'nightmare' ? 1 : 0) });
+    else sh.codexId = e.codexId;
     return sh;
   });
-  const allies = (spec.allies ?? []).slice(0, 4).map((e, i) => normalizeSheet(e, profile, { side: 'ally', seed: `${seed}:a${i}` }));
+  // Allies: whoever the encounter builder put in the scene. If it never decided (no aux model, old block),
+  // the characters travelling with the player come along.
+  const decided = spec.alliesDecided || (spec.allies?.length > 0);
+  const pool = decided ? spec.allies ?? [] : s.companions.filter(c => c.hp > 0).map(c => clone(c));
+  const allies = pool.slice(0, 4).map((e, i) => {
+    const sh = normalizeSheet(e, profile, { side: 'ally', seed: `${seed}:a${i}` });
+    if (e.codexId) sh.codexId = e.codexId; else auditSheet(sh, profile, { clampStats: true });
+    return sh;
+  });
   const M = modeOf(mode);
-  let st = M.create({ spec, profile, party: partyFor(s, { solo: mode === 'stealth' }), allies: mode === 'party' ? allies : [], enemies, seed, settings });
+  // 1:1 (Pokémon singles): allies wait on the bench and can be switched in.
+  const party = partyFor(s, { solo: mode === 'stealth' });
+  if (mode === 'duel') party.push(...allies);
+  let st = M.create({ spec, profile, party, allies: mode === 'party' ? allies : [], enemies, seed, settings });
   let opening = null;
   const op = M.opening?.(st);
   if (op) { st = op.st; opening = op.events; }
@@ -577,6 +598,14 @@ export function finishBattle(s, settings = {}) {
   };
   if (s.player) s.player = write(s.player);
   s.companions = s.companions.map(write);
+  // Registered characters who fought beside the player keep their wounds in this chat.
+  for (const f of (b.st.fighters ?? b.st.b?.fighters ?? [])) {
+    if (f.side !== 'ally' || !f.codexId || s.companions.some(c => c.codexId === f.codexId)) continue;
+    const r = res.get(f.id);
+    if (!r) continue;
+    const cur = s.roster[f.codexId] ?? stripRuntime(clone(f));
+    s.roster[f.codexId] = { ...cur, hp: r.down || r.hp <= 0 ? (settings.reviveAfter === false ? 0 : 1) : r.hp, sp: r.sp, statuses: [] };
+  }
   const enemies = modeOf(b.mode).enemiesOf(b.st).map(f => f.name).join(', ');
   s.lastResult = `${b.title ? `${b.title}: ` : ''}vs ${enemies} — ${String(b.status).toUpperCase()} after ${b.turn - 1} turns`;
   s.archive = [{ id: b.id, title: b.title || enemies, result: RESULT_KO[b.status] ?? b.status, mode: b.mode, turns: b.turn - 1, at: Date.now(), cards: b.history.map(h => ({ key: h.key, turn: h.turn, events: h.events, via: h.via })), origin: b.originIndex }, ...s.archive.filter(a => a.id !== b.id)].slice(0, ARCHIVE_KEEP);

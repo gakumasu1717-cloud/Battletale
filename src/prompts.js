@@ -29,6 +29,7 @@ Work out how this world measures combat power and answer with ONE JSON object:
   },
   "tiers": [ {"name": "F", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10).
   "elements": ["불", "물", ...],                        // elements/attributes that exist in this world (may be empty)
+  "pokeMap": {"<each world element>": "<closest of the 18 Pokémon types>"},   // so the Pokémon rule set can be switched on without losing types
   "notes": "1-3 sentences on how fights work in this world (rank gaps, magic vs. tech, lethality)"
 }
 pow=physical attack, mag=magical/special attack, def=physical defense, res=magical/mental resistance, spd=speed & evasion, acc=accuracy/perception, luk=luck & criticals.
@@ -40,7 +41,7 @@ Write names and labels in the language the lore uses.`;
 export const SHEET_SCHEMA = `{
   "name": "", "tier": "<one of the tier names>", "threat": "minion|normal|elite|boss",
   "hp": <max HP>, "sp": <max resource>, "stats": {<every stat key>: <number>},
-  "elements": ["1-2 types/elements"], "weak": [], "resist": [], "immune": [],
+  "elements": ["1-2 types/elements in the active system"], "ptypes": ["ALWAYS 1-2 of the 18 Pokémon types that fit them (불꽃, 물, 풀, 전기, 얼음, 격투, 독, 땅, 비행, 에스퍼, 벌레, 바위, 고스트, 드래곤, 악, 강철, 페어리, 노말) — even in world-element rules, so the rule set can be switched"], "weak": [], "resist": [], "immune": [],
   "skills": [{
     "name": "", "desc": "one line: what it looks like",
     "kind": "physical|magic|heal|buff|debuff|guard|revive|cleanse",
@@ -156,7 +157,7 @@ A confrontation is starting in the latest scene. Answer with ONE JSON object:
   "initiative": "player|enemy|normal",
   "terrain": [{"desc": "short description", "side": "all|ally|enemy", "stages": {"acc": -1}}],
   "enemies": [ <sheet> + {"row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker"} ],
-  "allies": [ <sheet> ],               // NPCs fighting beside the player in this scene (party mode)
+  "allies": [ <sheet> or {"ref": "<registered name>"} ],   // who REALLY fights beside the player right now (party mode). Read the recent story: only characters present in the scene and on the player's side. Registered characters → {"ref"}. Nobody there → []
   "goal": "stealth: what the player must reach or do",
   "stones": 2,                         // stealth: pebbles to throw as distractions (0-5)
   "loot": ["what could really be gained"]
@@ -165,7 +166,7 @@ A confrontation is starting in the latest scene. Answer with ONE JSON object:
 
 ## Modes
 ${modes.map(m => `- ${modeGuide[m]}`).join('\n')}
-${codex ? `\n## Registered characters (stats and skills are already stored)\n${codex}\nIf one of them takes part, write only {"ref": "<name>", "row": "front|back"} for them instead of a sheet.\nFor a NEW important named character who may appear again, write a full sheet and add "named": true so it gets registered.\n` : 'For an important named character who may appear again, add "named": true to their sheet so it gets registered.'}
+${codex ? `\n## Registered characters (stats and skills are already stored)\n${codex}\nIf one of them takes part, write only {"ref": "<name>", "row": "front|back"} for them instead of a sheet. Decide each one's side from the story (an ally in the scene goes in "allies", a rival or villain in "enemies"); characters not in the scene do not appear. "travelling with {{user}} lately" means they usually join if the story has them nearby. Knocked-out characters cannot fight.\nFor a NEW important named character who may appear again, write a full sheet and add "named": true so it gets registered.\n` : 'For an important named character who may appear again, add "named": true to their sheet so it gets registered.'}
 
 ## Honesty rules — the most important part
 - ${(DIFFICULTY[difficulty] ?? DIFFICULTY.normal).stance}

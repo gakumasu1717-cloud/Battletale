@@ -1,6 +1,6 @@
 // DOM: floating battle panel, in-chat turn cards, settings drawer.
 import { escapeHtml as h, pct, norm } from './util.js';
-import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn } from './catalog.js';
+import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
 import { scene, menuGrid, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, skillCard } from './pkui.js';
 import { findFighter } from './engine.js';
@@ -118,7 +118,7 @@ export function refreshDock() {
   const cur = f => live.find(x => x.name === f.name) ?? f;
   const bar = (v, m, cls) => `<div class="bd-bar ${cls}"><div style="width:${Math.max(0, Math.min(100, Math.round((v / Math.max(1, m)) * 100)))}%"></div><span>${v}/${m}</span></div>`;
   const pic = f => (f.portrait?.src ? `<img class="bd-pic ${f.portrait.pixel ? 'px' : ''}" src="${h(f.portrait.src)}" alt="" referrerpolicy="no-referrer">` : `<div class="bd-pic">${({ M: '🧑', F: '👩' })[f.gender] ?? '🧑'}</div>`);
-  const types = f => (f.elements ?? []).map(t => `<span class="pk-tdot t-${typeIn(t, p.typeSystem)}">${h(typeName(t, p.typeSystem))}</span>`).join('');
+  const types = f => typesFor(f, p.typeSystem).map(t => `<span class="pk-tdot t-${typeIn(t, p.typeSystem)}">${h(typeName(t, p.typeSystem))}</span>`).join('');
   const who = (f0, main) => { const f = cur(f0); return `<div class="bd-who ${main ? 'main' : ''} ${f.hp <= 0 ? 'down' : ''}">${pic(f0)}<div class="bd-info"><div><b>${h(f.name)}</b> <small>${h(f.tier ?? '')}</small> ${types(f0)}</div>
     ${bar(f.hp, f.maxHp, 'hp')}${f.maxSp ? bar(f.sp, f.maxSp, 'sp') : ''}${f.statuses?.length ? `<div class="bd-st">${f.statuses.map(x => `<span class="pk-st st-${x.id}">${STATUS[x.id]?.ko ?? x.id}</span>`).join('')}</div>` : ''}</div></div>`; };
   const me = s.player ? who(s.player, true) : '<div class="bt-note">아직 시트가 없어요 (캐릭터 탭).</div>';
@@ -572,10 +572,12 @@ function sheetTab(s) {
   if (!me) return `<div class="bt-section"><div class="bt-empty">아직 전투 시트가 없어요. 첫 전투 때 자동으로 만들어지거나, 지금 만들 수 있어요.</div>${sheetBtns}</div>`;
   const stats = p.stats.map(x => `<label class="bt-stat">${h(x.label || x.key)}<input type="number" data-act="stat" data-v="${h(x.key)}" value="${me.stats[x.key] ?? 0}"></label>`).join('');
   const _unused = me.skills.map((k, i) => `<div class="bt-skillrow"><b>${h(k.name)}</b> <small>${KIND_KO[k.kind]}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''} · ${TARGET_KO[k.target]} · ${k.cost}${h(p.spLabel)}${k.element && !['none', 'physical'].includes(k.element) ? ` · ${h(ELEMENT_KO[k.element] ?? k.element)}` : ''}${k.status ? ` · ${h(STATUS[k.status.id]?.ko)} ${k.status.chance}%` : ''}${k.cooldown ? ` · 쿨${k.cooldown}` : ''}</small>${k.desc ? `<div class="bt-note">${h(k.desc)}</div>` : ''}<button class="bt-mini" data-act="del-skill" data-v="${i}">✕</button></div>`).join('');
-  const comps = s.companions.map((c, i) => `<div class="bt-skillrow"><b>${h(c.name)}</b> <small>[${h(c.tier)}] ${h(p.hpLabel)} ${c.hp}/${c.maxHp}</small><button class="bt-mini" data-act="del-comp" data-v="${i}">✕</button></div>`).join('') || '<div class="bt-note">없음 (스토리에서 <code>join:</code>으로 합류)</div>';
+  const comps = s.companions.map((c, i) => `<div class="bt-skillrow"><b>${h(c.name)}</b> <small>[${h(c.tier)}] ${h(p.hpLabel)} ${c.hp}/${c.maxHp}</small><button class="bt-mini" data-act="del-comp" data-v="${i}">✕</button></div>`).join('') || '';
   const inv = s.inventory.map((it, i) => `<div class="bt-skillrow">${h(it.name)} ×${it.count} <small>${h(ITEM_KIND_KO[(it.spec ?? inferItem(it.name))?.kind] ?? '전투 효과 없음')}</small><button class="bt-mini" data-act="inv" data-v="${i}" data-d="1">＋</button><button class="bt-mini" data-act="inv" data-v="${i}" data-d="-1">－</button></div>`).join('');
   return `<div class="bt-section">
-      <div class="bt-fname">${h(me.name)} <small>[${h(me.tier || '-')}]</small></div>
+      <div class="bt-fname">${h(me.name)} <small>[${h(me.tier || '-')}]</small> ${typesFor(me, p.typeSystem).map(t => `<span class="pk-tdot t-${typeIn(t, p.typeSystem)}">${h(typeName(t, p.typeSystem))}</span>`).join('')}</div>
+      <div class="bt-note">타입 — 🎮 포켓몬: ${typesFor(me, 'pokemon').map(t => h(typeName(t, 'pokemon'))).join('/')} · 🌍 세계관: ${typesFor(me, 'world').map(t => h(typeName(t, 'world'))).join('/') || '무속성'}${!me.elements?.length && !me.ptypes?.length ? ' <small>(기술 속성으로 추정)</small>' : ''}</div>
+      <div class="bt-row"><input type="text" class="text_pole" id="bt-type-in" data-enter="set-type" placeholder="${p.typeSystem === 'pokemon' ? '타입 바꾸기 (예: 불꽃/격투)' : '속성 바꾸기 (예: 불/빛)'}"><button class="menu_button" data-act="set-type">타입 적용</button></div>
       ${portraitControls('player', me.portrait)}
       <div class="bt-row"><label>${h(p.hpLabel)}<input type="number" data-act="num" data-v="hp" value="${me.hp}">/<input type="number" data-act="num" data-v="maxHp" value="${me.maxHp}"></label></div>
       <div class="bt-row"><label>${h(p.spLabel)}<input type="number" data-act="num" data-v="sp" value="${me.sp}">/<input type="number" data-act="num" data-v="maxSp" value="${me.maxSp}"></label></div>
@@ -586,7 +588,7 @@ function sheetTab(s) {
       <div class="bt-sub" style="margin-top:8px">✍️ 수정 지시</div>
       <textarea class="text_pole" id="bt-sheet-instr" rows="2" placeholder="예) 섬광 베기를 원거리기로 / 회복기 하나 넣어줘 / 기술 이름 더 멋있게"></textarea>
       <button class="menu_button" data-act="sheet-revise" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button></div>
-    <div class="bt-section"><div class="bt-sub">동료</div>${comps}</div>
+    <div class="bt-section"><div class="bt-sub">함께 다니는 인물</div><div class="bt-note">따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고, 장면에 있는 도감 인물을 아군·적으로 알아서 넣어요. 여기 있는 사람은 "요즘 같이 다님"으로 참고만 해요.</div>${comps}</div>
     <div class="bt-section"><div class="bt-sub">인벤토리</div>${inv || '<div class="bt-note">비어 있음</div>'}
       <div class="bt-row"><input type="text" class="text_pole" id="bt-new-item" data-enter="add-item" placeholder="아이템 추가 (예: 하급 포션)"><button class="menu_button" data-act="add-item">추가</button></div></div>
     <div class="bt-section">${sheetBtns}</div>`;
@@ -640,7 +642,7 @@ function codexTab(s) {
     <div class="bt-section">${list.length ? list.map(e => {
       const sh = api.rosterOf(e);
       const grown = api.hasRoster(e);
-      return `<div class="bt-skillrow bt-click" data-act="codex-open" data-v="${h(e.id)}"><b>${h(e.name)}</b> <small>[${h(sh.tier || '?')}] ${(sh.elements ?? []).map(x => h(typeName(x, p.typeSystem))).join('/')} · 스킬 ${sh.skills.length}${e.locked ? ' · 🔒' : ''}${grown ? ' · 📈 이 채팅에서 성장' : ''}${s.companions.some(c => c.codexId === e.id) ? ' · 🤝 동료' : ''}</small></div>`;
+      return `<div class="bt-skillrow bt-click" data-act="codex-open" data-v="${h(e.id)}"><b>${h(e.name)}</b> <small>[${h(sh.tier || '?')}] ${typesFor(sh, p.typeSystem).map(x => h(typeName(x, p.typeSystem))).join('/')} · 스킬 ${sh.skills.length}${e.locked ? ' · 🔒' : ''}${grown ? ' · 📈 이 채팅에서 성장' : ''}${s.companions.some(c => c.codexId === e.id) ? ' · 🤝 같이 다님' : ''}</small></div>`;
     }).join('') : '<div class="bt-empty">아직 등록된 캐릭터가 없어요.</div>'}</div>`;
 }
 
@@ -651,7 +653,7 @@ function codexEditor(s, p, id, list) {
   const busy = api.busy();
   const sys = p.typeSystem;
   const preview = sh ? `<div class="bt-section cx-sheet">
-      <div class="cx-head"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${(sh.elements?.length ? sh.elements : sys === 'pokemon' ? ['normal'] : []).map(x => `<span class="pk-tdot t-${typeIn(x, sys)}">${h(typeName(x, sys))}</span>`).join('')}${entry.locked ? '<span class="cx-lock">🔒</span>' : ''}</div>
+      <div class="cx-head"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(x => `<span class="pk-tdot t-${typeIn(x, sys)}">${h(typeName(x, sys))}</span>`).join('')}${entry.locked ? '<span class="cx-lock">🔒</span>' : ''}</div>
       <div class="bt-note">${h(p.hpLabel)} ${sh.maxHp} · ${h(p.spLabel)} ${sh.maxSp}${grown ? ' · 📈 이 채팅에서 성장한 값' : ''}</div>
       ${portraitControls(`codex:${entry.id}`, sh.portrait)}
       ${statGrid(sh.stats, p)}
@@ -677,7 +679,7 @@ function codexEditor(s, p, id, list) {
     <div class="bt-section bt-row bt-wrap">
       ${entry ? '' : `<button class="menu_button bt-send" data-act="codex-gen" data-v="" ${busy ? 'disabled' : ''}>🤖 AI로 생성해서 등록</button>`}
       ${entry ? `<button class="menu_button" data-act="codex-lock" data-v="${h(entry.id)}" data-on="${entry.locked ? '0' : '1'}">${entry.locked ? '🔓 잠금 해제' : '🔒 잠금 (스토리 변경 차단)'}</button>
-        <button class="menu_button" data-act="codex-join" data-v="${h(entry.id)}">🤝 동료로 합류</button>
+
         ${grown ? `<button class="menu_button" data-act="codex-promote" data-v="${h(entry.id)}">📈 성장 → 기본판</button><button class="menu_button" data-act="codex-reset" data-v="${h(entry.id)}">↺ 성장 초기화</button>` : ''}
         <button class="menu_button bt-danger" data-act="codex-del" data-v="${h(entry.id)}">삭제</button>` : ''}
     </div>
@@ -819,6 +821,12 @@ function onClick(e) {
       return v === 'rules' ? api.saveRules(j) : api.saveSheets(j);
     }
     case 'del-skill': return api.edit(s => { s.player.skills.splice(Number(v), 1); });
+    case 'set-type': {
+      const raw = document.getElementById('bt-type-in')?.value ?? '';
+      const ids = raw.split(/[\/,\s]+/).filter(Boolean).map(elementId).filter(x => x !== 'none').slice(0, 2);
+      if (!ids.length) return;
+      return api.edit(st => { const sys = profileOf(st).typeSystem; if (sys === 'pokemon') st.player.ptypes = [...new Set(ids.map(toPoke))]; else { st.player.elements = ids; st.player.element = ids[0]; } });
+    }
     case 'del-comp': return api.edit(s => { s.companions.splice(Number(v), 1); });
     case 'add-skill': { const t = val('bt-new-skill'); if (t) api.addSkill(t); return; }
     case 'add-item': { const t = val('bt-new-item'); if (t) api.edit(s => { const it = s.inventory.find(i => norm(i.name) === norm(t)); if (it) it.count++; else s.inventory.push({ name: t, count: 1 }); }); return; }

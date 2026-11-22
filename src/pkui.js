@@ -1,6 +1,6 @@
 // Pokémon-style battle screen pieces: scene, info boxes, HP bars, sprites, menu grid.
 import { escapeHtml as h, clamp } from './util.js';
-import { STATUS, typeName, typeIn, skillLine, POKE_TYPES, ELEMENT_KO } from './catalog.js';
+import { STATUS, typeName, typeIn, typesFor, skillLine, POKE_TYPES, ELEMENT_KO } from './catalog.js';
 import * as E from './engine.js';
 
 const hpCls = p => (p > 50 ? 'g' : p > 20 ? 'y' : 'r');
@@ -78,7 +78,7 @@ export function mapOf(place = '', mode = '') {
  */
 export function vf(f, { side, intel = 2, typeSystem = 'world', note = '', noteCls = '', selected = false, posture = null, sub = '' } = {}) {
   return {
-    name: f.name, tier: f.tier, types: (f.elements?.length ? f.elements : [f.element]).filter(t => t && t !== 'none' && t !== 'physical').map(t => ({ id: typeIn(t, typeSystem), label: typeName(t, typeSystem) })),
+    name: f.name, tier: f.tier, types: typesFor(f, typeSystem).map(t => ({ id: t, label: typeName(t, typeSystem) })),
     hp: f.hp, maxHp: f.maxHp, hpUnknown: side === 'enemy' && intel === 0, showNums: side !== 'enemy' || intel >= 2,
     sp: side === 'ally' || (!f.noSp && intel >= 1) ? f.sp : null, maxSp: f.maxSp, statuses: f.statuses ?? [], note, noteCls,
     down: !!(f.down || f.out), out: f.out, side, selected, posture, sub, threat: f.threat,
@@ -177,7 +177,7 @@ export function inspectHtml(f, { b, profile, intel = 2, side }) {
   if (!f) return '';
   const sys = b?.typeSystem ?? 'world';
   const known = side !== 'enemy' || intel >= 2;
-  const types = (f.elements?.length ? f.elements : [f.element]).filter(t => t && !['none', 'physical'].includes(t));
+  const types = typesFor(f, sys);
   const hp = side !== 'enemy' || intel >= 2 ? `${f.hp} / ${f.maxHp}` : intel === 1 ? `${Math.round(f.hp / f.maxHp * 100)}%` : '???';
   const SHORTN = { pow: '공격', mag: '특공', def: '방어', res: '특방', spd: '스피드', acc: '명중', luk: '운' };
   const rows = ['pow', 'mag', 'def', 'res', 'spd', 'acc', 'luk'].map(k => {

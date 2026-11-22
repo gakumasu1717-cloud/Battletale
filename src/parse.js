@@ -87,6 +87,7 @@ function fromJson(j) {
   for (const k of ['goal', 'style', 'why', 'distance', 'alert', 'stones']) if (j[k] != null) spec[k] = j[k];
   spec.enemies = listOf(Array.isArray(j) ? j : j.enemies).slice(0, 8);
   spec.allies = listOf(j.allies).slice(0, 4);
+  spec.alliesDecided = Array.isArray(j.allies);   // the builder looked at the scene and chose (maybe nobody)
   spec.loot = Array.isArray(j.loot) ? j.loot.map(String) : j.loot ? String(j.loot).split(',') : [];
   return spec.enemies.length ? spec : null;
 }
