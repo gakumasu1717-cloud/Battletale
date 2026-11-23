@@ -144,6 +144,21 @@ const snap = s => JSON.stringify({ st: s.battle.st, inv: s.inventory, n: s.battl
     assert.ok(!/<[a-z]+\b[^>]*\son(error|load|mouseover)=|<script/i.test(panel.innerHTML), `unescaped markup in drawer ${page}`);
   }
   assert.ok(!/data-act="tab" data-v="rules"/.test(panel.innerHTML), 'rules should no longer be a top tab');
+  // Header keeps ✕: the type switch and damage multiplier live on the rules page now.
+  const head = panel.innerHTML.slice(0, panel.innerHTML.indexOf('bt-body'));
+  assert.match(head, /data-act="close"/); assert.doesNotMatch(head, /cheat-toggle|data-act="rule-set"/);
+  api.ui.sdPage = 'rules'; ui.refreshPanel();
+  assert.match(panel.innerHTML, /전투 배율 조정/); assert.match(panel.innerHTML, /data-act="rule-set"/);
+  // A chat without a world brief offers setup on the battle tab; "나중에" or a brief hides it.
+  api.ui.settingsOpen = false;
+  const fresh = G.stateOf({}); fresh.profile = PROFILE;
+  api.state = () => fresh; api.edit = async fn => fn(fresh);
+  ui.refreshPanel();
+  assert.match(panel.innerHTML, /data-act="setup"/); assert.match(panel.innerHTML, /data-act="setup-later"/);
+  fresh.setupSkipped = true; ui.refreshPanel();
+  assert.doesNotMatch(panel.innerHTML, /data-act="setup-later"/);
+  fresh.setupSkipped = false; fresh.brief = { at: 1, parts: { combat: 'x' } }; ui.refreshPanel();
+  assert.doesNotMatch(panel.innerHTML, /data-act="setup-later"/);
 });
 
 /* 8 */ await test('아군 충전기는 모았다가 다음 턴에 반드시 발동한다', () => {

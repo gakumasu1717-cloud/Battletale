@@ -1117,10 +1117,8 @@
 /* v0.16 world brief */
 .bt-pre{white-space:pre-wrap;font:inherit;margin:4px 0 0;opacity:.85}
 #bt-panel .bt-head { gap: 5px; }
-#bt-panel .bt-tsys, #bt-panel .bt-cheat-btn { font-size: 11px; padding: 2px 6px; white-space: nowrap; }
-#bt-panel .bt-tsys.poke { border-color: #e8a33d99; color: #f6d08a; }
-#bt-panel .bt-tsys.world { border-color: #5fb0f099; color: #9fd2ff; }
-#bt-panel .bt-cheat-btn.on { border-color: #e66b6b99; color: #ffadad; background: #e66b6b1c; }
+#bt-panel .bt-gear.on { border-color: #e66b6b99; color: #ffadad; background: #e66b6b1c; }
+#bt-panel .bt-setup-card { border: 1px solid #5fb0f066; background: #5fb0f012; border-radius: 8px; }
 .pc-alttype { font-size: 10.5px; padding: 0 5px; border-radius: 5px; background: #ffffff10; color: var(--bt-dim, #b2b7c4); border: 1px dashed #ffffff24; white-space: nowrap; }
 
 /* Cheat multiplier bar */

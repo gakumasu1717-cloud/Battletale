@@ -183,14 +183,10 @@ export function refreshPanel() {
   const body = tab === 'sheet' ? sheetTab(s) : tab === 'codex' ? codexTab(s) : battleTab(s);
   const keep = p.querySelector('.sd-body')?.scrollTop ?? 0;
   p.classList.toggle('bt-compact', !!api.ui.compact && tab === 'battle');
-  const prof = profileOf(s);
-  const isPoke = prof.typeSystem === 'pokemon';
   const set = api.settings();
   const deal = Number(set.dealMul ?? 1), take = Number(set.takeMul ?? 1);
   const cheatOn = Math.abs(deal - 1) >= 0.01 || Math.abs(take - 1) >= 0.01;
-  const typeBtn = `<button class="bt-x bt-tsys ${isPoke ? 'poke' : 'world'}" data-act="rule-set" data-v="${isPoke ? 'world' : 'pokemon'}" title="속성 체계 전환 (현재: ${isPoke ? '포켓몬 18타입' : '세계관 속성'} · 클릭하면 전환)">${isPoke ? '포켓몬' : '세계관'}</button>`;
-  const cheatBtn = `<button class="bt-x bt-cheat-btn ${cheatOn || api.ui.cheatOpen ? 'on' : ''}" data-act="cheat-toggle" title="가하는 피해 / 받는 피해 배율 조정">${cheatOn ? `${deal}×/${take}×` : '배율'}</button>`;
-  p.innerHTML = `<div class="bt-head"><b>BattleTale</b><div class="bt-tabs">${tabs}</div>${typeBtn}${cheatBtn}<button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear" data-act="settings-open" title="설정 · 룰 · 점검">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${api.ui.cheatOpen ? cheatBarHtml() : ''}${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
+  p.innerHTML = `<div class="bt-head"><b>BattleTale</b><div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear ${cheatOn ? 'on' : ''}" data-act="settings-open" title="설정 · 룰 · 점검${cheatOn ? ` (피해 배율 ${deal}×/${take}× 적용 중)` : ''}">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
   const sd = p.querySelector('.sd-body'); if (sd) sd.scrollTop = keep;
   animateBars(p);
   // Popups and HP slides play once per turn, not on every redraw.
@@ -551,6 +547,18 @@ function previewCard(s, pv, busy) {
   </div>`;
 }
 
+/** First visit to a chat without a world brief: offer to turn BattleTale on and build it, right in the panel. */
+function setupCard(s, busy) {
+  if (s.brief || s.setupSkipped) return '';
+  const on = !!api.enabledHere?.();
+  return `<div class="bt-section bt-setup-card">
+    <div class="bt-sub">${on ? '이 채팅의 기초 설정을 만들까요?' : '이 채팅에서 BattleTale을 활성화할까요?'}</div>
+    <div class="bt-note">로어북 · 캐릭터 디스크립션 · 페르소나 · 최근 대화를 가볍게 읽고 <b>속성·상성표 · 등급/강함 체계 · 전투 방식</b>을 짧게 정리해 둬요. 이후 시트·전투 구성·상시 프롬프트가 이 요약을 같이 써서 더 가볍고 일관돼요.</div>
+    <div class="bt-row"><button class="menu_button" data-act="setup" ${busy ? 'disabled' : ''}>${busy ? '읽는 중…' : on ? '기초 설정 만들기' : '활성화하고 기초 설정 만들기'}</button><button class="menu_button" data-act="setup-later" ${busy ? 'disabled' : ''}>나중에</button></div>
+    <div class="sd-hint">나중에 ⚙ → 룰에서도 만들 수 있어요.</div>
+  </div>`;
+}
+
 function battleTab(s) {
   const p = profileOf(s);
   const b = s.battle;
@@ -563,7 +571,7 @@ function battleTab(s) {
   // Let the final turn's step playback finish showing attacks & KOs before switching to the result screen.
   if (b && b.status !== 'active' && !steppingNow && panelMode && (b.resultPending || !b.resultKey) && b.resultKey !== 'dismissed') return resultScreen(s, b);
   if (!b || (b.status !== 'active' && !steppingNow)) {
-    return `${pBanner}<div class="bt-section">
+    return `${setupCard(s, busy)}${pBanner}<div class="bt-section">
       <div class="bt-row"><input type="text" class="text_pole" id="bt-hint" data-enter="start" placeholder="(선택) 상황 힌트: 예) 고블린 3마리 / 검객과 결투 / 경비 몰래 잠입"></div>
       <div class="bt-row"><select id="bt-mode-pick"><option value="">형식: AI가 상황 보고 결정</option>${allowedModes(api.settings()).map(m => `<option value="${m}">${MODES[m].ko}</option>`).join('')}</select></div>
       <button class="menu_button bt-wide" data-act="start" ${busy ? 'disabled' : ''}>${busy ? '준비 중…' : '지금 장면에서 시작'}</button>
@@ -914,6 +922,7 @@ function rulesTab(s) {
       ${chartRows.length ? `<details class="bt-note"><summary>상성표 (공격 → 방어)</summary>${chartRows.join('')}</details>` : ''}
       ${p.notes ? `<div class="bt-note">${h(p.notes)}</div>` : ''}
     </div>
+    <div class="bt-section">${cheatBarHtml()}</div>
     <div class="bt-section"><div class="bt-sub">상성 체계</div>
       <div class="bt-row bt-wrap"><button class="menu_button ${p.typeSystem !== 'pokemon' ? 'bt-on' : ''}" data-act="rule-set" data-v="world">세계관 속성</button>
       <button class="menu_button ${p.typeSystem === 'pokemon' ? 'bt-on' : ''}" data-act="rule-set" data-v="pokemon">포켓몬식 상세 룰</button></div>
@@ -1084,7 +1093,6 @@ function onClick(e) {
   switch (act) {
     case 'close': return togglePanel(false);
     case 'sk-detail': api.ui.skOpen = api.ui.skOpen === v ? null : v; return refreshPanel();
-    case 'cheat-toggle': api.ui.cheatOpen = !api.ui.cheatOpen; return refreshPanel();
     case 'cheat-set': return api.setSetting(el.dataset.k, Number(v));
     case 'cheat-reset': api.setSetting('dealMul', 1); return api.setSetting('takeMul', 1);
     case 'pt-avatar': { const a = (api.avatars?.() ?? [])[Number(el.dataset.i)]; if (a) api.setPortrait(v, { src: a.src, pixel: false }); return; }
@@ -1171,6 +1179,7 @@ function onClick(e) {
     case 'import-stat': return api.importStat();
     case 'gen-rules': return api.genRules();
     case 'setup': return api.setup?.();
+    case 'setup-later': return api.edit(st => { st.setupSkipped = true; });
     case 'reset-rules': return api.edit(s => { s.profile = null; });
     case 'edit-json': editing = v; return refreshPanel();
     case 'cancel-json': editing = null; return refreshPanel();

@@ -58,7 +58,7 @@ function enabledHere() {
   if (!c.chatId) return false;
   const st = state();
   if (st?.disabled) return false;
-  // Opt-in: new chats stay untouched until the user turns BattleTale on (wand menu); chats already in use count as on.
+  // Opt-in: new chats stay untouched until the user turns BattleTale on (setup card in the panel); chats already in use count as on.
   if (s.optIn && !(st?.activated || st?.brief || st?.player || st?.battle)) return false;
   const names = String(s.exclude ?? '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
   const ch = c.characters?.[c.characterId];
@@ -695,6 +695,7 @@ const panelApi = {
     await saveState(); afterChange(); toast('📥 상태창 값을 가져왔어요.');
   },
   setup: () => runSetup({ ask: false }),
+  enabledHere,
   brief: () => state()?.brief ?? null,
   genRules: () => work(async () => {
     const s = state();
@@ -836,7 +837,7 @@ async function auxModelList() {
   refreshPanel();
 }
 
-/* ---------------- One-time setup (wand menu) ---------------- */
+/* ---------------- One-time setup (offered in the battle panel) ---------------- */
 async function askYesNo(html, ok, no) {
   const c = ctx();
   try {
@@ -865,7 +866,7 @@ async function runSetup({ ask = true } = {}) {
   s.activated = true;
   if (!settings().enabled) setSetting('enabled', true);
   await saveState(); afterChange();
-  if (!effectiveAuxReady()) { toast('활성화했어요. 기초 설정은 ⚙ 설정에서 보조모델을 연결한 뒤 룰 탭의 "🧭 기초 설정"으로 만들 수 있어요.', 'warning'); togglePanel(true); return; }
+  if (!effectiveAuxReady()) { toast('활성화했어요. 기초 설정은 ⚙ 설정에서 보조모델을 연결한 뒤 ⚙ → 룰의 "기초 설정 만들기"로 만들 수 있어요.', 'warning'); togglePanel(true); return; }
   await work(async () => {
     const hadPlayer = !!s.player;
     try {
