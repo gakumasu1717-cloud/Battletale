@@ -109,11 +109,16 @@ export default {
   controlled: b => b.fighters.filter(f => f.side === 'ally' && f.persistent && E.active(f)),
 
   quick(body, b) {
-    const { who, what, target } = splitBody(body);
+    const [rawLeft, rawRight] = String(body).split(/\s*(?:→|->|=>|>)\s*/);
     const me = playerOf(b);
+    const exactMe = me?.skills?.find(s => norm(s.name) === norm(rawLeft));
+    if (exactMe) return { actor: me.id, target: rawRight?.trim() || null, type: 'skill', skill: exactMe.name };
+    const { who, what, target } = splitBody(body);
     const actor = (who && E.findFighter(b, who, { side: 'ally' })) || me;
     if (!actor) return null;
     const base = { actor: actor.id, target };
+    const exact = actor.skills?.find(s => norm(s.name) === norm(what));
+    if (exact) return { ...base, type: 'skill', skill: exact.name };
     const w = matchWord(what, WORDS);
     if (w) return { ...base, type: w };
     const item = /^(?:item|아이템|사용)\s+(.+)$/i.exec(what);

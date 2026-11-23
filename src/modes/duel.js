@@ -5,7 +5,7 @@
 import * as E from '../engine.js';
 import { STATUS, inferItem, typeName, typeIn, typesFor } from '../catalog.js';
 import { norm, hashStr } from '../util.js';
-import { splitBody, matchWord, aiLevelOf } from './shared.js';
+import { matchWord, aiLevelOf } from './shared.js';
 import { vf, mapOf, skillCard, fxLine, skillItem } from '../pkui.js';
 import { josa } from '../narrate.js';
 
@@ -69,8 +69,14 @@ export default {
   controlled: b => team(b, 'ally').filter(f => f.persistent && E.active(f)),
 
   quick(body, b) {
-    const { what, target } = splitBody(body);
+    const [left, right] = String(body).split(/\s*(?:→|->|=>|>)\s*/);
     const me = field(b, 'ally');
+    let what = left.trim();
+    const target = right?.trim() || null;
+    const cm = /^(.+?)\s*[:：]\s*(.+)$/.exec(what);
+    if (cm && me && (norm(me.name) === norm(cm[1]) || norm(me.name).startsWith(norm(cm[1]))) && !E.findSkill(me, what)) {
+      what = cm[2].trim();
+    }
     if (b.needSwitch) {
       const to = E.findFighter(b, target ?? what.replace(/^교체\s*/, ''), { side: 'ally', bench: true });
       return { actor: me?.id ?? 'player', type: 'switch', target: to?.name ?? null };

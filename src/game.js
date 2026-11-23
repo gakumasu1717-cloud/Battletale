@@ -3,7 +3,7 @@
 import { normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL, threatOf, createBattle } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
-import { ruleMessages, setupMessages, briefText, sheetMessages, forgeMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
+import { ruleMessages, setupMessages, briefText, sheetMessages, forgeMessages, planMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
 import { MODES, modeOf } from './modes/index.js';
 import { quickBlocks } from './modes/shared.js';
 import { hashStr, clone, norm, num, clamp, uid } from './util.js';
@@ -107,11 +107,13 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   if (deps.auxReady()) {
     deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
     try {
-      // The persona and the lorebook entries about the player come first; the general lore is only context.
-      const own = deps.matchLore ? ((await deps.matchLore(`${persona.name}
-${persona.text}`).catch(() => null))?.text ?? '') : '';
+      // The persona and the lorebook entries about the player come first; once the world brief exists,
+      // skip dumping the entire lorebook so the player's explicit rank in the persona isn't buried in noise.
+      deps.trace?.('start', `플레이어 시트 생성 · ${persona.name}`, `페르소나: ${persona.text ? `${persona.text.length}자 (${persona.source ?? 'direct'})` : '비어 있음'}${fixedTier ? ` · 고정 등급: ${fixedTier}` : ''}`);
+      const own = deps.matchLore ? ((await deps.matchLore(`${persona.name}\n${persona.text}`).catch(() => null))?.text ?? '') : '';
       const story = deps.mentions?.([persona.name]) ?? '';
-      raw = await deps.auxJson(sheetMessages({ profile, lore: await deps.lore(), persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier }), { maxTokens: 2400 });
+      const worldLore = s.brief ? '' : await deps.lore();
+      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -150,7 +152,7 @@ export async function setupChat(s, deps, { player = true } = {}) {
   s.brief = { at: Date.now(), parts: { combat: line(b.combat, 500), ranks: line(b.ranks, 400), elements: line(b.elements, 300), player: line(b.player, 300), storyteller: teller } };
   s.activated = true;
   s.disabled = false;
-  deps.trace?.('setup', `기초 설정 · ${profile.name}`, `${briefText(s.brief)}\n\n[메인 모델용]\n${teller || '(없음)'}`);
+  deps.trace?.('setup', `기초 설정 · ${profile.name}`, `페르소나: ${persona.text ? `${persona.text.length}자 (${persona.source ?? 'direct'})` : '비어 있음'}\n${briefText(s.brief)}\n\n[메인 모델용]\n${teller || '(없음)'}`);
   // A sheet made before the setup was judged without it; only build one when there is none (edits are kept).
   if (player && !s.player) await ensurePlayer(s, deps);
   return s.brief;
@@ -358,28 +360,142 @@ export function fallbackSpec(hint, s) {
 export async function forgeSpec(s, deps, { hint = '' } = {}) {
   await ensurePlayer(s, deps);
   const profile = profileOf(s);
+  const settings = deps.settings?.() ?? {};
   const withCompanions = spec => spec;
-  if (!deps.auxReady()) return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, deps.settings());
-  deps.toast?.('⚔️ 보조모델이 상황을 분석해 적을 구성하는 중…');
+  if (!deps.auxReady()) return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, settings);
+  deps.toast?.('⚔️ 최근 대화를 보고 등장 인물을 판별하는 중…');
   const party = [s.player].filter(Boolean).map(x => sheetText(x, profile)).join('\n');
   const travelling = new Set(s.companions.map(c => c.codexId).filter(Boolean));
-  const allowed = allowedModes(deps.settings());
+  const allowed = allowedModes(settings);
   try {
+    // Step 1: lightweight scene classification — NO lorebook scan! Only recent chat + short codex index.
     const codex = [
-      ...(deps.codex?.list() ?? []).slice(0, 40).map(e => { const sh = rosterSheet(s, e); const ty = typesFor(sh, profile.typeSystem).map(t => typeName(t, profile.typeSystem)).join('/'); return `- ${e.name}${sh.tier ? ` [${sh.tier}]` : ''}${ty ? ` (${ty})` : ''}${e.role ? ` · ${e.role}` : ''}${travelling.has(e.id) ? ' · travelling with {{user}} lately' : ''}${sh.hp <= 0 ? ' · knocked out' : ''}${sh.desc ? ` — ${sh.desc.slice(0, 60)}` : ''}`; }),
-      ...s.companions.filter(c => !c.codexId).map(c => `- ${c.name}${c.tier ? ` [${c.tier}]` : ''} · travelling with {{user}} lately`),
+      ...(deps.codex?.list() ?? []).slice(0, 50).map(e => {
+        const sh = rosterSheet(s, e);
+        const als = aliasesOf(e);
+        return `- ${e.name}${als.length ? ` (${als.slice(0, 2).join(', ')})` : ''}${sh.tier ? ` [${sh.tier}]` : ''}${e.role ? ` · ${e.role}` : ''}${travelling.has(e.id) ? ' · travelling with {{user}}' : ''}${sh.hp <= 0 ? ' · knocked out' : ''}`;
+      }),
+      ...s.companions.filter(c => !c.codexId).map(c => `- ${c.name}${c.tier ? ` [${c.tier}]` : ''} · travelling with {{user}}`),
     ].join('\n');
-    // Minor fights: the last few messages are enough. Named characters with a world-info entry: read their entries.
-    const scene = deps.scene?.(deps.settings().sceneSize ?? 3) ?? '';
-    const matched = deps.matchLore ? await deps.matchLore(`${scene}\n${hint}`) : { text: '', names: [], important: false };
-    const fl = deps.settings().forgeLore ?? 'auto';
-    const lore = fl === 'never' ? '' : matched.important || fl === 'always' ? matched.text : '';
-    deps.toast?.(lore ? `📖 월드인포 ${matched.names.length}개 참고: ${matched.names.slice(0, 3).join(', ')}` : '⚔️ 최근 대화만 보고 적을 구성해요', 'info');
-    const json = await deps.auxJson(forgeMessages({ profile, lore, scene, party, hint, inventory: s.inventory.map(i => `${i.name} ×${i.count}`).join(', '), modes: allowed, codex, difficulty: deps.settings().difficulty ?? 'normal', brief: briefText(s.brief) }), { maxTokens: 3500 });
-    return resolveRegistered(s, parseBattleBody(JSON.stringify(json)) ?? fallbackSpec(hint, s), deps, deps.settings());
+    const scene = deps.scene?.(settings.sceneSize ?? 3) ?? '';
+    const json = await deps.auxJson(planMessages({
+      profile, scene, party, hint,
+      inventory: s.inventory.map(i => `${i.name} ×${i.count}`).join(', '),
+      modes: allowed, codex,
+      difficulty: settings.difficulty ?? 'normal',
+      brief: briefText(s.brief),
+    }), { maxTokens: 2600 });
+    const parsed = parseBattleBody(JSON.stringify(json));
+    if (!parsed) return resolveRegistered(s, fallbackSpec(hint, s), deps, settings);
+
+    // Step 2: resolve each participant according to its kind:
+    //  - already in codex → reuse stored sheet (0 lore lookups, 0 extra calls)
+    //  - mook / monster   → instantiate directly (supports count: 2..5)
+    //  - unregistered major named character → look up ONLY their lore/mentions, generate proper sheet, register into codex
+    const counts = { codex: 0, mook: 0, major: 0 };
+    const majorLogs = [];
+    const seenMajor = new Set();
+    const fl = settings.forgeLore ?? 'auto';
+    const brief = briefText(s.brief);
+    const card = deps.character?.() ?? '';
+
+    const buildMajor = async (item, side) => {
+      const name = String(item.name ?? item.ref ?? '').trim();
+      const aliases = Array.isArray(item.aliases) ? item.aliases.map(x => String(x).trim()).filter(Boolean) : [];
+      const query = [name, ...aliases, item.concept ?? ''].filter(Boolean).join('\n');
+      const matched = fl !== 'never' && deps.matchLore ? await deps.matchLore(query).catch(() => ({ text: '', names: [] })) : { text: '', names: [] };
+      const story = deps.mentions?.([name, ...aliases]) ?? '';
+      const roster = deps.rosterBrief?.(name) ?? '';
+      deps.toast?.(`📖 주요 인물 도감 생성 중: ${name}${matched.names?.length ? ` (월드인포 ${matched.names.length}개 참고)` : ''}`, 'info');
+      try {
+        const raw = await deps.auxJson(sheetMessages({
+          profile, lore: '', own: matched.text, story, brief,
+          persona: item.concept || `${name} (${side === 'ally' ? '아군' : '적'})`,
+          personaName: name, npc: true, card, scene, roster,
+        }), { maxTokens: 2400 });
+        if (raw && typeof raw === 'object') {
+          const merged = {
+            ...raw,
+            name: raw.name || name,
+            aliases: [...new Set([...(Array.isArray(raw.aliases) ? raw.aliases : []), ...aliases])],
+            threat: item.threat ?? raw.threat ?? (side === 'enemy' ? 'elite' : 'normal'),
+            style: item.style ?? raw.style,
+            row: item.row ?? raw.row,
+            intel: item.intel ?? 2,
+          };
+          counts.major++;
+          majorLogs.push(`${merged.name} (${matched.names?.length ? `로어 ${matched.names.length}건` : '대화 기반'})`);
+          if (settings.autoRegister !== false) {
+            const entry = registerCharacter(s, deps, merged, { side });
+            const base = clone(rosterSheet(s, entry));
+            return { ...base, codexId: entry.id, row: merged.row ?? base.row, intel: merged.intel ?? 2, threat: merged.threat ?? base.threat, style: merged.style ?? base.style, hp: base.hp > 0 ? base.hp : base.maxHp, maxHp: base.maxHp };
+          }
+          return merged;
+        }
+      } catch (err) {
+        deps.trace?.('error', `주요 인물 도감 생성 실패 · ${name}`, err?.message ?? String(err));
+      }
+      // Safe fallback if Step-2 call failed
+      counts.mook++;
+      return { ...item, name, threat: item.threat ?? 'elite', desc: item.concept ?? item.desc ?? '' };
+    };
+
+    const resolveList = async (list, side, cap) => {
+      const out = [];
+      for (const item of list ?? []) {
+        if (out.length >= cap) break;
+        const refName = typeof item === 'string' ? item : item.ref ?? item.name;
+        const aliases = Array.isArray(item?.aliases) ? item.aliases : [];
+        let entry = codexFind(deps, refName);
+        if (!entry) for (const a of aliases) { entry = codexFind(deps, a); if (entry) break; }
+        if (entry) {
+          counts.codex++;
+          const base = clone(rosterSheet(s, entry));
+          out.push({ ...base, codexId: entry.id, row: item?.row ?? base.row, intel: item?.intel ?? 2, threat: item?.threat ?? base.threat, style: item?.style ?? base.style, hp: base.hp > 0 ? base.hp : base.maxHp, maxHp: base.maxHp });
+          continue;
+        }
+        if (typeof item !== 'object') continue;
+        const kind = String(item.kind ?? '').toLowerCase();
+        const isMajor = kind === 'major' || (kind === 'codex' && !item.skills?.length && refName) || (item.named && !item.skills?.length && refName);
+        if (isMajor && refName && !seenMajor.has(nk(refName))) {
+          seenMajor.add(nk(refName));
+          out.push(await buildMajor(item, side));
+          continue;
+        }
+        // Mook / generic monster (or inline sheet with skills)
+        if (item.named && settings.autoRegister !== false && !item.ref) {
+          const e = registerCharacter(s, deps, item, { side });
+          deps.toast?.(`📖 도감에 등록: ${e.name}`);
+          counts.major++;
+          out.push({ ...item, codexId: e.id });
+          continue;
+        }
+        const n = clamp(Math.round(num(item.count, 1)), 1, Math.min(5, cap - out.length));
+        const letters = 'ABCDE';
+        for (let i = 0; i < n && out.length < cap; i++) {
+          const copy = clone(item);
+          delete copy.count; delete copy.kind;
+          if (n > 1) copy.name = `${copy.name} ${letters[i] ?? (i + 1)}`;
+          out.push(copy);
+          counts.mook++;
+        }
+      }
+      return out;
+    };
+
+    parsed.enemies = await resolveList(parsed.enemies, 'enemy', 8);
+    parsed.allies = await resolveList(parsed.allies, 'ally', 4);
+    if (!parsed.enemies.length) return resolveRegistered(s, fallbackSpec(hint, s), deps, settings);
+    deps.trace?.('start', `전투 구성 · 도감 ${counts.codex} · 잡병 ${counts.mook} · 신규도감 ${counts.major}`, [
+      `모드: ${parsed.mode ?? 'party'}${parsed.why ? ` (${parsed.why})` : ''}`,
+      `적: ${parsed.enemies.map(e => `${e.name}${e.codexId ? ' [도감]' : ''}`).join(', ')}`,
+      parsed.allies.length ? `아군: ${parsed.allies.map(a => `${a.name}${a.codexId ? ' [도감]' : ''}`).join(', ')}` : null,
+      majorLogs.length ? `신규 도감 생성: ${majorLogs.join(', ')}` : null,
+    ].filter(Boolean).join('\n'));
+    return parsed;
   } catch (e) {
     deps.toast?.(`적 생성 실패 → 간이 생성 사용 (${e.message})`, 'warning');
-    return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, deps.settings());
+    return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, settings);
   }
 }
 
@@ -638,19 +754,19 @@ export async function playUserMessage(s, index, mes, deps, m = null) {
 }
 
 /** Panel-only play: the turn never touches the chat. */
-export async function playLocal(s, text, deps) {
+export async function playLocal(s, text, deps, { commands = null } = {}) {
   const b = s.battle;
   if (!b || b.status !== 'active') return null;
-  return playText(s, `local:${b.id}:${b.history.length}:${uid()}`, -1, text, deps);
+  return playText(s, `local:${b.id}:${b.history.length}:${uid()}`, -1, text, deps, { commands });
 }
 
-async function playText(s, key, index, mes, deps) {
+async function playText(s, key, index, mes, deps, { commands: direct = null } = {}) {
   const b = s.battle;
   const known = b.history.find(h => h.key === key);
   if (known) return { entry: known, reused: true };
   if (s.idle[key]) return { idle: true, reused: true };
   const settings = deps.settings();
-  const { commands: raw, via } = await interpret(s, stripBlocks(mes), deps);
+  const { commands: raw, via } = direct?.length ? { commands: direct, via: 'quick' } : await interpret(s, stripBlocks(mes), deps);
   if (!raw.length) { s.idle[key] = true; return { idle: true, via }; }
   const commands = raw.map(c => withGrades(s, b, c, settings));
   const entry = applyTurn(s, { key, index, commands, via }, settings);

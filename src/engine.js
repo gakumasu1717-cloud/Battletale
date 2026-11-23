@@ -307,7 +307,12 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
     for (let k = 0; k < (f.actions ?? 1); k++) {
       let a;
       if (ambush && f.side === 'ally') a = { type: 'surprised' };
-      else if (k === 0 && f.charging && !f.staggered) {
+      else if (k === 0 && f.staggered) {
+        const i = cmds.findIndex(c => c.actor === f.id);
+        if (i >= 0) cmds.splice(i, 1);
+        f.staggered = false;
+        a = { type: 'stagger' };
+      } else if (k === 0 && f.charging) {
         // A charged move goes off this turn no matter who controls the fighter.
         const i = cmds.findIndex(c => c.actor === f.id);
         if (i >= 0) cmds.splice(i, 1);
@@ -326,7 +331,7 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
   }
 
   // 2. Order: guard > flee > priority > speed. Releases of charged moves go at normal speed.
-  const prio = a => (a.type === 'switch' ? 11 : a.type === 'defend' || a.type === 'rest' ? 10 : a.type === 'flee' ? 9 : a.type === 'swap' ? 8 : a.type === 'item' ? 2 : ['surprised', 'stagger', 'charge'].includes(a.type) ? -9 : skillOf(byId(b, a.actor), a, attackName)?.protect ? 10 : skillOf(byId(b, a.actor), a, attackName)?.priority ?? 0);
+  const prio = a => (a.type === 'switch' ? 11 : a.type === 'defend' || a.type === 'rest' ? 10 : a.type === 'flee' ? 9 : a.type === 'swap' ? 8 : a.type === 'item' ? 2 : ['surprised', 'charge'].includes(a.type) ? -9 : skillOf(byId(b, a.actor), a, attackName)?.protect ? 10 : skillOf(byId(b, a.actor), a, attackName)?.priority ?? 0);
   const keyed = acts.map(a => ({ a, p: prio(a), s: stat(byId(b, a.actor), 'spd') * (a.slot ? 0.5 : 1), r: rng.next() }));
   keyed.sort((x, y) => y.p - x.p || y.s - x.s || y.r - x.r);
 
@@ -368,7 +373,7 @@ function skillOf(f, a, attackName) {
 function act(b, f, a, rng, ev, inv, attackName) {
   if (a.type === 'switch') return actSwitch(b, f, a, ev);
   if (a.type === 'surprised') { ev.push({ t: 'surprised', who: f.name, side: f.side }); return; }
-  if (a.type === 'stagger') { f.staggered = false; ev.push({ t: 'staggered', who: f.name }); return; }
+  if (a.type === 'stagger' || f.staggered) { f.staggered = false; ev.push({ t: 'staggered', who: f.name }); return; }
   const skip = f.statuses.find(s => STATUS[s.id]?.skip);
   if (skip) { ev.push({ t: 'skip', who: f.name, status: skip.id }); if (f.charging) breakCharge(f, ev); return; }
   if (f.statuses.some(s => s.id === 'confuse') && !['defend', 'swap'].includes(a.type) && rng.chance(STATUS.confuse.selfHit)) {

@@ -207,7 +207,18 @@ function npcSub(part) {
 }
 
 /* ---------- Commands ---------- */
-const QUICK_RE = /⚔\s*\[([^\]]+)\]/g;
+function extractQuickBodies(text) {
+  const s = String(text ?? ''), out = [], re = /⚔\s*\[/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    let i = m.index + m[0].length, depth = 1;
+    while (i < s.length && depth > 0) { if (s[i] === '[') depth++; else if (s[i] === ']') depth--; i++; }
+    if (depth !== 0) break;
+    out.push(s.slice(m.index + m[0].length, i - 1).trim());
+    re.lastIndex = i;
+  }
+  return out;
+}
 const W = {
   attack: /^(attack|basic|공격|기본\s*공격|평타|때리기)$/i,
   defend: /^(defend|guard|block|방어|막기|가드|방어\s*태세)$/i,
@@ -218,13 +229,12 @@ const W = {
 /** Panel buttons write "⚔[스킬명 → 대상]" so these never need the aux model. */
 export function parseQuick(text, battle, actor) {
   const out = [];
-  for (const m of String(text ?? '').matchAll(QUICK_RE)) {
-    const body = m[1].trim();
+  for (const body of extractQuickBodies(text)) {
     const [left, right] = body.split(/\s*(?:→|->|>|=>)\s*/);
     let who = actor;
     let what = left.trim();
     const byWho = /^(.+?)\s*[:：]\s*(.+)$/.exec(what);
-    if (byWho) { const f = findFighter(battle, byWho[1], { side: 'ally' }); if (f) { who = f; what = byWho[2].trim(); } }
+    if (byWho && !(actor && findSkill(actor, what))) { const f = findFighter(battle, byWho[1], { side: 'ally' }); if (f) { who = f; what = byWho[2].trim(); } }
     if (!who) continue;
     const target = right?.trim() || null;
     const item = /^(?:item|아이템|사용)\s+(.+)$/i.exec(what);

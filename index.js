@@ -2,7 +2,7 @@
 import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag } from './src/parse.js';
-import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaText, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
+import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaInfo, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
@@ -135,7 +135,8 @@ function deps() {
     trace: (...a) => trace(...a),
     character: characterText,
     mentions: names => mentions(ctx().chat, names, { strip: stripBlocks, lookback: 60 }),
-    persona: () => ({ name: ctx().name1 || 'User', text: personaText() }),
+    rosterBrief: except => rosterBrief(except),
+    persona: () => { const info = personaInfo(); return { name: ctx().name1 || 'User', text: info.text, source: info.source }; },
     statFields: lastStatFields,
     scene: (n = settings().sceneSize ?? 3) => recentScene(ctx().chat, n, stripBlocks),
     toast,
@@ -388,10 +389,11 @@ async function modeAct(act, v) {
   */
   const text = r.freeText && effectiveAuxReady() ? r.freeText : `⚔[${r.body}${nonce ? ` #${nonce}` : ''}]`;
   if (settings().playMode === 'chat') return putCommand(text);
+  const direct = !r.freeText && r.cmd ? [{ ...r.cmd, ...(nonce ? { nonce } : {}) }] : null;
   await work(async () => {
     try {
       beginTurn();
-      const res = await playLocal(s, text, deps());
+      const res = await playLocal(s, text, deps(), { commands: direct });
       if (res?.idle) toast('행동으로 해석되지 않았어요. 버튼을 쓰거나 다르게 적어주세요.', 'warning');
       if (res?.entry) {
         endTurn(res.entry.events);
@@ -563,7 +565,12 @@ const panelApi = {
     toast(`🏷 등급 체계: ${profile.tiers.map(t => t.name).join(' → ')}`);
   },
   switchMode: async mode => { const s = state(); if (switchMode(s, mode, settings())) { await saveState(); afterChange(); toast(`${MODES[mode].icon} ${MODES[mode].ko}(으)로 바꿨어요.`); } else { toast('이 형식으로는 바꿀 수 없어요 (결투는 적이 1명일 때만).', 'warning'); afterChange(); } },
-  stop: async () => { const s = state(); if (stopBattle(s, 'stopped', settings())) { await saveState(); afterChange(); toast('전투를 중단했어요.'); } },
+  stop: async (result = 'stopped') => {
+    const s = state();
+    const r = String(result ?? '').trim();
+    const res = ['win', 'lose', 'fled', 'success', 'stopped'].includes(r) ? r : 'stopped';
+    if (stopBattle(s, res, settings())) { await saveState(); afterChange(); toast(res === 'stopped' ? '전투를 중단했어요.' : `전투를 종료했어요 (${res}).`); }
+  },
   genSheet: (extra, instruction = '') => work(async () => {
     const s = state();
     s.playerConcept = extra || s.playerConcept || '';
@@ -808,7 +815,14 @@ function registerCommands() {
   reg('bt-sheet', extra => panelApi.genSheet(extra), '보조모델로 내 캐릭터 시트 (재)생성');
   reg('bt-setup', () => runSetup(), '이 채팅에서 BattleTale 켜기 + 기초 설정 (속성·상성·등급·전투 방식) 만들기');
   reg('bt-rules', () => panelApi.genRules(), '보조모델로 세계관 룰 (재)분석');
-  reg('bt-status', () => { const s = state(); const b = s?.battle; return b ? JSON.stringify(b.fighters.map(f => ({ name: f.name, hp: `${f.hp}/${f.maxHp}`, sp: `${f.sp}/${f.maxSp}` }))) : (s?.player ? `${s.player.name} HP ${s.player.hp}/${s.player.maxHp}` : 'no data'); }, '현재 전투/시트 상태 반환');
+  reg('bt-status', () => {
+    const s = state(); const b = s?.battle;
+    if (b) {
+      const list = b.st?.fighters ?? b.st?.b?.fighters;
+      return list ? JSON.stringify(list.map(f => ({ name: f.name, hp: `${f.hp}/${f.maxHp}`, sp: `${f.sp}/${f.maxSp}` }))) : modeOf(b.mode).status(b.st, profileOf(s));
+    }
+    return s?.player ? `${s.player.name} HP ${s.player.hp}/${s.player.maxHp}` : 'no data';
+  }, '현재 전투/시트 상태 반환');
 }
 
 /* ---------------- Boot ---------------- */

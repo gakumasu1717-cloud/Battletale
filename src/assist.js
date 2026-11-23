@@ -23,7 +23,7 @@ export function estTokens(s) {
 const CUT_ORDER = [
   { re: /recent story|story so far|recent|history|scene|대화/i, keep: 'tail' },
   { re: /world info|world lore|lore|people|registered|already registered|로어|월드/i, keep: 'head' },
-  { re: /character card|persona|캐릭터 카드|페르소나/i, keep: 'head' },
+  { re: /character card|캐릭터 카드/i, keep: 'head' },
 ];
 const MIN_KEEP = 400;
 export function fitInput(messages, settings) {
@@ -41,7 +41,7 @@ export function fitInput(messages, settings) {
     for (let guard = 0; guard < 80; guard++) {
       msgs[ui].content = parts.join('\n');
       if (total() <= limit) break;
-      const idx = parts.map((p, i) => ({ i, p })).filter(x => group.re.test(head(x.p)) && !/^(task|rule set|answer|modes|honesty|primary|world brief)/i.test(head(x.p)) && x.p.length > MIN_KEEP)
+      const idx = parts.map((p, i) => ({ i, p })).filter(x => group.re.test(head(x.p)) && !/^(task|rule set|answer|modes|honesty|primary|world brief|player persona|player profile)/i.test(head(x.p)) && x.p.length > MIN_KEEP)
         .sort((a, b) => b.p.length - a.p.length)[0]?.i;
       if (idx == null) break;
       const p = parts[idx];
@@ -255,11 +255,82 @@ export function characterText() {
   return cleanLore([`Name: ${ch.name}`, ch.description, ch.personality, ch.scenario].filter(Boolean).join('\n')).slice(0, 4000);
 }
 
+/**
+ * Resolve the active SillyTavern persona description across ST versions/modes:
+ * chat-locked persona, DOM-selected avatar, character/group-bound persona, name-matched
+ * persona in powerUserSettings.persona_descriptions, extensionPrompts['1_persona'],
+ * legacy powerUserSettings.persona_description, and the #persona_description textarea.
+ */
+export function resolvePersona(c = {}, doc = (typeof document !== 'undefined' ? document : null)) {
+  const pu = c?.powerUserSettings ?? {};
+  const descs = pu.persona_descriptions && typeof pu.persona_descriptions === 'object' ? pu.persona_descriptions : {};
+  const names = pu.personas && typeof pu.personas === 'object' ? pu.personas : {};
+  const descOf = avatar => {
+    if (!avatar) return '';
+    const v = descs[avatar];
+    return typeof v === 'string' ? v.trim() : String(v?.description ?? '').trim();
+  };
+  const ch = c?.characters?.[c?.characterId];
+  const charAvatar = ch?.avatar;
+  const groupId = c?.groupId;
+
+  const candidates = [];
+  const pushAvatar = (avatar, source) => {
+    const d = descOf(avatar);
+    if (d) candidates.push({ text: d, source: `${source}:${avatar}` });
+  };
+
+  // 1. Chat-locked persona
+  pushAvatar(c?.chatMetadata?.persona, 'chatMetadata');
+
+  // 2. Currently selected persona in DOM
+  const domAvatar = doc?.querySelector?.('#user_avatar_block .avatar-container.selected')?.getAttribute?.('imgfile');
+  pushAvatar(domAvatar, 'domSelected');
+
+  // 3. Persona connected to the current character or group
+  if (charAvatar || groupId) {
+    for (const [avatar, entry] of Object.entries(descs)) {
+      const conns = Array.isArray(entry?.connections) ? entry.connections : [];
+      if (conns.some(x => (charAvatar && x?.type === 'character' && x?.id === charAvatar) || (groupId && x?.type === 'group' && x?.id === groupId))) {
+        pushAvatar(avatar, 'connection');
+      }
+    }
+  }
+
+  // 4. Persona whose display name matches c.name1 (prefer default_persona on tie)
+  const userName = String(c?.name1 ?? '').trim();
+  if (userName) {
+    const matched = Object.entries(names).filter(([, nm]) => String(nm ?? '').trim() === userName).map(([av]) => av);
+    if (pu.default_persona && matched.includes(pu.default_persona)) pushAvatar(pu.default_persona, 'name1+default');
+    for (const av of matched) pushAvatar(av, 'name1');
+  }
+
+  // 5. Default persona
+  pushAvatar(pu.default_persona, 'default');
+
+  // 6. SillyTavern's assembled extension prompt for persona
+  const extP = c?.extensionPrompts?.['1_persona']?.value ?? c?.extensionPrompts?.persona?.value ?? '';
+  if (String(extP).trim()) candidates.push({ text: String(extP).trim(), source: 'extensionPrompts' });
+
+  // 7. Legacy / synced powerUserSettings.persona_description
+  if (String(pu.persona_description ?? '').trim()) {
+    candidates.push({ text: String(pu.persona_description).trim(), source: 'persona_description' });
+  }
+
+  // 8. Live textarea in DOM
+  const domVal = doc?.getElementById?.('persona_description')?.value;
+  if (String(domVal ?? '').trim()) candidates.push({ text: String(domVal).trim(), source: 'domTextarea' });
+
+  const best = candidates[0];
+  return best ? { text: cleanLore(best.text).slice(0, 6000), source: best.source } : { text: '', source: 'empty' };
+}
+
+export function personaInfo() {
+  return resolvePersona(ctx());
+}
+
 export function personaText() {
-  const c = ctx();
-  const pu = c.powerUserSettings ?? {};
-  const desc = pu.persona_description ?? '';
-  return cleanLore(desc).slice(0, 3000);
+  return personaInfo().text;
 }
 
 /** Lines of recent messages that mention any of the names (for judging one character's canon strength). */

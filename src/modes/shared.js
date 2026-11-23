@@ -6,13 +6,24 @@ export const GRADE_KO = { perfect: '퍼펙트', good: '굿', miss: '미스' };
 
 /** "⚔[섬광 베기 → 늑대 A #k3j9]" → [{ body: '섬광 베기 → 늑대 A', nonce: 'k3j9' }] */
 export function quickBlocks(text) {
+  const s = String(text ?? '');
   const out = [];
-  for (const m of String(text ?? '').matchAll(/⚔\s*\[([^\]]+)\]/g)) {
-    let body = m[1].trim();
+  const re = /⚔\s*\[/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    let i = m.index + m[0].length, depth = 1;
+    while (i < s.length && depth > 0) {
+      if (s[i] === '[') depth++;
+      else if (s[i] === ']') depth--;
+      i++;
+    }
+    if (depth !== 0) break;
+    let body = s.slice(m.index + m[0].length, i - 1).trim();
     const n = /\s*#([a-z0-9]{4,10})\s*$/i.exec(body);
     const nonce = n ? n[1].toLowerCase() : null;
     if (n) body = body.slice(0, n.index).trim();
     out.push({ body, nonce });
+    re.lastIndex = i;
   }
   return out;
 }

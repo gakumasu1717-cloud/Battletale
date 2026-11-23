@@ -39,7 +39,7 @@ ${lore || '(none)'}
 ## Character card
 ${character || '(none)'}
 
-## Player persona ("${personaName}" = {{user}})
+## PRIMARY SOURCE — Player persona ("${personaName}" = {{user}})
 ${persona || '(none)'}
 ${statTag ? `\n## The story's current status window for the player\n${statTag}\n` : ''}${history ? `\n## Story so far (most recent last)\n${history}\n` : ''}
 ## Task
@@ -49,7 +49,7 @@ ${RULE_SCHEMA},
     "combat": "2-4 sentences: how fights actually work in this world (magic / tech / martial arts / monsters, what decides a fight, how lethal it is, typical tactics)",
     "ranks": "1-3 sentences: the rank ladder(s), how they line up with each other, how big a one-rank gap is",
     "elements": "1-2 sentences: the element/attribute system and its key matchups — or 'none'",
-    "player": "1-2 sentences: the standing of {{user}} per the persona/lore/story — quote any stated rank, plus role, fighting style and element",
+    "player": "1-2 sentences: the standing of {{user}} per the Player persona above — ALWAYS quote any explicitly stated rank/grade/level/circle/power verbatim and NEVER downgrade it; include role, fighting style and element. Only describe them as low-rank when the persona truly states no rank or strength.",
     "storyteller": "at most 4 short lines for the storyteller model: world-specific combat vocabulary and conventions to keep consistent (rank names, how powers look and cost). No generic writing advice."
   }
 }
@@ -154,6 +154,7 @@ Answer with ONE JSON object in this shape:
 ${SHEET_SCHEMA}
 - Use the status window's numbers when given. Otherwise write "tierReason" first: quote the lines of the PRIMARY SOURCE (description, their lorebook entries, the story) that show their rank or strength, map them to the tier list, then pick values inside that tier's ranges.
 - The PRIMARY SOURCE outranks everything else in this prompt. Skills, type and fighting style come from what it describes (named techniques, magic, weapons, training), not from generic tropes.
+${!npc ? '- CRITICAL FOR {{user}}: If the Player persona above explicitly states a rank, grade, tier, circle, level, or standing, you MUST match "tier" and stats to that exact rank — NEVER downgrade an explicitly stated rank to a lower/beginner tier.' : ''}
 - If the status window lists skills, turn each into a skill entry with fitting mechanics (keep its name).
 ${typeRule(profile)}
 ${FAIRNESS}
@@ -263,6 +264,72 @@ ${codex ? `\n## Registered characters (stats and skills are already stored)\n${c
 ${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}
 - Enemies follow the same rank budget (a boss may use one rank higher). Their rank comes from what they are in this world, not from the player's rank.
 - Mode flavor: in "duel" give the opponent mind-game tools (a protect/guard move, a pivot move if it has teammates, a big move that needs reading); in "party" make the group play as a unit — a front-row tank (trait vanguard or a taunt), a back-row damage dealer or healer, and moves that combo (one applies mark/vulnerable/burn, another exploits it), or a charger the player can break.`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+/**
+ * Lightweight Step-1 encounter planner: reads ONLY recent chat history + short codex names
+ * (NO lorebook dump!) and classifies each participant into:
+ * - "codex": already registered in codex → reuse stored sheet immediately
+ * - "mook": generic minion/monster/unnamed enemy → build compact sheet directly here
+ * - "major": important named character NOT yet in codex → return name/aliases/concept only;
+ *            Step 2 will look up only their lorebook entries, generate a proper sheet, and register them in codex.
+ */
+export function planMessages({ profile, scene, party, hint, inventory, modes = ['party', 'duel', 'stealth'], codex = '', difficulty = 'normal', brief = '' }) {
+  const system = 'You are the game master\'s referee. Read ONLY the latest scene and plan who enters the fight right now. Reuse registered characters, build generic mobs inline, and flag any unregistered important named characters so the engine can fetch their lore and register them in the codex. Output only JSON.';
+  const modeGuide = {
+    party: '"party": a group fight or any fight against monsters/several enemies; turn-based with skills, rows and enemy intents.',
+    duel: '"duel": a 1-on-1 battle with Pokémon singles rules: one fighter per side at a time, others wait and can be switched in (rival match, duel, sparring, boss fight against one foe). "enemies" is their team in send-out order.',
+    stealth: '"stealth": a grid puzzle — sneaking past guards ("variant": "sneak") or fleeing pursuers ("variant": "chase"). Up to 4 guards walk the map; extra enemies join if caught.',
+  };
+  const mookSchema = `{"kind": "mook", "name": "generic name", "count": 1, "threat": "minion|normal|elite", "tier": "<tier name>", "hp": <num>, "sp": <num>, "stats": {<stat keys>}, "elements": ["1-2 types"], "ptypes": ["1-2 Pokémon types"], "row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker", "skills": [{"name": "", "desc": "short", "kind": "physical|magic|heal|buff|debuff|guard", "power": 60, "cost": 20, "target": "enemy|enemies|ally|allies|self", "element": "", "acc": 95, "status": {"id": "${STATUS_IDS}", "chance": 30, "turns": 2}, "stages": {"pow": 1}}], "desc": "one short line"}`;
+  const user = `## Rule set
+${profileText(profile)}
+${brief ? `\n## World brief\n${brief}\n` : ''}
+## The player's side
+${party}
+Inventory: ${inventory || '(empty)'}
+${codex ? `\n## Registered codex characters (stats/skills already saved — NEVER rewrite their sheet!)\n${codex}\n` : ''}
+## Recent story (oldest first)
+${scene || '(none)'}
+${hint ? `\n## Encounter hint\n${hint}\n` : ''}
+## Task
+Read the latest scene and decide who is actually fighting right now. Answer with ONE JSON object:
+{
+  "mode": "${modes.join('|')}",
+  "variant": "sneak|chase",
+  "why": "one line: why this mode",
+  "title": "short name", "place": "where", "flee": true,
+  "initiative": "player|enemy|normal",
+  "outmatched": false, "outmatchedWhy": "",
+  "terrain": [{"desc": "short description", "side": "all|ally|enemy", "stages": {"acc": -1}}],
+  "enemies": [ <codexRef> | <mookSheet> | <majorRef> ],
+  "allies": [ <codexRef> | <mookSheet> | <majorRef> ],
+  "goal": "stealth only",
+  "stones": 2,
+  "loot": ["what could really be gained"]
+}
+
+## Participant formats — pick the RIGHT kind for each person/enemy in the scene
+1. Already in the Registered codex list above → <codexRef>:
+   {"kind": "codex", "ref": "<exact registered name>", "row": "front|back"}
+   (Do NOT include stats or skills. Only include characters physically present in this scene; knocked-out characters cannot fight.)
+2. Generic mob / unnamed soldier / wild monster / minor extra → <mookSheet>:
+   ${mookSchema}
+   (Use "count": 2..5 for identical mobs instead of repeating entries. Give 2-4 fitting skills; basic attack is automatic.)
+3. Unregistered IMPORTANT NAMED character (named rival, named boss, recurring NPC, named companion who matters to the story and is NOT in the codex list above) → <majorRef>:
+   {"kind": "major", "name": "<exact name>", "aliases": ["other names/titles"], "threat": "normal|elite|boss", "row": "front|back", "intel": 1|2, "style": "aggressive|defensive|tricky|balanced|berserker", "concept": "1-2 sentences: what the scene shows about their role, weapons, powers and apparent strength"}
+   (Do NOT invent full stats/skills for "major" — the engine will look up their lorebook entry and register them into the codex next!)
+
+## Modes
+${modes.map(m => `- ${modeGuide[m]}`).join('\n')}
+
+## Rules
+- ${(DIFFICULTY[difficulty] ?? DIFFICULTY.normal).stance}
+- Scale ordinary mooks/monsters to {{user}} per the difficulty above. Do NOT mark unnamed mobs as "major".
+- Put only characters actually fighting alongside {{user}} in "allies" (empty [] when alone).
+- ${typeRule(profile)}
+- Keep mook skill counts compact (2-4 skills, power within tier budget).`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 

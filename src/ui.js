@@ -323,8 +323,8 @@ function drawerHtml(s) {
 
 export function refreshTrace() { if (api?.ui?.settingsOpen && api.ui.sdPage === 'trace') refreshPanel(); }
 
-const TRACE_ICON = { inject: '📤', detect: '🔎', start: '⚔️', aux: '🤖', change: '📝', stat: '📊', balance: '⚖️', error: '❗' };
-const TRACE_KO = { inject: '주입', detect: '감지', start: '구성', aux: '보조', change: '변수', stat: '상태창', balance: '밸런스', error: '오류' };
+const TRACE_ICON = { inject: '📤', detect: '🔎', start: '⚔️', setup: '🧭', aux: '🤖', change: '📝', stat: '📊', balance: '⚖️', error: '❗' };
+const TRACE_KO = { inject: '주입', detect: '감지', start: '구성', setup: '기초', aux: '보조', change: '변수', stat: '상태창', balance: '밸런스', error: '오류' };
 function traceTab(s) {
   const list = api.trace?.() ?? [];
   const set = api.settings();
@@ -338,7 +338,7 @@ function traceTab(s) {
   return `<div class="bt-section"><div class="bt-sub">파이프라인 점검</div>
     ${steps.map(([a, b, ok]) => `<div class="tr-step ${ok ? 'ok' : ''}"><b>${a}</b><span>${h(b)}</span><i>${ok ? '✔ 동작 확인' : '… 아직 기록 없음'}</i></div>`).join('')}
     <div class="sd-hint">주입·감지·보조모델 응답 최근 40개 (새로고침하면 지워짐)</div></div>
-  <div class="tr-filter">${['', 'inject', 'detect', 'start', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_ICON[k]} ${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
+  <div class="tr-filter">${['', 'inject', 'detect', 'start', 'setup', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_ICON[k]} ${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
   ${shown.length ? shown.map(x => `<details class="tr-item k-${x.kind}"><summary>${TRACE_ICON[x.kind] ?? '•'} <b>${h(x.title)}</b> <small>${new Date(x.t).toLocaleTimeString()}</small></summary>${x.detail ? `<pre>${h(x.detail)}</pre>` : '<div class="bt-note">(내용 없음)</div>'}</details>`).join('') : '<div class="bt-empty">아직 기록이 없어요. 채팅을 한 번 보내보세요.</div>'}`;
 }
 
@@ -352,7 +352,7 @@ export function beginTurn() {
 }
 
 // Events that begin one fighter's action: each becomes its own step on screen.
-const STEP_START = new Set(['use', 'charge', 'switch', 'sendout', 'item', 'defend', 'rest', 'swap', 'scan', 'flee', 'skip', 'fallback', 'wait', 'stances', 'sact', 'surprised']);
+const STEP_START = new Set(['use', 'charge', 'switch', 'sendout', 'item', 'defend', 'rest', 'swap', 'scan', 'flee', 'skip', 'fallback', 'wait', 'stances', 'sact', 'surprised', 'staggered', 'confused', 'improv', 'overexert']);
 
 /**
  * Split a turn into on-screen steps (Pokémon double-battle style): each action shows its lines,
@@ -382,6 +382,7 @@ function buildSteps(events, start = {}) {
 
 export function endTurn(events) {
   const ui = api.ui;
+  clearTimeout(autoTimer); autoTimer = null; autoKey = '';
   ui.lastEvents = events;
   const { steps, maxHp } = buildSteps(events, ui.turnStart ?? {});
   ui.steps = steps; ui.stepPos = 0; ui.stepMax = maxHp;
@@ -884,7 +885,7 @@ function onClick(e) {
     if (it.page) { api.ui.page = it.page; return refreshPanel(); }
     if (it.act === 'pk:actor') { api.ui.actor = it.v; api.ui.page = 'main'; return refreshPanel(); }
     if (it.act === 'pk:uiset') { api.ui[it.k] = it.v == null || api.ui[it.k] === it.v ? null : it.v; return refreshPanel(); }
-    if (it.act === 'pk:target') { api.ui.target = it.v; const pend = api.ui.pending; api.ui.pending = null; api.ui.page = 'main'; return pend ? api.modeAct(pend.act, pend.v) : refreshPanel(); }
+    if (it.act === 'pk:target') { api.ui.target = it.v; const pend = api.ui.pending; api.ui.pending = null; api.ui.page = 'main'; if (pend) { skipTalk(); return api.modeAct(pend.act, pend.v); } return refreshPanel(); }
     if (Array.isArray(it.target) && it.target.length > 1 && !(api.ui.targetLocked && it.target.includes(api.ui.target))) { api.ui.pending = { ...it, from: api.ui.page ?? 'main' }; api.ui.page = 'target'; return refreshPanel(); }
     if (Array.isArray(it.target) && it.target.length > 1 && api.ui.targetLocked && it.target.includes(api.ui.target)) { /* already picked on the field */ }
     else if (Array.isArray(it.target) && it.target.length === 1) api.ui.target = it.target[0];
@@ -1041,7 +1042,7 @@ export function renderCards(s, chat, settings) {
     const text = el.querySelector('.mes_text');
     if (!text) continue;
     if (m.is_user) {
-      const c = map.get(msgKey(i, m.mes));
+      const c = map.get(msgKey(i, m.mes, m)) ?? map.get(msgKey(i, m.mes));
       if (!c) continue;
       const lines = eventLines(c.events, { lang: 'ko', showRolls: settings.showRolls });
       if (!lines.length) continue;

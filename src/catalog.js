@@ -514,8 +514,25 @@ function guessMap(d, keys) {
 export function tierOf(profile, name) {
   if (!name) return null;
   const k = norm(name);
-  return profile.tiers.find(t => norm(t.name) === k) ?? profile.tiers.find(t => (t.aliases ?? []).some(a => norm(a) === k))
-    ?? profile.tiers.find(t => k.startsWith(norm(t.name)) || norm(t.name).startsWith(k)) ?? null;
+  if (!k) return null;
+  const tiers = profile.tiers ?? [];
+  const exact = tiers.find(t => norm(t.name) === k) ?? tiers.find(t => (t.aliases ?? []).some(a => norm(a) === k));
+  if (exact) return exact;
+  // Longest label/alias first so "최상급"/"SS" wins over "상급"/"S" when suffixes like "급" or descriptions are attached.
+  const keys = [];
+  for (const t of tiers) {
+    keys.push([norm(t.name), t]);
+    for (const a of t.aliases ?? []) keys.push([norm(a), t]);
+  }
+  keys.sort((a, b) => b[0].length - a[0].length);
+  for (const [tk, t] of keys) {
+    if (!tk) continue;
+    if (k.startsWith(tk) || tk.startsWith(k)) return t;
+  }
+  for (const [tk, t] of keys) {
+    if (tk.length >= 2 && k.includes(tk)) return t;
+  }
+  return null;
 }
 
 /* ---------- Skill inference & normalization ---------- */

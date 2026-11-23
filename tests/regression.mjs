@@ -429,6 +429,206 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   }
 });
 
+/* 31 */ await test('파티전: 콜론·대괄호 스킬명·동료가 있어도 유저 기술이 누락되지 않는다', async () => {
+  const s = G.stateOf({});
+  s.profile = PROFILE;
+  s.player = { ...C.normalizeSheet({ name: '한결', isPlayer: true, tier: 'C', hp: 600, sp: 120, stats: { STR: 60, INT: 30, AGI: 30, END: 50, SEN: 45, LUK: 30 },
+    skills: [{ name: '화염: 섬광참', kind: 'physical', power: 70, cost: 15 }, { name: '[고유] 뇌격', kind: 'magic', power: 75, cost: 15 }] }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  G.beginBattle(s, { mode: 'party', title: 't',
+    allies: [{ name: '화염 정령', hp: 500, sp: 100, stats: { STR: 30, INT: 50, AGI: 70, END: 40, SEN: 40, LUK: 20 }, skills: ['불씨: 마법 45'] }],
+    enemies: [{ name: '고속 고블린', hp: 3000, sp: 100, stats: { STR: 20, INT: 10, AGI: 90, END: 40, SEN: 30, LUK: 10 }, skills: ['할퀴기: 물리 35'] }] },
+    { originIndex: 0, originHash: '', settings: SET });
+  // Direct command (panel mode) with bracketed skill name
+  const r1 = await G.playLocal(s, '⚔[[고유] 뇌격 → 고속 고블린]', deps, { commands: [{ actor: 'player', type: 'skill', skill: '[고유] 뇌격', target: '고속 고블린' }] });
+  assert.ok(r1?.entry?.events.some(e => e.t === 'use' && e.who === '한결' && e.skill === '[고유] 뇌격'), 'bracket skill did not fire');
+  assert.ok(r1.entry.events.some(e => e.t === 'use' && e.who === '고속 고블린'), 'fast enemy should also act');
+  // Text quick parse (chat mode) with colon skill matching ally prefix ("화염: 섬광참" vs ally "화염 정령")
+  const r2 = await G.playLocal(s, '⚔[화염: 섬광참 → 고속 고블린]', deps);
+  assert.ok(r2?.entry?.events.some(e => e.t === 'use' && e.who === '한결' && e.skill === '화염: 섬광참'), 'colon skill hijacked or skipped');
+});
+
+/* 32 */ await test('파티전: 유저 충전이 끊기면 비틀거림 후 다음 턴에 정상 회복된다', () => {
+  const me = { ...C.normalizeSheet({ name: '한결', isPlayer: true, tier: 'C', hp: 3000, sp: 200, stats: { STR: 60, INT: 60, AGI: 20, END: 50, SEN: 40, LUK: 20 },
+    skills: [{ name: '메테오', kind: 'magic', power: 140, cost: 40, charge: true }, { name: '섬광 베기', kind: 'physical', power: 60, cost: 10 }] }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const foe = C.normalizeSheet({ name: '고속 기사', tier: 'C', hp: 5000, sp: 100, stats: { STR: 60, INT: 20, AGI: 95, END: 40, SEN: 80, LUK: 30 },
+    skills: [{ name: '강타', kind: 'physical', power: 60, cost: 0 }] }, PROFILE, { side: 'enemy' });
+  let b = E.createBattle({ party: [me], enemies: [foe], profile: PROFILE, seed: 'brk' });
+  // Turn 1: player starts charging
+  let r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '메테오', target: '고속 기사' }]);
+  assert.ok(r.battle.fighters.find(f => f.isPlayer).charging, 'player should be charging');
+  // Turn 2: faster enemy breaks the charge before player releases
+  r.battle.fighters.find(f => f.isPlayer).charging.threshold = 1;
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'release', skill: '메테오' }]);
+  assert.ok(r.events.some(e => e.t === 'break' && e.who === '한결'), 'charge should be broken');
+  assert.ok(!r.events.some(e => e.t === 'use' && e.who === '한결' && e.skill === '메테오'), 'broken charge must not release');
+  assert.ok(r.events.some(e => e.t === 'staggered' && e.who === '한결'), 'player should stagger this turn');
+  assert.equal(r.battle.fighters.find(f => f.isPlayer).staggered, false, 'stagger must clear after taking effect');
+  // Turn 3: player acts normally again
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '섬광 베기', target: '고속 기사' }]);
+  assert.ok(r.events.some(e => e.t === 'use' && e.who === '한결' && e.skill === '섬광 베기'), 'player must be able to use skills next turn');
+});
+
+/* 33 */ await test('서술: blocked 이벤트가 전투 후열 차단과 잠입 불가(why)를 모두 정확히 출력한다', async () => {
+  const N = await import(here + 'narrate.js');
+  assert.match(N.eventLine({ t: 'blocked', who: '철수', target: '궁수' }), /후열.*궁수|궁수.*후열/);
+  assert.match(N.eventLine({ t: 'blocked', who: '철수', why: 'sp' }), /숨이 차서/);
+  assert.match(N.eventLine({ t: 'blocked', who: '철수', why: 'stones' }), /돌이 없다/);
+  assert.match(N.pkLines([{ t: 'blocked', who: '철수', target: '궁수' }])[0], /궁수/);
+  assert.match(N.pkLines([{ t: 'blocked', who: '철수', why: 'sp' }])[0], /숨이 차서/);
+});
+
+/* 34 */ await test('엔진: 다중 행동(actions:2) 전투원의 staggered는 1회만 발동하고 두 번째 행동은 정상 진행한다', () => {
+  const me = { ...C.normalizeSheet({ name: '한결', isPlayer: true, tier: 'C', hp: 3000, sp: 100, stats: { STR: 40, AGI: 20, END: 50, INT: 30, SEN: 30, LUK: 20 } }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const boss = C.normalizeSheet({ name: '쌍두룡', tier: 'C', threat: 'boss', actions: 2, hp: 5000, sp: 100, stats: { STR: 40, AGI: 50, END: 40, INT: 40, SEN: 40, LUK: 20 }, skills: [{ name: '물어뜯기', kind: 'physical', power: 50, cost: 0 }] }, PROFILE, { side: 'enemy' });
+  const b = E.createBattle({ party: [me], enemies: [boss], profile: PROFILE, seed: 'multi-stag' });
+  b.fighters.find(f => f.name === '쌍두룡').staggered = true;
+  const r = E.resolveTurn(b, [{ actor: 'player', type: 'defend' }]);
+  const bossEv = r.events.filter(e => e.who === '쌍두룡');
+  assert.equal(bossEv.filter(e => e.t === 'staggered').length, 1, `expected 1 stagger, got ${JSON.stringify(bossEv.map(e => e.t))}`);
+  assert.equal(bossEv[0].t, 'staggered', 'stagger should occur on slot 0 before slot 1 acts');
+  assert.ok(bossEv.some(e => e.t === 'use'), 'second action slot should still act');
+});
+
+/* 35 */ await test('채팅 퀵 파싱: 중첩 대괄호 스킬명과 1:1 대결 콜론 스킬명을 깨지지 않게 파싱한다', async () => {
+  const Sh = await import(here + 'modes/shared.js');
+  const Duel = (await import(here + 'modes/duel.js')).default;
+  const blocks = Sh.quickBlocks('⚔[[고유] 뇌격 → 고속 고블린 #ab12] ⚔[화염: 섬광참 → 늑대]');
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].body, '[고유] 뇌격 → 고속 고블린');
+  assert.equal(blocks[0].nonce, 'ab12');
+  assert.equal(blocks[1].body, '화염: 섬광참 → 늑대');
+  const stDuel = Duel.create({
+    spec: { flee: true }, profile: PROFILE, seed: 'duel-q', settings: SET,
+    party: [{ id: 'player', isPlayer: true, name: '한결', hp: 500, sp: 100, skills: [{ name: '제1장: 일격', kind: 'physical', power: 60, cost: 10 }, { name: '제2장: 일격', kind: 'magic', power: 70, cost: 10 }] }],
+    enemies: [{ name: '라이벌', hp: 500, sp: 100 }],
+  });
+  assert.equal(Duel.quick('제2장: 일격 → 라이벌', stDuel)?.skill, '제2장: 일격');
+  assert.equal(Duel.quick('한결: 제1장: 일격 → 라이벌', stDuel)?.skill, '제1장: 일격');
+});
+
+/* 36 */ await test('페르소나 조회: ST의 persona_descriptions / chatMetadata / extensionPrompts를 폴백으로 정확히 읽는다', async () => {
+  const A = await import(here + 'assist.js');
+  // 1) legacy persona_description is empty, but chatMetadata.persona points to persona_descriptions entry
+  const r1 = A.resolvePersona({
+    name1: '아르테',
+    chatMetadata: { persona: 'arte.png' },
+    powerUserSettings: {
+      persona_description: '',
+      personas: { 'arte.png': '아르테', 'other.png': '초보' },
+      persona_descriptions: {
+        'arte.png': { description: 'S급 대마법사. 8서클 화염 마법을 구사한다.' },
+        'other.png': { description: '하급 모험가' },
+      },
+    },
+  }, null);
+  assert.match(r1.text, /S급 대마법사/);
+  assert.equal(r1.source, 'chatMetadata:arte.png');
+
+  // 2) no chatMetadata lock, matched via name1 in personas
+  const r2 = A.resolvePersona({
+    name1: '아르테',
+    powerUserSettings: {
+      persona_description: '하급 모험가 (오래된 값)',
+      personas: { 'arte.png': '아르테' },
+      persona_descriptions: { 'arte.png': { description: '최상급 검사' } },
+    },
+  }, null);
+  assert.equal(r2.text, '최상급 검사');
+  assert.equal(r2.source, 'name1:arte.png');
+
+  // 3) extensionPrompts['1_persona'] fallback
+  const r3 = A.resolvePersona({
+    name1: '유저',
+    powerUserSettings: { persona_description: '' },
+    extensionPrompts: { '1_persona': { value: 'A랭크 암살자' } },
+  }, null);
+  assert.equal(r3.text, 'A랭크 암살자');
+  assert.equal(r3.source, 'extensionPrompts');
+});
+
+/* 37 */ await test('등급 매칭: tierOf가 긴 이름(최상급/SS)을 짧은 이름(상급/S)보다 우선 매칭한다', () => {
+  const prof = C.normalizeProfile({
+    name: '테스트',
+    tiers: [
+      { name: '하급', aliases: ['1서클'], stat: 20, hp: 200, sp: 100 },
+      { name: '상급', aliases: ['5서클'], stat: 60, hp: 600, sp: 300 },
+      { name: '최상급', aliases: ['8서클'], stat: 120, hp: 1200, sp: 600 },
+    ],
+  });
+  assert.equal(C.tierOf(prof, '최상급 마법사')?.name, '최상급');
+  assert.equal(C.tierOf(prof, '상급 기사')?.name, '상급');
+  assert.equal(C.tierOf(prof, '8서클 대마법사')?.name, '최상급');
+});
+
+/* 38 */ await test('배틀 생성 2단계: 1단계는 로어북 미조회, 도감/잡병은 즉시 생성, 미등록 주요 인물만 로어 조회 후 도감 등록한다', async () => {
+  const s = G.stateOf({});
+  s.profile = PROFILE;
+  s.player = { ...C.normalizeSheet({ name: '한결', isPlayer: true, tier: 'C', hp: 500, sp: 200, stats: { STR: 40, AGI: 40, END: 40, INT: 40, SEN: 40, LUK: 30 } }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const store = new Map();
+  const codex = { list: () => [...store.values()], put: e => store.set(e.id, e) };
+  // Pre-register companion '세라' in codex
+  G.registerCharacter(s, { codex }, { name: '세라', tier: 'C', hp: 450, sp: 220, skills: [{ name: '치유의 빛', kind: 'heal', power: 70, cost: 20, target: 'ally' }] }, { side: 'ally' });
+
+  const loreQueries = [];
+  let auxCalls = 0;
+  const deps = {
+    settings: () => ({ ...SET, autoRegister: true, forgeLore: 'auto' }),
+    auxReady: () => true,
+    persona: () => ({ name: '한결', text: 'C급 검사' }),
+    scene: () => '흑기사 발렌틴이 고블린 둘을 이끌고 나타났고, 세라가 옆에 섰다.',
+    lore: async () => { throw new Error('forgeSpec must not dump full lorebook'); },
+    matchLore: async q => {
+      loreQueries.push(q);
+      return { text: '발렌틴은 B급 암흑 기사단장이다. 흑염참을 사용한다.', names: ['발렌틴'], important: true };
+    },
+    mentions: () => '발렌틴이 검은 검을 뽑았다.',
+    character: () => '',
+    rosterBrief: () => '',
+    codex,
+    auxJson: async (msgs) => {
+      auxCalls++;
+      if (auxCalls === 1) {
+        // Step 1 must NOT have called matchLore yet
+        assert.equal(loreQueries.length, 0, 'Step 1 planner must not call matchLore before classifying');
+        return {
+          mode: 'party', title: '흑기사의 습격', place: '성문 앞', flee: true,
+          enemies: [
+            { kind: 'major', name: '발렌틴', aliases: ['흑기사'], threat: 'boss', row: 'front', concept: '암흑 기사단장' },
+            { kind: 'mook', name: '고블린 병사', count: 2, threat: 'minion', tier: 'E', row: 'front', skills: [{ name: '창 찌르기', kind: 'physical', power: 55, cost: 10 }] },
+          ],
+          allies: [
+            { kind: 'codex', ref: '세라', row: 'back' },
+          ],
+        };
+      }
+      // Step 2: only called for unregistered major character '발렌틴'
+      const userMsg = msgs.find(m => m.role === 'user')?.content ?? '';
+      assert.match(userMsg, /발렌틴/);
+      assert.match(userMsg, /흑염참/);
+      return {
+        name: '발렌틴', tier: 'B', threat: 'boss', hp: 1400, sp: 400,
+        stats: { STR: 70, AGI: 55, END: 65, INT: 50, SEN: 50, LUK: 30 },
+        skills: [{ name: '흑염참', kind: 'physical', power: 110, cost: 30, element: 'dark' }],
+      };
+    },
+  };
+
+  const spec = await G.forgeSpec(s, deps, { hint: '' });
+  assert.equal(auxCalls, 2, '1 planner call + 1 sheet call for unregistered major only');
+  assert.equal(loreQueries.length, 1, 'matchLore should be called ONLY once for 발렌틴');
+  assert.match(loreQueries[0], /발렌틴/);
+  assert.equal(spec.enemies.length, 3, '1 major boss + 2 cloned mooks');
+  assert.equal(spec.enemies[0].name, '발렌틴');
+  assert.ok(spec.enemies[0].codexId, 'major character must be registered into codex and linked');
+  assert.equal(spec.enemies[1].name, '고블린 병사 A');
+  assert.equal(spec.enemies[2].name, '고블린 병사 B');
+  assert.ok(!spec.enemies[1].codexId, 'mooks must NOT be registered into codex');
+  assert.equal(spec.allies.length, 1);
+  assert.equal(spec.allies[0].name, '세라');
+  assert.ok(spec.allies[0].codexId, 'codex ally reused directly');
+  assert.ok(G.codexFind({ codex }, '발렌틴'), '발렌틴 should now exist in codex for future battles');
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

@@ -80,7 +80,9 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'charge': return ko ? `⚡ ${e.who}: 「${e.skill}」 충전 시작! (다음 턴 발동)` : `${e.who} begins charging "${e.skill}" (it will fire next turn unless broken).`;
     case 'break': return ko ? `  💥 ${e.who}의 「${e.skill}」 충전이 끊김! 비틀거림` : `  ${e.who}'s charge of "${e.skill}" is BROKEN; they stagger.`;
     case 'parry': return ko ? `  ✦ ${e.who} 완벽한 패링! ${e.attacker}의 공격을 튕겨냄` : `  ${e.who} PARRIES ${e.attacker}'s attack perfectly.`;
-    case 'blocked': return ko ? `  ! ${e.target}은(는) 후열이라 근접 공격이 닿지 않음 → 앞줄 공격` : `  ${e.target} is behind the front line; ${e.who}'s melee attack hits the front instead.`;
+    case 'blocked':
+      if (e.why) return ko ? `  · ${{ stones: '던질 돌이 없다', sp: '숨이 차서 달릴 수 없다', reach: '손이 닿지 않는다' }[e.why] ?? '할 수 없다'}` : `  Can't do that (${e.why}).`;
+      return ko ? `  ! ${e.target}은(는) 후열이라 근접 공격이 닿지 않음 → 앞줄 공격` : `  ${e.target} is behind the front line; ${e.who}'s melee attack hits the front instead.`;
     case 'swap': return ko ? `▶ ${e.who}: ${e.with ? `${e.with}와(과) 자리 교대` : e.row === 'back' ? '후열로 이동' : '전열로 이동'}` : `${e.who} ${e.with ? `swaps places with ${e.with}` : `moves to the ${e.row} row`}.`;
     case 'scan': return ko ? `▶ ${e.who}: ${e.target} 관찰 — ${e.ok ? `정보 획득 (${['없음', '관찰', '분석 완료'][e.to]})` : '파악 실패'}` : `${e.who} studies ${e.target}: ${e.ok ? 'learns its strengths and weaknesses' : 'fails to read it'}.`;
     case 'rout': return ko ? `  🏳 ${e.who} 대장이 쓰러지자 도망침` : `  With their leader down, ${e.who} breaks and flees.`;
@@ -107,7 +109,6 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'rest': return ko ? `▶ ${e.who}: 휴식 (기력 +${e.sp})` : `▶ ${e.who} rests (+${e.sp}).`;
     case 'glance': return ko ? `  · ${e.who}의 시야 끝에 걸렸지만 눈치채지 못함 (운)` : `  ${e.who} glances this way but doesn't register anything.`;
     case 'calm': return ko ? `  · ${e.who}: 별일 아니라며 원래 자리로` : `  ${e.who} shrugs it off and returns to their post.`;
-    case 'blocked': return ko ? `  · ${{ stones: '던질 돌이 없다', sp: '숨이 차서 달릴 수 없다', reach: '손이 닿지 않는다' }[e.why] ?? '할 수 없다'}` : `  Can't do that (${e.why}).`;
     case 'observe': return ko ? '  · 경비들의 움직임을 파악함 (3턴)' : '  The guards\' patterns are now known for a few turns.';
     case 'distract': return ko ? `  · ${e.target}의 주의가 다른 곳으로 쏠림` : `  ${e.target} is distracted and turns away.`;
     case 'takedown': return ko ? `  ${e.ok ? '✔' : '✘'} ${e.target} 제압 ${e.ok ? '성공 — 소리 없이 쓰러뜨림' : '실패 — 상대가 알아챔!'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Takedown on ${e.target}: ${e.ok ? 'SUCCESS, silently subdued' : 'FAILED, they notice'}.`;
@@ -198,7 +199,9 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'sp': L(`${e.who}의 기력이 회복되었다!`); break;
       case 'skip': L(`${j(e.who, '은', '는')} ${STATUS[e.status]?.ko ?? ''} 때문에 움직일 수 없다!`); break;
       case 'confused': L(`${j(e.who, '은', '는')} 혼란에 빠져 자신을 공격했다!`); break;
-      case 'defend': if (!e.auto) L(`${j(e.who, '은', '는')} 방어 태세를 취했다!`); break;
+      case 'defend': L(e.auto ? `${j(e.who, '은', '는')} 몸을 사리며 방어 태세를 취했다!` : `${j(e.who, '은', '는')} 방어 태세를 취했다!`); break;
+      case 'wait': L(`${j(e.who, '은', '는')} 잠시 숨을 고르며 기다렸다.`); break;
+      case 'notarget': L('하지만 대상이 없었다!'); break;
       case 'flee': L(e.blocked ? '이 싸움에서는 도망칠 수 없다!' : e.ok ? '무사히 도망쳤다!' : '도망칠 수 없었다!'); break;
       case 'item': L(`${j(e.who, '은', '는')} ${j(e.item, '을', '를')} 사용했다!`); break;
       case 'noitem': L(e.unusable ? `${e.item}${hasBatchim(e.item) ? '은' : '는'} 지금 쓸 수 없다!` : `${e.item}이(가) 없다!`); break;
@@ -216,7 +219,7 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'revive': L(`${j(e.who, '이', '가')} 다시 일어섰다!`); break;
       case 'cleanse': L(`${e.who}의 상태이상이 깨끗이 나았다!`); break;
       case 'fallback': L(`${e.skill ? `${e.skill}${hasBatchim(e.skill) ? '은' : '는'}` : '그 기술은'} 지금 쓸 수 없다!`); break;
-      case 'blocked': L(`앞을 막는 적 때문에 ${e.target}에게 닿지 않는다!`); break;
+      case 'blocked': L(e.why ? ({ stones: '던질 돌이 없다!', sp: '숨이 차서 달릴 수 없다!', reach: '손이 닿지 않는다!' }[e.why] ?? '할 수 없었다.') : `앞을 막는 적 때문에 ${e.target}에게 닿지 않는다!`); break;
       case 'improv': L(`${e.who}의 ${e.desc || '임기응변'}!`, `${e.blocked ? '그건 불가능하다!' : { crit: '대성공!', success: '성공했다!', fail: '실패했다…', fumble: '대실패! 역효과가 났다!' }[e.result]}${showRolls && e.roll ? ` (🎲${e.roll} / ${e.chance}%)` : ''}`); break;
       case 'yield': L(`${j(e.who, '은', '는')} 싸울 의지를 잃었다!`); break;
       case 'stances': L(`${e.me}의 ${e.an ?? STANCE[e.a]}!`, `${e.foe}의 ${e.bn ?? STANCE[e.b]}!`); break;
@@ -238,7 +241,6 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'breakbonus': L('기세를 탔다! 기력이 돌아온다!'); break;
       case 'glance': L(`${j(e.who, '이', '가')} 이쪽을 봤지만… 눈치채지 못했다.`); break;
       case 'calm': L(`${j(e.who, '은', '는')} 의심을 풀고 돌아갔다.`); break;
-      case 'blocked': L({ stones: '던질 돌이 없다!', sp: '숨이 차서 달릴 수 없다!', reach: '손이 닿지 않는다!' }[e.why] ?? '할 수 없었다.'); break;
       case 'suspicious': L(e.who ? (e.why === 'body' ? `${j(e.who, '이', '가')} 쓰러진 동료를 발견했다!` : `${j(e.who, '이', '가')} 소리를 듣고 다가온다…`) : '경비들이 수상함을 느끼기 시작했다…'); break;
       case 'detected': L(e.why === 'caught' ? '붙잡혔다!' : e.why === 'fight' ? '정면으로 맞선다!' : '들켰다!'); break;
       case 'transition': L('전투가 시작됐다!'); break;
