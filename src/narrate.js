@@ -176,7 +176,7 @@ export function pkLines(events, { showRolls = true } = {}) {
     const L = (...xs) => out.push(...xs.filter(Boolean));
     switch (e.t) {
       case 'turn': if (e.ambush) L('기습이다!'); break;
-      case 'use': L(e.basic ? `${e.who}의 공격!` : `${e.who}의 ${e.skill}!`); break;
+      case 'use': L(e.basic ? `${e.who}의 공격!` : `${e.who}의 ${e.skill}!`, e.line ? `${e.who}: 「${e.line}」` : ''); break;
       case 'hit':
         if (e.label === '반격') { L(`${e.who}의 반격!`); break; }
         if (e.label) { L(`${j(e.target, '은', '는')} ${e.label}${hasBatchim(e.label) ? '으로' : '로'} 피해를 입었다!`); break; }
@@ -191,7 +191,10 @@ export function pkLines(events, { showRolls = true } = {}) {
         else if (e.eff === 'immune') L(`${e.target}에게는 효과가 없는 것 같다…`);
         break;
       case 'miss': L(`${e.target}에게는 맞지 않았다!`); break;
-      case 'down': L(`${j(e.who, '은', '는')} 쓰러졌다!`); break;
+      case 'down': L(e.line ? `${e.who}: 「${e.line}」` : '', `${j(e.who, '은', '는')} 쓰러졌다!`); break;
+      case 'dot': L(`${j(e.who, '은', '는')} ${STATUS[e.status]?.ko ?? e.status} 때문에 ${e.dmg}의 피해를 입었다!`); break;
+      case 'consume': { const nm = STATUS[e.status]?.ko ?? e.status ?? '표식'; L(`${e.who}에게 걸린 ${j(nm, '이', '가')} 터졌다!`); break; }
+      case 'finisher': L(e.line ? `${e.who}: 「${e.line}」` : '', `${j(e.who, '이', '가')} ${j(e.target, '을', '를')} 끝장냈다!`); break;
       case 'status': L(`${j(e.who, '은', '는')} ${STATUS[e.status]?.ko ?? e.status} 상태가 되었다!`); break;
       case 'resist': L(`${e.who}에게는 통하지 않았다!`); break;
       case 'stage': L(`${e.who}의 ${j(STAT_KO[e.stat] ?? e.stat, '이', '가')} ${Math.abs(e.delta) > 1 ? '크게 ' : ''}${e.delta > 0 ? '올라갔다!' : '떨어졌다!'}`); break;

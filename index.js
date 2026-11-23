@@ -7,6 +7,7 @@ import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
   playLocal, setupChat, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
+  claimLoot, restAfterBattle,
 } from './src/game.js';
 import { sheetMessages, castMessages, stateMessages, briefText } from './src/prompts.js';
 // 타이밍 리듬게임은 보류 중 (요청에 따라 비활성화). 다시 켜려면 아래 import와 modeAct의 타이밍 블록 주석을 해제.
@@ -22,7 +23,7 @@ const DEFAULTS = {
   length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
   timingMode: 'off', modes: { party: true, duel: true, stealth: true }, showThreat: true,
-  playMode: 'panel', autoPlay: '1300', fightGuard: true, stateWatch: 'auto', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary',
+  playMode: 'panel', autoPlay: '1300', fightGuard: true, stateWatch: 'auto', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary', previewBeforeStart: true,
 };
 
 const ctx = () => SillyTavern.getContext();
@@ -269,11 +270,11 @@ async function processMessage(index) {
   afterChange();
 }
 
-const STATE_CUES = /쉬[었었고며자]|휴식|잠[을이에들]|잠든|잤|자고|눈을 떴|아침이|하룻밤|숙소|여관|야영|노숙|식사|밥을|먹[었고으]|치료|치유|회복|붕대|포션|물약|약을|상처|부상|다쳤|다친|피를|출혈|쓰러|기절|독에|중독|지쳤|탈진|녹초|마나|마력을|기력|체력|숨을 고|rest|sleep|slept|heal|potion|wound|injur|bandage|meal|camp|exhaust/i;
+const STATE_CUES = /쉬[었었고며자]|휴식|잠[을이에들]|잠든|잤|자고|눈을 떴|아침이|하룻밤|숙소|여관|야영|노숙|식사|밥을|먹[었고으]|치료|치유|회복|붕대|포션|물약|약을|상처|부상|다쳤|다친|피를|출혈|쓰러|기절|독에|중독|지쳤|탈진|녹초|마나|마력을|기력|체력|숨을 고|각성|승급|돌파|깨달|익혔|습득|배웠|전수|레벨|서클|등급|진화|합류|동료|무기|장비|강해|단련|수련|rest|sleep|slept|heal|potion|wound|injur|bandage|meal|camp|exhaust|awaken|rank|level|learn|skill|master|join|equip|upgrade/i;
 /**
- * State watcher (outside battles): the aux model reads a story message and returns <bt-change>-style lines,
- * so resting, treatment, wounds or spent mana move HP/SP/items without a fixed rule.
- * "auto" asks only when the passage mentions such things; "always" reads every message.
+ * State & growth watcher (outside battles): the aux model reads a story message and returns <bt-change>-style lines,
+ * so resting, treatment, wounds, rank-ups, new skills, companion joins or codex NPC growth update automatically.
+ * "auto" asks only when the passage mentions such cues; "always" reads every message.
  */
 async function watchState(s, m, index) {
   const set = settings();
@@ -282,19 +283,24 @@ async function watchState(s, m, index) {
   const text = stripBlocks(String(m.mes ?? ''));
   if (text.length < 40 || (mode === 'auto' && !STATE_CUES.test(text))) return;
   const p = profileOf(s);
-  const line = x => `- ${x.name}${x.isPlayer ? ' ({{user}})' : ''}: ${p.hpLabel} ${x.hp}/${x.maxHp}, ${p.spLabel} ${x.sp}/${x.maxSp}${x.statuses?.length ? `, status: ${x.statuses.map(st => st.id).join(' ')}` : ''}`;
+  const line = x => `- ${x.name}${x.isPlayer ? ' ({{user}})' : ''}${x.tier ? ` [${x.tier}]` : ''}: ${p.hpLabel} ${x.hp}/${x.maxHp}, ${p.spLabel} ${x.sp}/${x.maxSp}${x.statuses?.length ? `, status: ${x.statuses.map(st => st.id).join(' ')}` : ''}`;
+  const codex = deps().codex.list().slice(0, 30).map(e => {
+    const sh = rosterSheet(s, e);
+    return `- ${e.name}${sh.tier ? ` [${sh.tier}]` : ''}${sh.skills?.length ? ` · ${sh.skills.slice(0, 4).map(k => k.name).join(', ')}` : ''}${e.locked ? ' (locked)' : ''}`;
+  }).join('\n');
   try {
     const r = await deps().auxJson(stateMessages({
       status: [s.player, ...s.companions].map(line).join('\n'),
       inventory: s.inventory.filter(i => i.count > 0).map(i => `${i.name} ×${i.count}`).join(', '),
       text: text.slice(-3500), recent: recentScene(ctx().chat.slice(0, index), 2, stripBlocks).slice(-1200),
-    }), { maxTokens: 800 });
+      codex, profile: p,
+    }), { maxTokens: 900 });
     const lines = (Array.isArray(r?.changes) ? r.changes : []).map(String).filter(Boolean).slice(0, 12);
     if (!lines.length) return;
     const ops = parseChange(lines.join('\n'));
     const done = applyChanges(s, ops, deps());
-    trace('change', `상태 감시 · 변경 ${done.length}건 (메시지 #${index})`, `이유: ${r?.why ?? ''}\n줄: ${lines.join(' / ')}\n적용: ${done.join(', ') || '(없음)'}`);
-    if (done.length) toast(`🩹 ${done.join(', ')}`);
+    trace('change', `상태·성장 감시 · 변경 ${done.length}건 (메시지 #${index})`, `이유: ${r?.why ?? ''}\n줄: ${lines.join(' / ')}\n적용: ${done.join(', ') || '(없음)'}`);
+    if (done.length) toast(`📝 ${done.join(', ')}`);
   } catch (e) { trace('error', '상태 감시 실패', String(e?.message ?? e)); }
 }
 
@@ -308,14 +314,21 @@ async function startFrom(index, { hint = '', spec = null } = {}, s = state()) {
     try {
       await ensurePlayer(s, deps());
       const finalSpec = spec ? resolveRegistered(s, spec, deps(), set) : await forgeSpec(s, deps(), { hint: hint ?? '' });
-      const b = beginBattle(s, finalSpec, { originIndex: index, originHash: hashStr(m.mes), settings: set });
-      trace('start', `전투 시작: ${b.mode} · ${b.title || ''}`, `신호: ${spec ? '<bt-battle> 직접 작성' : `<bt-start> ${hint}`}\n적: ${finalSpec.enemies.map(e => `${e.name}${e.tier ? ` [${e.tier}]` : ''}`).join(', ')}\n위협도: ${b.threat?.level ?? '?'}${b.spec?.threatFit ? `\n⚖️ 실력에 맞게 적 조정: 전력비 ${b.spec.threatFit.from} → ${b.spec.threatFit.to} (난이도 상한 ${b.spec.threatFit.cap})` : b.spec?.outmatched ? `\n⚠ 압도적 허용: ${b.spec.outmatchedWhy || '(이유 없음)'}` : ''}`);
       m.extra = { ...(m.extra ?? {}), battletale: { ...(m.extra?.battletale ?? {}) } };
-      m.extra.battletale.origin = [...(m.extra.battletale.origin ?? []), b.id];
       delete m.extra.battletale.pending;
-      announce(b);
-      ui.msg = null; ui.page = 'main'; ui.openingShown = null;
-      if (set.playMode !== 'chat') setTimeout(() => togglePanel(true), 50);
+      if (set.previewBeforeStart !== false && set.playMode !== 'chat') {
+        ui.preview = { spec: finalSpec, index, mode: finalSpec.mode ?? 'party', hint: hint ?? '' };
+        toast('⚔️ 출전 구성을 확인하고 전투를 시작하세요!', 'info');
+        setTimeout(() => togglePanel(true), 50);
+      } else {
+        ui.preview = null;
+        const b = beginBattle(s, finalSpec, { originIndex: index, originHash: hashStr(m.mes), settings: set });
+        trace('start', `전투 시작: ${b.mode} · ${b.title || ''}`, `신호: ${spec ? '<bt-battle> 직접 작성' : `<bt-start> ${hint}`}\n적: ${finalSpec.enemies.map(e => `${e.name}${e.tier ? ` [${e.tier}]` : ''}`).join(', ')}\n위협도: ${b.threat?.level ?? '?'}${b.spec?.threatFit ? `\n⚖️ 실력에 맞게 적 조정: 전력비 ${b.spec.threatFit.from} → ${b.spec.threatFit.to} (난이도 상한 ${b.spec.threatFit.cap})` : b.spec?.outmatched ? `\n⚠ 압도적 허용: ${b.spec.outmatchedWhy || '(이유 없음)'}` : ''}`);
+        m.extra.battletale.origin = [...(m.extra.battletale.origin ?? []), b.id];
+        announce(b);
+        ui.msg = null; ui.page = 'main'; ui.openingShown = null;
+        if (set.playMode !== 'chat') setTimeout(() => togglePanel(true), 50);
+      }
     } catch (e) {
       console.error('[BattleTale] start', e);
       toast(`전투를 준비하지 못했어요: ${e.message}`, 'error');
@@ -336,7 +349,16 @@ function announce(b) {
   toast(`${M.icon} ${M.ko} 개시! ${foes}${threat && settings().showThreat ? ` · 위협도 ${threat}` : ''}${b.spec?.threatFit ? ' · ⚖️ 실력에 맞게 조정됨' : ''}${b.opening?.length ? ' · 기습당함!' : ''}`, b.threat?.level === 'overwhelming' ? 'warning' : 'success');
 }
 
-async function manualStart(hint = '', mode = null) {
+async function commitBattle(s, spec, { index, mode = null } = {}) {
+  const chat = ctx().chat;
+  const b = beginBattle(s, spec, { originIndex: index, originHash: hashStr(chat[index]?.mes ?? ''), settings: settings(), mode });
+  if (chat[index]) chat[index].extra = { ...(chat[index].extra ?? {}), battletale: { ...(chat[index].extra?.battletale ?? {}), origin: [b.id], seen: hashStr(chat[index].mes) } };
+  announce(b);
+  await ctx().saveChat?.();
+  return b;
+}
+
+async function manualStart(hint = '', mode = null, { skipPreview = false } = {}) {
   if (!enabledHere()) return toast('이 채팅에선 꺼져 있어요.', 'warning');
   const s = state();
   if (s.battle?.status === 'active') return toast('이미 진행 중이에요.', 'warning');
@@ -348,10 +370,13 @@ async function manualStart(hint = '', mode = null) {
     try {
       await ensurePlayer(s, deps());
       const spec = await forgeSpec(s, deps(), { hint });
-      const b = beginBattle(s, spec, { originIndex: index, originHash: hashStr(chat[index]?.mes ?? ''), settings: settings(), mode });
-      if (chat[index]) chat[index].extra = { ...(chat[index].extra ?? {}), battletale: { ...(chat[index].extra?.battletale ?? {}), origin: [b.id], seen: hashStr(chat[index].mes) } };
-      announce(b);
-      await ctx().saveChat?.();
+      if (!skipPreview && settings().previewBeforeStart !== false) {
+        ui.preview = { spec, index, mode: mode ?? spec.mode ?? 'party', hint };
+        toast('⚔️ 출전 구성을 확인하고 전투를 시작하세요!', 'info');
+      } else {
+        ui.preview = null;
+        await commitBattle(s, spec, { index, mode });
+      }
     } catch (e) { toast(`준비하지 못했어요: ${e.message}`, 'error'); }
   });
   await saveState();
@@ -546,6 +571,80 @@ const panelApi = {
     if (!e) return;
     const sh = e.sheet ?? {};
     return panelApi.genCodex({ id, name: e.name, concept: e.concept ?? sh.desc ?? '', tier: '', shape: sh.shape ?? '', aliases: (sh.aliases ?? []).join(', ') });
+  },
+  syncCodex: id => work(async () => {
+    const s = state();
+    const e = deps().codex.list().find(x => x.id === id);
+    if (!e) return;
+    if (!effectiveAuxReady()) return toast('먼저 ⚙ 설정에서 보조모델을 연결해 주세요.', 'warning');
+    const profile = profileOf(s);
+    const sh = rosterSheet(s, e);
+    const names = [e.name, ...(Array.isArray(sh.aliases) ? sh.aliases : [])];
+    const story = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(15, Number(settings().castScene) || 20) * 3 });
+    const scene = recentScene(ctx().chat, Math.max(6, Number(settings().sheetScene) || 6), { strip: stripBlocks });
+    if (!story && !scene) return toast('최근 대화에서 반영할 내용을 찾지 못했어요.', 'warning');
+    toast(`📖 "${e.name}" 최근 대화 반영해 갱신 중…`);
+    try {
+      const own = (await matchLore(settings(), names.join('\n')).catch(() => null))?.text ?? '';
+      const raw = await deps().auxJson(sheetMessages({
+        profile, lore: '', own, story, brief: briefText(s.brief),
+        persona: e.concept || sh.desc || e.name, personaName: e.name, npc: true,
+        card: characterText(), scene, roster: rosterBrief(e.name),
+        current: sh,
+        instruction: '기존 시트의 정체성과 핵심 스킬을 유지하되, 최근 대화에서 드러난 성장·등급 변화·새 기술 습득·장비 변경·현재 상태를 반영해 시트를 업데이트해줘.',
+      }), { maxTokens: 2400 });
+      if (!raw || typeof raw !== 'object') throw new Error('응답이 비어 있음');
+      const next = normalizeSheet({ ...raw, name: e.name, aliases: sh.aliases ?? raw.aliases }, profile, { side: e.side ?? 'enemy', seed: e.name });
+      deps().codex.put({ ...e, sheet: next, updatedAt: Date.now() });
+      if (s.roster?.[e.id]) s.roster[e.id] = { ...s.roster[e.id], hp: Math.min(s.roster[e.id].hp ?? next.maxHp, next.maxHp), maxHp: next.maxHp, sp: Math.min(s.roster[e.id].sp ?? next.maxSp, next.maxSp), maxSp: next.maxSp, tier: next.tier, stats: clone(next.stats), skills: clone(next.skills), lines: clone(next.lines) };
+      toast(`✨ "${e.name}" 최신 대화 반영 완료!`, 'success');
+      trace('change', `도감 대화 동기화 · ${e.name}`, `등급: ${sh.tier ?? '?'} → ${next.tier ?? '?'}\n스킬: ${next.skills.map(k => k.name).join(', ')}`);
+      await saveState();
+    } catch (err) { toast(`도감 갱신 실패: ${err.message}`, 'error'); }
+    afterChange();
+  }),
+  confirmPreview: () => work(async () => {
+    const s = state();
+    const pv = ui.preview;
+    if (!pv?.spec) return;
+    if (!pv.spec.enemies?.length) return toast('적이 최소 1명은 있어야 해요.', 'warning');
+    ui.preview = null;
+    try {
+      await commitBattle(s, pv.spec, { index: pv.index, mode: pv.mode });
+      await saveState();
+    } catch (e) { toast(`전투 시작 실패: ${e.message}`, 'error'); }
+    afterChange();
+  }),
+  cancelPreview: () => { ui.preview = null; refreshPanel(); },
+  reforgePreview: () => { const hint = ui.preview?.hint ?? ''; const mode = ui.preview?.mode ?? null; ui.preview = null; return manualStart(hint, mode); },
+  personaChanged: () => {
+    const s = state();
+    if (!s?.player) return false;
+    const info = personaInfo();
+    if (!info.text) return false;
+    const h = hashStr(info.text);
+    if (!s.playerPersonaHash) { s.playerPersonaHash = h; return false; }
+    return s.playerPersonaHash !== h;
+  },
+  dismissPersonaChange: async () => {
+    const s = state();
+    const info = personaInfo();
+    if (s && info.text) { s.playerPersonaHash = hashStr(info.text); await saveState(); }
+    refreshPanel();
+  },
+  claimLoot: async () => {
+    const s = state();
+    const added = claimLoot(s, s?.battle);
+    if (!added.length) return toast('이미 가방에 담았거나 전리품이 없어요.', 'info');
+    await saveState(); afterChange();
+    toast(`🎒 가방에 담음: ${added.join(', ')}`, 'success');
+  },
+  restAfter: async (kind = 'short') => {
+    const s = state();
+    const done = restAfterBattle(s, kind);
+    if (!done.length) return toast('이미 최상의 컨디션이에요.', 'info');
+    await saveState(); afterChange();
+    toast(kind === 'full' ? `🛏 완전 회복 완료 (${done.join(', ')})` : `🏕 짧은 휴식 +30% (${done.join(', ')})`, 'success');
   },
   setRuleSet: async sys => {
     const s = state();

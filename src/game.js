@@ -127,6 +127,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
     if (raw && fixedTier) raw.tier = fixedTier;
   }
   if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: fixedTier || profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
+  if (persona.text) s.playerPersonaHash = hashStr(persona.text);
   return applyPlayerSheet(s, deps, raw, { statFields, partial });
 }
 
@@ -428,19 +429,20 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
           if (settings.autoRegister !== false) {
             const entry = registerCharacter(s, deps, merged, { side });
             const base = clone(rosterSheet(s, entry));
-            return { ...base, codexId: entry.id, row: merged.row ?? base.row, intel: merged.intel ?? 2, threat: merged.threat ?? base.threat, style: merged.style ?? base.style, hp: base.hp > 0 ? base.hp : base.maxHp, maxHp: base.maxHp };
+            return { ...base, codexId: entry.id, _src: 'major', row: merged.row ?? base.row, intel: merged.intel ?? 2, threat: merged.threat ?? base.threat, style: merged.style ?? base.style, hp: base.hp > 0 ? base.hp : base.maxHp, maxHp: base.maxHp };
           }
-          return merged;
+          return { ...merged, _src: 'major' };
         }
       } catch (err) {
         deps.trace?.('error', `주요 인물 도감 생성 실패 · ${name}`, err?.message ?? String(err));
       }
       // Safe fallback if Step-2 call failed
       counts.mook++;
-      return { ...item, name, threat: item.threat ?? 'elite', desc: item.concept ?? item.desc ?? '' };
+      return { ...item, name, _src: 'mook', threat: item.threat ?? 'elite', desc: item.concept ?? item.desc ?? '' };
     };
 
-    const resolveList = async (list, side, cap) => {
+    const pendingMajors = [];
+    const resolveList = (list, side, cap) => {
       const out = [];
       for (const item of list ?? []) {
         if (out.length >= cap) break;
@@ -451,7 +453,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
         if (entry) {
           counts.codex++;
           const base = clone(rosterSheet(s, entry));
-          out.push({ ...base, codexId: entry.id, row: item?.row ?? base.row, intel: item?.intel ?? 2, threat: item?.threat ?? base.threat, style: item?.style ?? base.style, hp: base.hp > 0 ? base.hp : base.maxHp, maxHp: base.maxHp });
+          out.push({ ...base, codexId: entry.id, _src: 'codex', row: item?.row ?? base.row, intel: item?.intel ?? 2, threat: item?.threat ?? base.threat, style: item?.style ?? base.style, hp: base.hp > 0 ? base.hp : base.maxHp, maxHp: base.maxHp });
           continue;
         }
         if (typeof item !== 'object') continue;
@@ -459,7 +461,9 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
         const isMajor = kind === 'major' || (kind === 'codex' && !item.skills?.length && refName) || (item.named && !item.skills?.length && refName);
         if (isMajor && refName && !seenMajor.has(nk(refName))) {
           seenMajor.add(nk(refName));
-          out.push(await buildMajor(item, side));
+          const slot = out.length;
+          out.push(null);
+          pendingMajors.push({ out, slot, item, side });
           continue;
         }
         // Mook / generic monster (or inline sheet with skills)
@@ -467,7 +471,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
           const e = registerCharacter(s, deps, item, { side });
           deps.toast?.(`📖 도감에 등록: ${e.name}`);
           counts.major++;
-          out.push({ ...item, codexId: e.id });
+          out.push({ ...item, codexId: e.id, _src: 'major' });
           continue;
         }
         const n = clamp(Math.round(num(item.count, 1)), 1, Math.min(5, cap - out.length));
@@ -475,6 +479,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
         for (let i = 0; i < n && out.length < cap; i++) {
           const copy = clone(item);
           delete copy.count; delete copy.kind;
+          copy._src = 'mook';
           if (n > 1) copy.name = `${copy.name} ${letters[i] ?? (i + 1)}`;
           out.push(copy);
           counts.mook++;
@@ -483,8 +488,27 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
       return out;
     };
 
-    parsed.enemies = await resolveList(parsed.enemies, 'enemy', 8);
-    parsed.allies = await resolveList(parsed.allies, 'ally', 4);
+    const enemies = resolveList(parsed.enemies, 'enemy', 8);
+    const allies = resolveList(parsed.allies, 'ally', 4);
+    if (pendingMajors.length) {
+      const concurrency = clamp(Math.round(num(settings.majorConcurrency, 2)), 1, 4);
+      if (pendingMajors.length > 1) deps.toast?.(`📖 미등록 주요 인물 ${pendingMajors.length}명 도감 생성 중 (동시 최대 ${concurrency})…`, 'info');
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < pendingMajors.length) {
+          const task = pendingMajors[cursor++];
+          try {
+            task.out[task.slot] = await buildMajor(task.item, task.side);
+          } catch (err) {
+            deps.trace?.('error', `주요 인물 처리 예외 · ${task.item?.name ?? '?'}`, err?.message ?? String(err));
+            task.out[task.slot] = { ...task.item, _src: 'mook' };
+          }
+        }
+      };
+      await Promise.allSettled(Array.from({ length: Math.min(concurrency, pendingMajors.length) }, worker));
+    }
+    parsed.enemies = enemies.filter(Boolean);
+    parsed.allies = allies.filter(Boolean);
     if (!parsed.enemies.length) return resolveRegistered(s, fallbackSpec(hint, s), deps, settings);
     deps.trace?.('start', `전투 구성 · 도감 ${counts.codex} · 잡병 ${counts.mook} · 신규도감 ${counts.major}`, [
       `모드: ${parsed.mode ?? 'party'}${parsed.why ? ` (${parsed.why})` : ''}`,
@@ -973,6 +997,50 @@ export function promptFor(s, { lastUser, settings, deps = null }) {
   }
   const registered = (deps?.codex?.list() ?? []).map(e => e.name).slice(0, 15);
   return worldPrompt({ mode: settings.startMode, player: s.player, party: s.companions, profile, statusWindow: opts.statusWindow, changes: settings.trackChanges, lastResult: s.lastResult, registered, inventory: s.inventory ?? [], fightGuard: settings.fightGuard !== false, brief: s.brief?.parts?.storyteller ?? '' });
+}
+
+export function claimLoot(s, b) {
+  if (!b?.loot?.length || b.lootClaimed) return [];
+  const added = [];
+  s.inventory ??= [];
+  for (const raw of b.loot) {
+    const text = String(raw ?? '').trim();
+    if (!text) continue;
+    const m = /^(.+?)\s*[×xX*]\s*(\d+)$/.exec(text);
+    const name = (m ? m[1] : text).trim().slice(0, 50);
+    const count = m ? Math.max(1, Math.min(99, Number(m[2]) || 1)) : 1;
+    const it = s.inventory.find(i => norm(i.name) === norm(name));
+    if (it) it.count += count; else s.inventory.push({ name, count });
+    added.push(`${name}${count > 1 ? ` ×${count}` : ''}`);
+  }
+  b.lootClaimed = true;
+  return added;
+}
+
+export function restAfterBattle(s, kind = 'short') {
+  const members = [s.player, ...(s.companions ?? [])].filter(Boolean);
+  if (!members.length) return [];
+  const full = kind === 'full';
+  const done = [];
+  for (const m of members) {
+    const hp0 = m.hp, sp0 = m.sp, st0 = m.statuses?.length ?? 0;
+    if (full) {
+      m.hp = m.maxHp; m.sp = m.maxSp; m.statuses = [];
+    } else {
+      m.hp = clamp(m.hp + Math.round(m.maxHp * 0.3), 0, m.maxHp);
+      m.sp = clamp(m.sp + Math.round(m.maxSp * 0.3), 0, m.maxSp);
+      if (m.hp === 0 && m.maxHp > 0) m.hp = Math.max(1, Math.round(m.maxHp * 0.2));
+    }
+    if (m.hp !== hp0 || m.sp !== sp0 || (m.statuses?.length ?? 0) !== st0) {
+      done.push(m.name);
+      if (m.codexId && s.roster?.[m.codexId]) {
+        s.roster[m.codexId].hp = m.hp;
+        s.roster[m.codexId].sp = m.sp;
+        s.roster[m.codexId].statuses = [...(m.statuses ?? [])];
+      }
+    }
+  }
+  return done;
 }
 
 export const threatKo = b => THREAT_LABEL[b?.threat?.level] ?? '';

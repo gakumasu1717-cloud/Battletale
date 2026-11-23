@@ -101,7 +101,8 @@ export const SHEET_SCHEMA = `{
     "bonusIf": {"status": "mark|burn|poison|…|any", "mul": 1.6, "consume": true} | {"selfHpBelow": 0.5, "mul": 1.4} | {"targetFullHp": true, "mul": 1.3} | {"targetCharging": true, "mul": 1.5},
     "pivot": true, "protect": true, "move": "front|back", "pull": true
   }],
-  "passives": ["short text"], "desc": "one line"
+  "passives": ["short text"], "desc": "one line",
+  "lines": {"attack": "short in-character battle shout/line when using a big move (story language, <=25 chars)", "ko": "short defeat/collapse line (story language, <=25 chars)"}
 }`;
 
 const SKILL_GUIDE = `Skill design guide — rank sets the budget, the archetype sets the identity:
@@ -333,29 +334,38 @@ ${modes.map(m => `- ${modeGuide[m]}`).join('\n')}
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
-/* ====================== Aux model: tracking condition between fights ====================== */
-export function stateMessages({ status, inventory, text, recent = '' }) {
-  const system = 'You keep the condition of a roleplay party up to date, like a fair game master. You read one story passage and output only the state changes it implies. Output only JSON.';
+/* ====================== Aux model: tracking condition & growth between fights ====================== */
+export function stateMessages({ status, inventory, text, recent = '', codex = '', profile = null }) {
+  const system = 'You keep a roleplay party and registered characters up to date, like a fair game master. Read one story passage and output only the concrete state or growth changes it implies. Output only JSON.';
+  const tiers = profile?.tiers?.length ? `Tiers: ${profile.tiers.map(t => t.name).join(' < ')}` : '';
+  const stats = profile?.stats?.length ? `Stats: ${profile.stats.map(s => s.key).join(', ')}` : '';
   const user = `## Party now (authoritative numbers)
 ${status}
 Bag: ${inventory || '(empty)'}
-${recent ? `\n## Just before\n${recent}\n` : ''}
+${codex ? `\n## Registered codex characters (may grow/change in the story)\n${codex}\n` : ''}${tiers || stats ? `\n## Rule set\n${[tiers, stats].filter(Boolean).join(' · ')}\n` : ''}${recent ? `\n## Just before\n${recent}\n` : ''}
 ## New story passage
 ${text}
 
 ## Task
-Did this passage change anyone's HP, resource, status or items OUTSIDE a battle? Answer with ONE JSON object:
+Did this passage change anyone's HP, resource, status, items, stats, rank, skills, or companions OUTSIDE a battle? Answer with ONE JSON object:
 {"changes": ["<lines in this syntax>"], "why": "one short line"}
 Line syntax (who defaults to {{user}}; add a name for a companion):
   hp: full | +30% | -15% | +120 | Name +40%
   sp: full | +40% | -30% | Name full
   status: clear | Name clear
   item: Item name -1 | Item name +2
+  stat: STR +2 | AGI +1
+  skill: Skill name: physical 70 fire (short desc)
+  upgrade: Skill name power +10
+  join: Name | tier <tier>
+  leave: Name
+  npc: RegisteredName | tier <tier> | stat AGI +3 | learn Skill name: magic 70 ice (short desc) | upgrade Skill name power +10
 Guide — scale to what is actually shown:
 - full night's sleep / long safe rest / full treatment → hp: full, sp: full, status: clear
 - short break, meal, catching breath → hp +15..30%, sp +20..40%
 - potion, first aid, healing magic → as strong as described; a used consumable → item -1
 - new wounds, poison, exhaustion, spending mana on a spell → hp -10..40%, sp -20..60%; do not drop anyone to 0 unless they collapse
+- real training breakthrough, rank promotion, awakening, learning a named technique/spell, or a named companion joining/leaving → emit the matching stat / skill / upgrade / join / leave / npc line! Keep stat boosts modest (+1..+5) and only emit when the passage clearly shows it happening NOW.
 - Only what the passage shows happening now. No change, talk only, or a fight still in progress → {"changes": []}.`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }

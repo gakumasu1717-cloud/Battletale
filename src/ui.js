@@ -247,6 +247,7 @@ const SETTINGS = [
     { type: 'auxtools', basic: true, show: s => s.auxSource !== 'none' },
   ]],
   ['📖 전투 시작 · 로어', [
+    { key: 'previewBeforeStart', type: 'check', label: '전투 시작 전 출전 구성 확인 (프리뷰)', hint: '판별된 모드·적·아군을 한 번 보고 수정한 뒤 전투를 시작해요' },
     { key: 'startTrigger', type: 'select', label: '전투 신호가 오면', options: [['button', '메시지 아래 「⚔️ 전투 시작」 버튼 (추천)'], ['auto', '바로 자동 시작']] },
     { key: 'suggestStart', type: 'check', label: '신호가 없어도 위험한 장면이면 시작 버튼 제안', hint: '메인 모델이 태그를 빼먹거나, 첫 메시지부터 위기 상황일 때' },
     { key: 'startMode', type: 'select', label: '전투 감지', options: [['hybrid', '메인이 <bt-start> 표시 → 보조가 구성 (추천)'], ['main', '메인이 <bt-battle> 전체 작성'], ['manual', '수동 (버튼·/bt-start)']] },
@@ -263,7 +264,7 @@ const SETTINGS = [
     { key: 'statTag', type: 'text', label: '상태창 태그', ph: 'stat (비우면 안 씀)' },
     { key: 'statSync', type: 'select', label: '상태창 → 시트', options: [['all', 'HP/SP + 스탯 + 스킬'], ['hpsp', 'HP/SP만'], ['off', '안 함']] },
     { key: 'trackChanges', type: 'check', label: '회복·아이템·성장 <bt-change> 추적' },
-    { key: 'stateWatch', type: 'select', label: '보조모델 상태 감시 (휴식·치료·부상 → HP/SP)', options: [['auto', '자동: 휴식·치료·부상 묘사가 있을 때만 (추천)'], ['always', '매 메시지마다'], ['off', '끔 (메인 모델의 <bt-change>만)']], hint: '메인 모델이 <bt-change>를 빼먹어도 보조모델이 장면을 읽고 HP·기력·상태이상·아이템을 맞춰요', show: s => s.auxSource !== 'none' },
+    { key: 'stateWatch', type: 'select', label: '보조모델 상태·성장 감시 (휴식·부상·각성·새 스킬)', options: [['auto', '자동: 휴식·부상·성장·습득 묘사가 있을 때만 (추천)'], ['always', '매 메시지마다'], ['off', '끔 (메인 모델의 <bt-change>만)']], hint: '메인 모델에 부담을 주지 않고, 스토리 중 휴식·부상·승급·새 기술·동료 변화를 보조모델이 읽어 플레이어와 도감 시트에 자동 반영해요', show: s => s.auxSource !== 'none' },
     { key: 'autoRegister', type: 'check', label: '네임드 NPC 자동 도감 등록' },
     { key: 'hideBlocks', type: 'check', label: '채팅에서 <bt-…> 블록 숨기기' },
     { key: 'reviveAfter', type: 'check', label: '전투 후 기절한 동료 HP 1로' },
@@ -409,15 +410,46 @@ function skipTalk() {
   if (ui.steps) ui.stepPos = ui.steps.length;
 }
 
+function personaBanner(busy) {
+  if (!api.personaChanged?.()) return '';
+  return `<div class="bt-section bt-pending"><div>✨ 페르소나 설명이 바뀌었어요. 바뀐 등급·설정을 시트에 반영할까요?</div><div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="persona-refresh" ${busy ? 'disabled' : ''}>🔄 시트 갱신</button><button class="menu_button" data-act="persona-dismiss">무시</button></div></div>`;
+}
+
+function previewCard(s, pv, busy) {
+  const spec = pv.spec ?? {};
+  const enemies = spec.enemies ?? [];
+  const allies = spec.allies ?? [];
+  const srcTag = x => x._src === 'major' ? '<span class="cx-badge">신규 도감</span>' : x._src === 'codex' ? '<small>[도감]</small>' : '<small>[잡병]</small>';
+  const codexOpts = api.codex().filter(e => !allies.some(a => a.codexId === e.id || norm(a.name) === norm(e.name)) && !enemies.some(a => a.codexId === e.id || norm(a.name) === norm(e.name)));
+  return `<div class="bt-section">
+    <div class="bt-sub">⚔️ 출전 구성 확인 ${spec.title ? `· ${h(spec.title)}` : ''}</div>
+    ${spec.place ? `<div class="bt-note">📍 ${h(spec.place)}${spec.why ? ` — ${h(spec.why)}` : ''}</div>` : (spec.why ? `<div class="bt-note">${h(spec.why)}</div>` : '')}
+    <div class="bt-row" style="margin:6px 0"><label>형식 <select class="text_pole" data-act="preview-mode">${allowedModes(api.settings()).map(m => `<option value="${m}" ${pv.mode === m ? 'selected' : ''}>${MODES[m].icon} ${MODES[m].ko}</option>`).join('')}</select></label></div>
+    <div class="bt-sub" style="margin-top:8px">👹 적 (${enemies.length})</div>
+    ${enemies.length ? enemies.map((e, i) => `<div class="bt-skillrow"><span><b>${h(e.name)}</b> ${e.tier ? `<small>[${h(e.tier)}]</small> ` : ''}${srcTag(e)}</span><span class="bt-row"><button class="menu_button" data-act="pv-row" data-side="enemies" data-v="${i}" title="전열/후열 전환">${e.row === 'back' ? '후열' : '전열'}</button><button class="menu_button" data-act="pv-del" data-side="enemies" data-v="${i}" title="제외">✕</button></span></div>`).join('') : '<div class="bt-note">적이 없어요. 다시 판별하거나 취소해 주세요.</div>'}
+    <div class="bt-sub" style="margin-top:8px">🤝 아군 (${1 + allies.length})</div>
+    <div class="bt-skillrow"><span><b>${h(s.player?.name ?? '나')}</b> <small>[${h(s.player?.tier ?? '?')}] · 플레이어</small></span></div>
+    ${allies.map((a, i) => `<div class="bt-skillrow"><span><b>${h(a.name)}</b> ${a.tier ? `<small>[${h(a.tier)}]</small> ` : ''}${srcTag(a)}</span><span class="bt-row"><button class="menu_button" data-act="pv-row" data-side="allies" data-v="${i}">${a.row === 'back' ? '후열' : '전열'}</button><button class="menu_button" data-act="pv-del" data-side="allies" data-v="${i}" title="제외">✕</button></span></div>`).join('')}
+    ${codexOpts.length ? `<div class="bt-row" style="margin-top:6px"><select class="text_pole" id="bt-pv-add"><option value="">＋ 도감에서 아군 추가…</option>${codexOpts.map(e => `<option value="${h(e.id)}">${h(e.name)} [${h(api.rosterOf(e).tier || '?')}]</option>`).join('')}</select><button class="menu_button" data-act="pv-add-ally">추가</button></div>` : ''}
+    <div class="bt-row bt-wrap" style="margin-top:10px">
+      <button class="menu_button bt-send" data-act="preview-go" ${busy || !enemies.length ? 'disabled' : ''}>⚔️ 이 구성으로 전투 시작</button>
+      <button class="menu_button" data-act="preview-reforge" ${busy ? 'disabled' : ''}>🔄 다시 판별</button>
+      <button class="menu_button" data-act="preview-cancel" ${busy ? 'disabled' : ''}>취소</button>
+    </div>
+  </div>`;
+}
+
 function battleTab(s) {
   const p = profileOf(s);
   const b = s.battle;
   const busy = api.busy();
   if (s.disabled) return '<div class="bt-empty">이 채팅에서는 꺼져 있어요. ⚙ → 📜 룰에서 다시 켤 수 있어요.</div>';
+  const pBanner = personaBanner(busy);
+  if (api.ui.preview && (!b || b.status !== 'active')) return `${pBanner}${previewCard(s, api.ui.preview, busy)}`;
   const panelMode = api.settings().playMode !== 'chat';
   if (b && b.status !== 'active' && panelMode && (b.resultPending || !b.resultKey) && b.resultKey !== 'dismissed') return resultScreen(s, b);
   if (!b || b.status !== 'active') {
-    return `<div class="bt-section">
+    return `${pBanner}<div class="bt-section">
       <div class="bt-row"><input type="text" class="text_pole" id="bt-hint" data-enter="start" placeholder="(선택) 상황 힌트: 예) 고블린 3마리 / 검객과 결투 / 경비 몰래 잠입"></div>
       <div class="bt-row"><select id="bt-mode-pick"><option value="">형식: AI가 상황 보고 결정</option>${allowedModes(api.settings()).map(m => `<option value="${m}">${MODES[m].icon} ${MODES[m].ko}</option>`).join('')}</select></div>
       <button class="menu_button bt-wide" data-act="start" ${busy ? 'disabled' : ''}>${busy ? '⏳ 준비 중…' : '⚔️ 지금 장면에서 시작'}</button>
@@ -568,10 +600,15 @@ function resultScreen(s, b) {
   const moments = keyMoments(b, 12);
   const ko = (b.history ?? []).flatMap(h => h.events).filter(e => ['down', 'finisher', 'transition', 'yield', 'rout', 'takedown', 'detected', 'parry', 'break'].includes(e.t) || (e.t === 'hit' && (e.crit || e.eff === 'super')));
   const lines = eventLines(ko, { lang: 'ko', showRolls: false }).map(l => l.trim()).slice(0, 12);
+  const won = b.status === 'win' || b.status === 'success';
+  const lootBox = won && b.loot?.length ? `<div class="bt-section"><div class="bt-sub">🎁 전리품</div><div class="bt-note">${b.loot.map(x => `<b>${h(x)}</b>`).join(', ')}</div><button class="menu_button" data-act="result-loot" ${b.lootClaimed ? 'disabled' : ''}>${b.lootClaimed ? '✔ 가방에 담음' : '🎒 가방에 담기'}</button></div>` : '';
+  const needRest = [s.player, ...(s.companions ?? [])].filter(Boolean).some(m => m.hp < m.maxHp || m.sp < m.maxSp || m.statuses?.length);
+  const restBox = needRest ? `<div class="bt-section"><div class="bt-sub">🩹 전투 후 정비</div><div class="bt-row bt-wrap"><button class="menu_button" data-act="result-rest" data-v="short">🏕 짧은 휴식 (+30%)</button><button class="menu_button" data-act="result-rest" data-v="full">🛏 완전 회복</button></div></div>` : '';
   return `<div class="pk-wrap"><div class="bt-section bt-result ${b.status}"><div class="bt-result-title">${label}</div>
       <div class="bt-note">${M.icon} ${h(b.title || M.ko)} · ${Math.max(1, b.st.turn - 1)}턴${s.player ? ` · ${h(s.player.name)} HP ${s.player.hp}/${s.player.maxHp}` : ''}</div></div>
     ${messageBox(api.ui.lastEvents)}
     ${lines.length ? `<div class="bt-section"><div class="bt-sub">명장면</div>${lines.map(l => `<div class="bt-note">${h(l)}</div>`).join('')}</div>` : ''}
+    ${lootBox}${restBox}
     <div class="bt-section">
       <div class="lr-detail">${[['result', '🏁 승패만', '결과와 최종 상태만'], ['summary', '📋 전투 요약', '명장면 위주'], ['full', '📜 전체 로그', '모든 행동']].map(([k, l, d]) => `<label class="lr-opt ${(b.resultDetail ?? api.settings().resultDetail ?? 'summary') === k ? 'on' : ''}"><input type="radio" name="bt-detail" value="${k}" data-act="result-detail" ${(b.resultDetail ?? api.settings().resultDetail ?? 'summary') === k ? 'checked' : ''}><b>${l}</b><small>${d}</small></label>`).join('')}</div>
       <input type="text" class="text_pole" id="bt-result-comment" data-enter="send-result" placeholder="(선택) 결과와 같이 보낼 한마디 · 예: 숨을 고르며 검을 거둔다">
@@ -693,7 +730,7 @@ function sheetTab(s) {
       <div class="bt-row"><label>${h(p.spLabel)}<input type="number" data-act="num" data-v="sp" value="${me.sp}">/<input type="number" data-act="num" data-v="maxSp" value="${me.maxSp}"></label></div>
       <div class="bt-stats">${p.stats.map(x => `<label class="bt-stat">${h(x.label || x.key)}<input type="number" data-act="stat" data-v="${h(x.key)}" value="${me.stats[x.key] ?? 0}"></label>`).join('')}</div>
       <button class="menu_button" data-act="edit-json" data-v="player" style="margin-top:6px">🔧 JSON</button></div>`;
-  return `${card}${editForm}${mode === 'ai' ? aiForm : ''}
+  return `${personaBanner(busy)}${card}${editForm}${mode === 'ai' ? aiForm : ''}
     <div class="bt-section"><div class="bt-sub">기술</div>${mode === 'edit' ? skillRows(me.skills, p, { del: true }) : skillView(me.skills, p)}</div>
     <div class="bt-section"><div class="bt-sub">함께 다니는 인물 ${tip('따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고 장면에 있는 도감 인물을 아군·적으로 넣어요. 여기 있는 사람은 「요즘 같이 다님」으로 참고만 해요.')}</div>${comps ? `<div class="pc-chips">${comps}</div>` : '<div class="bt-empty">없음</div>'}</div>
     <div class="bt-section"><div class="bt-sub">가방</div>${bag ? (mode === 'edit' ? bag : `<div class="pc-chips">${bag}</div>`) : '<div class="bt-empty">비어 있음</div>'}
@@ -794,7 +831,7 @@ function codexEditor(s, p, id, list) {
   const hidden = `<input type="hidden" id="bt-cx-name" value="${h(sh.name)}"><input type="hidden" id="bt-cx-shape" value="${h(sh.shape ?? '')}"><input type="hidden" id="bt-cx-alias" value="${h((sh.aliases ?? []).join(', '))}">`;
   const aiForm = mode !== 'ai' ? '' : `<div class="bt-section pc-form"><div class="bt-sub">✨ AI로 다시 만들기</div>${hidden}
       <div class="bt-row">${tierSel('AI가 다시 판단')}</div>${descBox}
-      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-gen" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>🎲 리롤 (설명으로 새로)</button></div>
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-gen" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>🎲 리롤 (설명으로 새로)</button><button class="menu_button" data-act="codex-sync" data-v="${h(entry.id)}" ${busy || entry.locked ? 'disabled' : ''} title="최근 대화에서 이 인물의 성장·새 기술·변화를 읽어 기존 시트에 반영해요">📖 최근 대화 반영해 갱신</button></div>
       <div class="bt-sub" style="margin-top:8px">✍️ 수정 지시 ${tip('등급 예산과 공정성 규칙이 지시보다 우선이라, 너무 센 요청은 깎여서 들어가요.')}</div>
       <textarea class="text_pole" id="bt-cx-instr" rows="2" placeholder="예) 원거리 위주로 바꿔줘 / 회복기 빼고 방어 버프 넣어줘 / 신속사격 위력 좀 올려줘"></textarea>
       <button class="menu_button" data-act="codex-revise" data-v="${h(entry.id)}" ${busy ? 'disabled' : ''}>✍️ 지시대로 고치기</button>
@@ -951,7 +988,26 @@ function onClick(e) {
       return api.saveCodex(entry, j);
     }
     case 'codex-del': if (confirm('도감에서 삭제할까요?')) { editing = null; api.deleteCodex(v); } return;
+    case 'codex-sync': return api.syncCodex(v);
     case 'codex-lock': return api.lockCodex(v, el.dataset.on === '1');
+    case 'preview-go': return api.confirmPreview();
+    case 'preview-cancel': return api.cancelPreview();
+    case 'preview-reforge': return api.reforgePreview();
+    case 'pv-del': { const pv = api.ui.preview; const arr = pv?.spec?.[el.dataset.side]; if (arr) { arr.splice(Number(v), 1); refreshPanel(); } return; }
+    case 'pv-row': { const pv = api.ui.preview; const item = pv?.spec?.[el.dataset.side]?.[Number(v)]; if (item) { item.row = item.row === 'back' ? 'front' : 'back'; refreshPanel(); } return; }
+    case 'pv-add-ally': {
+      const pv = api.ui.preview; const cid = val('bt-pv-add');
+      if (!pv?.spec || !cid) return;
+      const e = api.codex().find(x => x.id === cid); if (!e) return;
+      const sh = api.rosterOf(e);
+      pv.spec.allies ??= [];
+      pv.spec.allies.push({ ...sh, codexId: e.id, _src: 'codex' });
+      return refreshPanel();
+    }
+    case 'persona-refresh': return api.genSheet('', '변경된 페르소나 설명의 등급·능력·장비·특징을 정확히 반영해 시트를 최신화해줘');
+    case 'persona-dismiss': return api.dismissPersonaChange();
+    case 'result-loot': return api.claimLoot();
+    case 'result-rest': return api.restAfter(v);
     case 'codex-promote': return api.promote(v);
     case 'codex-reset': return api.resetRoster(v);
     case 'codex-join': return api.joinCodex(v);
@@ -1006,6 +1062,7 @@ function onChange(e) {
   if (act === 'm:actor') { api.ui.actor = el.value; refreshPanel(); }
   else if (act === 'm:target-select') { api.ui.target = el.value; refreshPanel(); }
   else if (act === 'switch-mode') api.switchMode(el.value);
+  else if (act === 'preview-mode') { if (api.ui.preview) { api.ui.preview.mode = el.value; refreshPanel(); } }
   else if (act === 'result-detail') { const b = api.state()?.battle; if (b) { b.resultDetail = el.value; refreshPanel(); } }
   else if (act === 'stat') api.edit(s => { if (s.player) s.player.stats[el.dataset.v] = Number(el.value) || 0; }, { quiet: true });
   else if (act === 'num') api.edit(s => { if (s.player) { s.player[el.dataset.v] = Math.max(0, Number(el.value) || 0); s.player.hp = Math.min(s.player.hp, s.player.maxHp); s.player.sp = Math.min(s.player.sp, s.player.maxSp); } }, { quiet: true });

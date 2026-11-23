@@ -508,7 +508,9 @@ function useSkill(b, f, skill, wanted, rng, ev, cmd = {}, { released = false } =
   if (skill.cooldown && !released) f.cds[skill.name] = skill.cooldown + 1;
   if (skill.once) (f.used ??= {})[skill.name] = true;
   if (!skill.basic) reveal(f, skill.name);
-  ev.push({ t: 'use', who: f.name, side: f.side, skill: skill.name, kind: skill.kind, element: skill.element, basic: !!skill.basic, cost: skill.cost ?? 0, targets: targets.map(t => t.name), released, grade: cmd.grades?.[0] ?? null });
+  const bigMove = !skill.basic && (released || skill.once || (skill.cooldown ?? 0) >= 2 || (skill.power ?? 0) >= 85);
+  const line = bigMove ? (f.lines?.attack || null) : null;
+  ev.push({ t: 'use', who: f.name, side: f.side, skill: skill.name, kind: skill.kind, element: skill.element, basic: !!skill.basic, cost: skill.cost ?? 0, targets: targets.map(t => t.name), released, grade: cmd.grades?.[0] ?? null, ...(line ? { line } : {}) });
   // Blood price: paid up front, never lethal on its own.
   if (skill.hpCost && !released) {
     const pay = Math.min(f.hp - 1, Math.round(f.maxHp * skill.hpCost / 100));
@@ -681,7 +683,8 @@ function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = nul
     }
   }
   if (t.hp <= 0) {
-    t.down = true; t.statuses = []; t.stages = {}; t.charging = null; ev.push({ t: 'down', who: t.name, side: t.side });
+    t.down = true; t.statuses = []; t.stages = {}; t.charging = null;
+    ev.push({ t: 'down', who: t.name, side: t.side, ...(t.lines?.ko ? { line: t.lines.ko } : {}) });
     // Avenger: the first fall on their side fires them up.
     for (const o of b.fighters.filter(x => x.side === t.side && x.trait === 'avenger' && onField(x) && !x.avenged)) {
       o.avenged = true; o.stages.pow = clamp((o.stages.pow ?? 0) + 1, STAGE_MIN, STAGE_MAX); o.stages.mag = clamp((o.stages.mag ?? 0) + 1, STAGE_MIN, STAGE_MAX);

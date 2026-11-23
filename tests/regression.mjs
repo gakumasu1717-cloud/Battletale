@@ -629,6 +629,119 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.ok(G.codexFind({ codex }, '발렌틴'), '발렌틴 should now exist in codex for future battles');
 });
 
+/* 39 */ await test('고유 대사 + pkLines: 캐릭터 lines 보존, 큰 기술/KO 대사 및 dot/consume/finisher가 출력된다', async () => {
+  const N = await import(here + 'narrate.js');
+  const hero = { ...C.normalizeSheet({ name: '아르테', isPlayer: true, tier: 'C', hp: 1000, sp: 200, stats: { STR: 50, AGI: 50, END: 40, INT: 50, SEN: 40, LUK: 20 }, skills: [{ name: '유성 베기', kind: 'physical', power: 90, cost: 20 }], lines: { attack: '여기서 끝낸다!', ko: '아직… 안 돼…' } }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const foe = C.normalizeSheet({ name: '기사', tier: 'F', hp: 10, sp: 100, stats: { STR: 10, AGI: 10, END: 10, INT: 10, SEN: 10, LUK: 10 }, lines: { ko: '크윽… 분하다!' } }, PROFILE, { side: 'enemy' });
+  assert.equal(hero.lines?.attack, '여기서 끝낸다!');
+  assert.equal(foe.lines?.ko, '크윽… 분하다!');
+  const b = E.createBattle({ party: [hero], enemies: [foe], profile: PROFILE, seed: 'lines-test' });
+  const r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '유성 베기', target: '기사' }]);
+  const useEv = r.events.find(e => e.t === 'use' && e.who === '아르테');
+  const downEv = r.events.find(e => e.t === 'down' && e.who === '기사');
+  assert.equal(useEv?.line, '여기서 끝낸다!');
+  assert.equal(downEv?.line, '크윽… 분하다!');
+  const lines = N.pkLines([
+    useEv,
+    { t: 'dot', who: '기사', status: 'burn', dmg: 30 },
+    { t: 'consume', who: '기사', status: 'mark' },
+    { t: 'finisher', who: '아르테', target: '기사', line: '마무리다!' },
+    downEv,
+  ]);
+  assert.ok(lines.some(l => l.includes('여기서 끝낸다!')), 'attack line shown');
+  assert.ok(lines.some(l => l.includes('30의 피해')), 'dot line shown');
+  assert.ok(lines.some(l => l.includes('표식') && l.includes('터졌다')), 'consume line shown');
+  assert.ok(lines.some(l => l.includes('마무리다!')), 'finisher quote shown');
+  assert.ok(lines.some(l => l.includes('끝장냈다')), 'finisher line shown');
+  assert.ok(lines.some(l => l.includes('크윽… 분하다!')), 'ko line shown');
+});
+
+/* 40 */ await test('결과 정비: claimLoot(중복 방지/수량)와 restAfterBattle(단기/완전 회복)이 정상 반영된다', () => {
+  const s = G.stateOf({});
+  s.player = { id: 'player', isPlayer: true, name: '한결', hp: 100, maxHp: 500, sp: 20, maxSp: 200, statuses: [{ id: 'burn', turns: 2 }] };
+  s.companions = [{ id: 'c1', codexId: 'cx1', name: '세라', hp: 0, maxHp: 400, sp: 50, maxSp: 200, statuses: [] }];
+  s.roster = { cx1: { hp: 0, maxHp: 400, sp: 50, maxSp: 200, statuses: [] } };
+  const b = { loot: ['하급 포션 ×2', '마석'], lootClaimed: false };
+  const a1 = G.claimLoot(s, b);
+  assert.equal(a1.length, 2);
+  assert.equal(s.inventory.find(i => i.name === '하급 포션')?.count, 2);
+  assert.equal(G.claimLoot(s, b).length, 0, 'second claim must be no-op');
+  G.restAfterBattle(s, 'short');
+  assert.equal(s.player.hp, 250);
+  assert.ok(s.companions[0].hp > 0 && s.roster.cx1.hp === s.companions[0].hp);
+  G.restAfterBattle(s, 'full');
+  assert.equal(s.player.hp, 500);
+  assert.equal(s.player.sp, 200);
+  assert.equal(s.player.statuses.length, 0);
+});
+
+/* 41 */ await test('배틀 생성 병렬화: 미등록 주요 인물 4명이 동시성 상한(2) 내에서 처리되고 1명 실패해도 나머지가 유지된다', async () => {
+  const s = G.stateOf({});
+  s.profile = PROFILE;
+  s.player = { ...C.normalizeSheet({ name: '한결', isPlayer: true, tier: 'C', hp: 500, sp: 200 }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const store = new Map();
+  const codex = { list: () => [...store.values()], put: e => store.set(e.id, e) };
+  let active = 0, peak = 0, calls = 0;
+  const deps = {
+    settings: () => ({ ...SET, autoRegister: true, forgeLore: 'auto' }),
+    auxReady: () => true,
+    persona: () => ({ name: '한결', text: 'C급 검사' }),
+    scene: () => '사천왕 카인, 아벨, 루나, 드레이크가 나타났다.',
+    lore: async () => '',
+    matchLore: async () => ({ text: '', names: [] }),
+    codex,
+    auxJson: async (msgs) => {
+      calls++;
+      if (calls === 1) {
+        return {
+          mode: 'party', title: '사천왕 습격', place: '성채', flee: true,
+          enemies: [
+            { kind: 'major', name: '카인', threat: 'elite', concept: '단검' },
+            { kind: 'major', name: '아벨', threat: 'elite', concept: '독침' },
+            { kind: 'major', name: '루나', threat: 'elite', concept: '빙결' },
+            { kind: 'major', name: '드레이크', threat: 'boss', concept: '화염' },
+          ],
+          allies: [],
+        };
+      }
+      active++; peak = Math.max(peak, active);
+      await new Promise(r => setTimeout(r, 15));
+      active--;
+      const txt = msgs.find(m => m.role === 'user')?.content ?? '';
+      const name = ['카인', '아벨', '루나', '드레이크'].find(n => txt.includes(`"${n}"`)) ?? '카인';
+      if (name === '아벨') throw new Error('429 rate limit');
+      return { name, tier: 'C', hp: 600, sp: 200, skills: [{ name: `${name}의 일격`, kind: 'physical', power: 80, cost: 20 }] };
+    },
+  };
+  const spec = await G.forgeSpec(s, deps);
+  assert.equal(peak, 2, `concurrency limit should cap active calls at 2, got ${peak}`);
+  assert.deepEqual(spec.enemies.map(e => e.name), ['카인', '아벨', '루나', '드레이크']);
+  assert.equal(spec.enemies[0]._src, 'major');
+  assert.equal(spec.enemies[1]._src, 'mook', 'failed major falls back cleanly without aborting others');
+  assert.ok(G.codexFind({ codex }, '카인') && G.codexFind({ codex }, '루나') && G.codexFind({ codex }, '드레이크'));
+});
+
+/* 42 */ await test('스토리 중 도감 성장: stateMessages+parseChange+applyChanges가 미잠금 도감 인물을 갱신하고 잠금 인물은 보호한다', async () => {
+  const Pr = await import(here + 'prompts.js');
+  const s = G.stateOf({});
+  s.profile = PROFILE;
+  s.player = { ...C.normalizeSheet({ name: '한결', isPlayer: true, tier: 'C', hp: 500, sp: 200 }, PROFILE, { side: 'ally' }), id: 'player', isPlayer: true };
+  const store = new Map();
+  const codex = { list: () => [...store.values()], put: e => store.set(e.id, e) };
+  const sera = G.registerCharacter(s, { codex }, { name: '세라', tier: 'D', hp: 350, sp: 180, skills: [{ name: '치유', kind: 'heal', power: 60, cost: 15 }] }, { side: 'ally' });
+  const boss = G.registerCharacter(s, { codex }, { name: '발렌틴', tier: 'B', hp: 1200, sp: 300 }, { side: 'enemy', locked: true });
+  const msgs = Pr.stateMessages({ status: '한결 [C]: HP 500/500', inventory: '', text: '세라가 성광의 방패를 깨우쳤다.', codex: '- 세라 [D]\n- 발렌틴 [B] (locked)', profile: PROFILE });
+  assert.match(msgs[1].content, /Registered codex characters/);
+  assert.match(msgs[1].content, /npc:/);
+  const ops = P.parseChange('npc: 세라 | tier C | learn 성광의 방패: guard 0 light (아군 보호)\nnpc: 발렌틴 | tier S');
+  G.applyChanges(s, ops, { codex });
+  const seraSheet = G.rosterSheet(s, store.get(sera.id));
+  const bossSheet = G.rosterSheet(s, store.get(boss.id));
+  assert.equal(seraSheet.tier, 'C');
+  assert.ok(seraSheet.skills.some(k => k.name === '성광의 방패'), '세라 should learn new skill');
+  assert.equal(bossSheet.tier, 'B', 'locked codex character must not be overwritten');
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

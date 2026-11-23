@@ -780,7 +780,18 @@ export function normalizeSheet(raw, profile, { side = 'enemy', seed = '' } = {})
     shape: r.shape ? String(r.shape) : '', gender: r.gender ? String(r.gender) : '', portrait: safePortrait(r.portrait),
     actions: clamp(Math.round(num(r.actions, threat === 'boss' ? 1 : 1)), 1, 3),
     trait: traitId(r.trait ?? r.role_passive ?? r.passiveTag),
+    lines: safeLines(r.lines),
   };
+}
+
+function safeLines(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const k of ['attack', 'finisher', 'ko']) {
+    const v = String(raw[k] ?? '').replace(/^["'「『]+|["'」』]+$/g, '').trim().slice(0, 70);
+    if (v) out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /* ---------- Role traits (one fixed passive per fighter, engine-owned) ---------- */
