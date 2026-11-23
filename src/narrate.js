@@ -51,6 +51,7 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'breakbonus': return ko ? `  ✦ 충전을 끊은 쪽 전원 기력 +${e.sp}%` : `  Breaking the charge lets ${e.who}'s side catch its breath.`;
     case 'down': return ko ? `  ✖ ${e.who} 쓰러짐!` : `  ${e.who} is DOWN (knocked out / defeated).`;
     case 'wake': return ko ? `  · ${e.who} 잠에서 깸` : `  ${e.who} wakes up.`;
+    case 'thaw': return ko ? `  · ${e.who} ${e.byFire ? '화염에 빙결이 녹아 풀림' : '빙결이 풀림'}` : `  ${e.who} thaws out${e.byFire ? ' from the fire' : ''}.`;
     case 'enrage': return ko ? `  ⚡ ${e.who} 격노! (공격 ▲)` : `  ${e.who} becomes ENRAGED (attack up).`;
     case 'skip': return ko ? `▷ ${e.who}: ${stName(e.status, 'ko')}(으)로 행동 불가` : `${e.who} cannot act (${stName(e.status, 'en')}).`;
     case 'confused': return ko ? `▷ ${e.who}: 혼란 상태로 자신을 공격` : `${e.who} is confused and hurts themself.`;
@@ -218,6 +219,7 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'scan': L(e.ok ? `${j(e.who, '은', '는')} ${e.target}의 정보를 파악했다!` : `${e.target}의 정보를 읽어내지 못했다…`); break;
       case 'swap': L(e.with ? `${j(e.who, '은', '는')} ${j(e.with, '과', '와')} 자리를 바꿨다!` : `${j(e.who, '은', '는')} ${e.row === 'back' ? '후열' : '전열'}로 이동했다!`); break;
       case 'wake': L(`${j(e.who, '은', '는')} 잠에서 깨어났다!`); break;
+      case 'thaw': L(e.byFire ? `${e.who}의 빙결이 화염에 녹아 풀렸다!` : `${e.who}의 빙결이 풀렸다!`); break;
       case 'expire': L(`${e.who}의 ${STATUS[e.status]?.ko ?? ''} 상태가 풀렸다!`); break;
       case 'revive': L(`${j(e.who, '이', '가')} 다시 일어섰다!`); break;
       case 'cleanse': L(`${e.who}의 상태이상이 깨끗이 나았다!`); break;

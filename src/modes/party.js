@@ -90,7 +90,7 @@ export default {
   id: 'party', ko: '파티 턴제', icon: '⚔️',
 
   create({ spec, profile, party, allies, enemies, seed, settings }) {
-    const b = E.createBattle({ party, allies, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative });
+    const b = E.createBattle({ party, allies, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, dealMul: settings.dealMul ?? 1, takeMul: settings.takeMul ?? 1 });
     b.attackName = settings.attackName || '기본 공격';
     return b;
   },
@@ -323,12 +323,15 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     const foes = b.fighters.filter(f => f.side === 'enemy').map(f => {
       const it = E.active(f) ? intentShort(b, f) : '';
       const full = E.active(f) ? intentOf(b, f, 'ko') ?? '' : '';
-      return { ...vf(f, { side: 'enemy', intel: f.intel ?? 1, typeSystem: sys, note: it, noteCls: b.intents?.[f.id]?.type ?? '', selected: f.name === tgt }), noteTitle: full };
+      return { ...vf(f, { side: 'enemy', intel: f.intel ?? 1, typeSystem: sys, spLabel: profile.spLabel, note: it, noteCls: b.intents?.[f.id]?.type ?? '', selected: f.name === tgt }), noteTitle: full };
     });
-    const allies = b.fighters.filter(f => f.side === 'ally').map(f => vf(f, { side: 'ally', typeSystem: sys, selected: actor?.id === f.id && this.controlled(b).length > 1, note: f.row === 'back' ? '후열' : '' }));
+    const allies = b.fighters.filter(f => f.side === 'ally').map(f => vf(f, { side: 'ally', typeSystem: sys, spLabel: profile.spLabel, selected: actor?.id === f.id && this.controlled(b).length > 1, note: f.row === 'back' ? '후열' : '' }));
     const names = b.fighters.filter(f => f.side === 'enemy').map(f => f.name);
     const intro = [names.length === 1 ? `${josa(names[0], '이', '가')} 나타났다!` : names.length === 2 ? `${josa(names[0], '과', '와')} ${josa(names[1], '이', '가')} 나타났다!` : `${names[0]} 외 ${names.length - 1}명이 나타났다!`];
-    return { foes, allies, intro, map: mapOf(b.place, 'party'), idle: actor ? `${josa(actor.name, '은', '는')} 무엇을 할까?` : '행동할 수 있는 동료가 없다…' };
+    const idle = actor ? `${josa(actor.name, '은', '는')} 무엇을 할까?`
+      : b.fighters.some(f => f.side === 'ally' && E.active(f)) ? '남은 동료들이 싸우고 있다 — 다음 턴을 진행하자.'
+      : '행동할 수 있는 동료가 없다…';
+    return { foes, allies, intro, map: mapOf(b.place, 'party'), idle };
   },
 
   /** LoR-style hand for the acting character. */
@@ -352,7 +355,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
 
   side(b, ctx) {
     const items = (ctx.inventory ?? []).filter(i => i.count > 0);
-    return [{ label: '🎒 가방', cls: 'm-bag', page: 'bag', disabled: !items.length }, { label: '👥 동료·위치', cls: 'm-party', page: 'party' }, { label: '🏃 도망', cls: 'm-run', act: 'm:flee', disabled: !b.flee }];
+    return [{ label: '가방', cls: 'm-bag', page: 'bag', disabled: !items.length }, { label: '동료·위치', cls: 'm-party', page: 'party' }, { label: '도망', cls: 'm-run', act: 'm:flee', disabled: !b.flee }];
   },
 
   actors(b, ctx) {
@@ -378,7 +381,15 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
 
   menu(b, page, ctx) {
     const actor = this.actorOf(b, ctx.ui);
-    if (!actor) return [];
+    if (!actor) {
+      if (b.status === 'active' && b.fighters.some(f => f.side === 'ally' && E.active(f))) {
+        return [
+          { label: '다음 턴 진행', sub: '남은 동료들이 자동으로 행동해요', cls: 'm-fight', act: 'm:auto' },
+          ...(b.flee ? [{ label: '도망', cls: 'm-run', act: 'm:flee' }] : []),
+        ];
+      }
+      return [];
+    }
     const sys = b.typeSystem;
     const foes = s => E.reachable(b, actor, s).map(f => f.name);
     const allyNames = b.fighters.filter(f => f.side === 'ally' && E.active(f)).map(f => f.name);
@@ -389,27 +400,27 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
         const tgtF = ['physical', 'magic'].includes(k.kind) ? (b.fighters.find(f => f.name === ctx.ui.target && E.active(f) && f.side === 'enemy' && E.reachable(b, actor, k).includes(f)) ?? E.reachable(b, actor, k)[0]) : null;
         return skillItem(k, { actor, b, sys, foe: tgtF, cd: actor.cds?.[k.name] ?? 0, used: !!(k.once && actor.used?.[k.name]), target: k.target === 'enemy' ? foes(k) : k.target === 'ally' ? allyNames : null });
       }),
-      { bar: true, label: '⚔ 공격', act: 'm:basic', target: foes(E.basicAttack(actor)), title: '기본 공격 (무료)' },
-      { bar: true, label: '🛡 방어', act: 'm:defend', title: '피해 반감 · 기력 +5%' },
-      { bar: true, label: '💤 휴식', act: 'm:rest', title: `기력 +20% (${actor.sp}/${actor.maxSp})` },
-      { bar: true, sep: true, icon: true, label: '🎒', page: 'bag', disabled: !items.length, title: '가방' },
-      { bar: true, icon: true, label: '👥', page: 'party', title: '동료·위치 — 명령할 동료 고르기 · 전열/후열 이동 · 관찰' },
-      { bar: true, icon: true, label: '🏃', act: 'm:flee', disabled: !b.flee, title: '도망' },
+      { bar: true, label: '공격', act: 'm:basic', target: foes(E.basicAttack(actor)), title: '기본 공격 (무료)' },
+      { bar: true, label: '방어', act: 'm:defend', title: '피해 반감 · 기력 +5%' },
+      { bar: true, label: '휴식', act: 'm:rest', title: `기력 +20% (${actor.sp}/${actor.maxSp})` },
+      { bar: true, sep: true, label: '가방', page: 'bag', disabled: !items.length, title: '가방' },
+      { bar: true, label: '동료', page: 'party', title: '동료·위치 — 명령할 동료 고르기 · 전열/후열 이동 · 관찰' },
+      { bar: true, label: '도망', act: 'm:flee', disabled: !b.flee, title: '도망' },
     ];
     if (page === 'fight') return main();
     if (page === 'bag') {
       return [...items.map(i => { const sp = i.spec ?? inferItem(i.name); const friendly = !sp || ['heal', 'sp', 'full', 'cure', 'revive', 'buff'].includes(sp.kind);
         return { label: i.name, meta: `×${i.count}`, sub: sp ? ({ heal: 'HP 회복', sp: '기력 회복', full: '완전 회복', cure: '상태이상 회복', revive: '부활', damage: '공격', buff: '강화' }[sp.kind]) : '효과 불명', cls: 'plain', act: 'm:item', v: i.name, target: friendly ? (allyNames.length > 1 ? allyNames : null) : foes({ range: 'ranged' }) }; }),
-        { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
+        { label: '돌아가기', cls: 'back', page: 'main' }];
     }
     if (page === 'party') {
-      return [...this.controlled(b).map(f => ({ label: `${f.name}${f.id === actor.id ? ' ✔' : ''}`, sub: `${f.id === actor.id ? '지금 명령 중' : '이 동료에게 명령'} · HP ${f.hp}/${f.maxHp}`, cls: 'plain', act: 'pk:actor', v: f.id })),
-        { label: `↔ ${actor.row === 'back' ? '전열로' : '후열로'}`, sub: '자리 이동 (행동 소모)', cls: 'plain', act: 'm:swap' },
-        { label: '🔍 관찰', sub: '적 정보 파악', cls: 'plain', act: 'm:scan', target: b.fighters.filter(f => f.side === 'enemy' && E.active(f)).map(f => f.name) },
-        { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
+      return [...this.controlled(b).map(f => ({ label: `${f.name}${f.id === actor.id ? ' ✓' : ''}`, sub: `${f.id === actor.id ? '지금 명령 중' : '이 동료에게 명령'} · HP ${f.hp}/${f.maxHp}`, cls: 'plain', act: 'pk:actor', v: f.id })),
+        { label: `${actor.row === 'back' ? '전열로 이동' : '후열로 이동'}`, sub: '자리 이동 (행동 소모)', cls: 'plain', act: 'm:swap' },
+        { label: '관찰', sub: '적 정보 파악', cls: 'plain', act: 'm:scan', target: b.fighters.filter(f => f.side === 'enemy' && E.active(f)).map(f => f.name) },
+        { label: '돌아가기', cls: 'back', page: 'main' }];
     }
     if (actor.charging) {
-      return [{ label: `⚡ ${actor.charging.skill} 발동!`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' },
+      return [{ label: `${actor.charging.skill} 발동`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' },
         { label: '동료', sub: '다른 동료에게 명령', cls: 'm-party', page: 'party' }];
     }
     return main();
@@ -417,8 +428,12 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
 
   /** Panel action → { body, cmd } (cmd is the parsed command, used for timing). */
   onAct(act, v, b, ctx) {
+    if (act === 'm:auto') return { body: '다음 턴 진행', cmd: { actor: '__auto__', type: 'wait' } };
     const actor = this.actorOf(b, ctx.ui);
-    if (!actor) return null;
+    if (!actor) {
+      if (act === 'm:flee') return { body: '도주', cmd: { actor: '__auto__', type: 'flee' } };
+      return null;
+    }
     const tgt = ctx.ui.target && b.fighters.some(f => f.name === ctx.ui.target && E.active(f)) ? ctx.ui.target : b.fighters.find(f => f.side === 'enemy' && E.active(f))?.name ?? '';
     const pre = actor.isPlayer ? '' : `${actor.name}: `;
     const mk = (what, type, extra = {}, withTarget = true) => ({ body: `${pre}${what}${withTarget && tgt ? ` → ${tgt}` : ''}`, cmd: { actor: actor.id, type, target: withTarget ? tgt : null, ...extra } });

@@ -3,24 +3,25 @@
 import { norm, num, clamp, makeRng, hashStr, evalExpr, clone } from './util.js';
 
 /* ---------- Status effects (engine-owned, deterministic) ---------- */
+// clearOnSwitch: true = 휘발성 상태이상(교체 시 해제), false = 지속 상태이상(교체해도 유지).
 export const STATUS = {
-  burn:    { ko: '화상', en: 'Burn',     dot: 0.06, turns: 3 },
-  poison:  { ko: '중독', en: 'Poison',   dot: 0.08, turns: 4 },
-  bleed:   { ko: '출혈', en: 'Bleed',    dot: 0.06, turns: 3 },
-  regen:   { ko: '재생', en: 'Regen',    hot: 0.08, turns: 3, good: true },
-  stun:    { ko: '기절', en: 'Stun',     skip: true, turns: 1 },
-  freeze:  { ko: '빙결', en: 'Freeze',   skip: true, turns: 1 },
-  sleep:   { ko: '수면', en: 'Sleep',    skip: true, wake: true, turns: 2 },
-  blind:   { ko: '실명', en: 'Blind',    accMul: 0.6, turns: 2 },
-  silence: { ko: '침묵', en: 'Silence',  noMagic: true, turns: 2 },
-  confuse: { ko: '혼란', en: 'Confuse',  selfHit: 0.33, turns: 2 },
-  shield:  { ko: '보호막', en: 'Shield', dmgMul: 0.6, turns: 2, good: true },
-  taunt:   { ko: '도발', en: 'Taunt',    taunt: true, turns: 2 },
-  fear:    { ko: '공포', en: 'Fear',     dmgOut: 0.7, turns: 2 },
-  exhausted: { ko: '탈진', en: 'Exhausted', skip: true, turns: 2 },
-  // Combo triggers: harmless alone, they set up other moves (bonusIf) or take more damage.
-  mark:    { ko: '표식', en: 'Marked',   turns: 3 },
-  vulnerable: { ko: '취약', en: 'Vulnerable', dmgIn: 1.35, turns: 2 },
+  burn:      { ko: '화상', en: 'Burn',       dot: 0.06, physOut: 0.8, turns: 3, clearOnSwitch: false, desc: '매 턴 최대 HP 6% 피해 · 물리 피해 -20% (교체 유지)' },
+  poison:    { ko: '중독', en: 'Poison',     dot: 0.08, turns: 4, clearOnSwitch: false, desc: '매 턴 최대 HP 8% 독 피해 (교체 유지)' },
+  bleed:     { ko: '출혈', en: 'Bleed',      dot: 0.06, turns: 3, clearOnSwitch: false, desc: '매 턴 최대 HP 6% 출혈 피해 (교체 유지)' },
+  regen:     { ko: '재생', en: 'Regen',      hot: 0.08, turns: 3, good: true, clearOnSwitch: false, desc: '매 턴 최대 HP 8% 회복 (교체 유지)' },
+  freeze:    { ko: '빙결', en: 'Freeze',     skip: true, thawChance: 0.25, thawOnFire: true, turns: 2, clearOnSwitch: false, desc: '행동 불가 · 턴마다 25% 자연 해동 / 화염 피격 시 즉시 해동 (교체 유지)' },
+  sleep:     { ko: '수면', en: 'Sleep',      skip: true, wake: true, turns: 2, clearOnSwitch: false, desc: '행동 불가 · 피격 시 기상 (교체 유지)' },
+  stun:      { ko: '기절', en: 'Stun',       skip: true, turns: 1, clearOnSwitch: true, desc: '1턴 행동 불가 (교체 시 해제)' },
+  blind:     { ko: '실명', en: 'Blind',      accMul: 0.65, turns: 2, clearOnSwitch: true, desc: '명중률 대폭 하락 (교체 시 해제)' },
+  silence:   { ko: '침묵', en: 'Silence',    noMagic: true, turns: 2, clearOnSwitch: true, desc: '마법·특수 기술 봉인 (교체 시 해제)' },
+  confuse:   { ko: '혼란', en: 'Confuse',    selfHit: 0.33, turns: 2, clearOnSwitch: true, desc: '33% 확률로 자해 (교체 시 해제)' },
+  shield:    { ko: '보호막', en: 'Shield',   dmgMul: 0.6, turns: 2, good: true, clearOnSwitch: true, desc: '받는 피해 40% 경감 (교체 시 해제)' },
+  taunt:     { ko: '도발', en: 'Taunt',      taunt: true, turns: 2, clearOnSwitch: true, desc: '도발한 대상을 공격하도록 유도 (교체 시 해제)' },
+  fear:      { ko: '공포', en: 'Fear',       dmgOut: 0.75, turns: 2, clearOnSwitch: true, desc: '가하는 피해 25% 감소 (교체 시 해제)' },
+  exhausted: { ko: '탈진', en: 'Exhausted',  skip: true, turns: 2, clearOnSwitch: true, desc: '무리한 행동으로 일시 행동 불가 (교체 시 해제)' },
+  // Combo triggers & tactical debuffs
+  mark:      { ko: '표식', en: 'Marked',     evaMul: 0.7, turns: 3, clearOnSwitch: true, desc: '회피율 하락 · 연계 기술의 추가 피해 조건 (교체 시 해제)' },
+  vulnerable: { ko: '취약', en: 'Vulnerable', dmgIn: 1.35, turns: 2, clearOnSwitch: true, desc: '받는 피해 +35% 증가 (교체 시 해제)' },
 };
 
 const words = groups => {
@@ -287,24 +288,34 @@ function buildProfile(raw) {
     // The same rank in the world's other ladders (magic-power grades, guild ranks, levels…).
     ...(Array.isArray(t.aliases) && t.aliases.length ? { aliases: t.aliases.map(x => plain(x, 24)).filter(Boolean).slice(0, 6) } : {}),
   }));
-  return {
+  const poke = p.typeSystem === 'pokemon';
+  const worldChart = p.worldChart && typeof p.worldChart === 'object'
+    ? normalizeChart(p.worldChart)
+    : (!poke ? normalizeChart(p.chart) : null);
+  const out = {
     name: plain(p.name ?? '사용자 룰') || '사용자 룰', stats, map, tiers,
     hpLabel: plain(p.hpLabel ?? 'HP', 12) || 'HP', spLabel: plain(p.spLabel ?? 'SP', 12) || 'SP',
     hpPerStat: p.hpPerStat ? clamp(num(p.hpPerStat, 0), 2, 80) : null,
     elements: Array.isArray(p.elements) ? p.elements.map(String) : [...DEFAULT_PROFILE.elements],
     notes: String(p.notes ?? ''),
     pokeMap: p.pokeMap && typeof p.pokeMap === 'object' ? Object.fromEntries(Object.entries(p.pokeMap).slice(0, 24).map(([k, v]) => [plain(k, 20), plain(v, 12)])) : {},
-    typeSystem: p.typeSystem === 'pokemon' ? 'pokemon' : 'world',
-    chart: p.typeSystem === 'pokemon' ? clone(POKEMON_CHART) : normalizeChart(p.chart),
-    stab: p.typeSystem === 'pokemon' ? 1.5 : p.stab != null ? clamp(num(p.stab, 1.2), 1, 2) : 1.2,
+    typeSystem: poke ? 'pokemon' : 'world',
+    chart: poke ? clone(POKEMON_CHART) : clone(worldChart ?? normalizeChart(p.chart)),
+    worldChart: worldChart ? clone(worldChart) : null,
+    stab: poke ? 1.5 : p.stab != null ? clamp(num(p.stab, 1.2), 1, 2) : 1.2,
   };
+  useTypeProfile(out);
+  return out;
 }
 
 export function setTypeSystem(profile, system) {
   // Untouched generic ranks read oddly next to Pokémon rules: swap in the level bands (custom world ranks stay).
   const tiers = system === 'pokemon' && isDefaultTiers(profile) ? TIER_PRESETS.pokemon.tiers
     : system !== 'pokemon' && sameTierNames(profile.tiers, TIER_PRESETS.pokemon.tiers) ? DEFAULT_PROFILE.tiers : profile.tiers;
-  return normalizeProfile({ ...profile, tiers, typeSystem: system, chart: system === 'pokemon' ? undefined : profile.typeSystem === 'pokemon' ? undefined : profile.chart, stab: system === 'pokemon' ? 1.5 : 1.2 });
+  const worldChart = profile.typeSystem !== 'pokemon'
+    ? normalizeChart(profile.chart)
+    : (profile.worldChart ? normalizeChart(profile.worldChart) : null);
+  return normalizeProfile({ ...profile, tiers, typeSystem: system, worldChart, chart: system === 'pokemon' ? undefined : (worldChart ?? undefined), stab: system === 'pokemon' ? 1.5 : 1.2 });
 }
 
 /* ---------- Element chart (attacker element → defender element → multiplier) ---------- */
@@ -654,6 +665,12 @@ export function normalizeSkill(raw, { maxSp = 100, prefersMagic = false } = {}) 
   if (s.once || s.exhaust) out.once = true;
   const bonus = damaging ? normalizeBonus(s.bonusIf ?? s.bonus) : null;
   if (bonus) out.bonusIf = bonus;
+  const scRaw = norm(s.scaleStages ?? s.scaleBuffs ?? s.stageScale ?? '');
+  if (damaging && scRaw) {
+    if (['self', 'buff', 'buffs', '자신', '자신버프', '내버프'].includes(scRaw)) out.scaleStages = 'self';
+    else if (['target', 'foe', 'enemy', 'debuff', 'debuffs', '적', '상대', '적디버프', '상대디버프'].includes(scRaw)) out.scaleStages = 'target';
+    else if (['ally', 'allies', 'team', 'party', '아군', '파티', '아군버프'].includes(scRaw)) out.scaleStages = 'ally';
+  }
   if (s.pivot || s.switchAfter) out.pivot = true;
   if (finalKind === 'guard' && (s.protect || /프로텍트|protect|완전\s*방어|간파|detect/i.test(name))) out.protect = true;
   const mv = norm(s.move ?? s.moveRow ?? '');
@@ -749,20 +766,24 @@ export function normalizeSheet(raw, profile, { side = 'enemy', seed = '' } = {})
   })();
   const skills = (Array.isArray(r.skills) ? r.skills : String(r.skills ?? '').split(/[,¶]/))
     .map(s => (typeof s === 'string' ? s.replace(/^[^§]*§\s*/, '').trim() : s))
-    .filter(Boolean).map(s => normalizeSkill(s, { maxSp, prefersMagic })).filter(Boolean).slice(0, 10);
+    .filter(Boolean).map(s => normalizeSkill(s, { maxSp, prefersMagic })).filter(Boolean).slice(0, 12);
 
   const list = v => (Array.isArray(v) ? v : String(v ?? '').split(/[,/·]+/)).map(x => String(x).trim()).filter(Boolean).map(elementId).filter(e => e !== 'none');
   let elements = list(r.elements ?? r.element ?? r.types ?? r.type ?? r['속성'] ?? r['타입']).filter(e => e !== 'physical');
+  let ptypes = [...new Set(list(r.ptypes ?? r.pokemonTypes ?? r.pokemon_types ?? r['포켓몬타입'] ?? r['포켓몬속성']).map(toPoke))];
   // No type given (common for a persona): take the element its damaging skills use most.
-  if (!elements.length) {
+  if (!elements.length && !ptypes.length) {
     const count = {};
     for (const k of skills) if ((k.kind === 'physical' || k.kind === 'magic') && k.element && !['none', 'physical', 'normal'].includes(k.element)) count[k.element] = (count[k.element] ?? 0) + (k.power ?? 1);
     const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
     if (top) elements = [top[0]];
   }
-  let ptypes = [...new Set(list(r.ptypes ?? r.pokemonTypes ?? r.pokemon_types ?? r['포켓몬타입']).map(toPoke))];
+  if (!ptypes.length) ptypes = elements.length ? [...new Set(elements.map(toPoke))] : ['normal'];
+  if (!elements.length && ptypes.length) elements = [...new Set(ptypes.map(toWorld))].filter(x => x && x !== 'none');
+  elements = [...new Set(elements)].slice(0, 2);
   if (ptypes.length > 1) ptypes = ptypes.filter(x => x !== 'normal');
-  ptypes = ptypes.slice(0, 2);
+  ptypes = [...new Set(ptypes)].slice(0, 2);
+  if (!ptypes.length) ptypes = ['normal'];
   return {
     id: r.id ?? `${side[0]}${hashStr(`${seed}${r.name}${Math.random()}`).slice(0, 5)}`,
     name: String(r.name ?? '???').slice(0, 40), side, isPlayer: !!r.isPlayer,
@@ -798,7 +819,7 @@ function safeLines(raw) {
 export const TRAITS = {
   intimidate: { ko: '위협', desc: '등장할 때 맞은편 전원 공격 -1' },
   vanguard: { ko: '선봉', desc: '전열에 있으면 받는 피해 -20%' },
-  opportunist: { ko: '기회주의', desc: '상태이상에 걸린 적에게 피해 +25%' },
+  opportunist: { ko: '약점포착', desc: '상태이상에 걸린 적에게 피해 +25%' },
   medic: { ko: '의무병', desc: '회복량 +30%' },
   avenger: { ko: '복수', desc: '아군이 쓰러진 뒤 공격 +1 (1회)' },
 };
@@ -838,8 +859,29 @@ export function derive(sheet, profile) {
  * Generated or user-described sheets are clamped to what their rank can afford in this world.
  * A character's concept never buys extra power: rank decides the budget.
  */
+/** Default skill cap is 6 (2-6 generated); raised up to 12 when the user explicitly requests more skills. */
+export function requestedSkillCap(text = '', { statFields = null, current = null } = {}) {
+  const base = 6;
+  const s = String(text ?? '');
+  let cap = base;
+  if (Array.isArray(statFields?.skillNames) && statFields.skillNames.length > cap) cap = Math.max(cap, statFields.skillNames.length);
+  if (Array.isArray(current?.skills) && current.skills.length > cap) cap = Math.max(cap, current.skills.length);
+  for (const m of s.matchAll(/(?:스킬|기술|무공|마법|능력|skills?|moves?)\s*(?:은|는|을|를|이|가|:|최대|총)?\s*(\d{1,2})\s*(?:개|가지)?/gi)) {
+    const n = Number(m[1]);
+    if (n > cap) cap = n;
+  }
+  for (const m of s.matchAll(/(\d{1,2})\s*(?:개|가지)\s*(?:의\s*)?(?:스킬|기술|무공|마법)/gi)) {
+    const n = Number(m[1]);
+    if (n > cap) cap = n;
+  }
+  if (/(?:스킬|기술|skills?|moves?)[^\n]{0,20}(?:추가|늘려|더\s*넣|더\s*만들|더\s*줘)|(?:추가|늘려|더\s*넣|더\s*만들)[^\n]{0,20}(?:스킬|기술)|add\s+(?:a\s+|more\s+)?skills?/i.test(s)) {
+    cap = Math.max(cap, (current?.skills?.length ?? base) + 2);
+  }
+  return clamp(cap, base, 12);
+}
+
 const HARD_CC = ['sleep', 'stun', 'paralyze', 'freeze', 'petrify'];
-export function auditSheet(sheet, profile, { bonusTier = 0, clampStats: clampIn = false } = {}) {
+export function auditSheet(sheet, profile, { bonusTier = 0, clampStats: clampIn = false, maxSkills = 6 } = {}) {
   let clampStats = clampIn;
   const notes = [];
   if (!sheet) return { sheet, notes };
@@ -852,9 +894,9 @@ export function auditSheet(sheet, profile, { bonusTier = 0, clampStats: clampIn 
   const r = n > 1 ? idx / (n - 1) : 0.5;
   const maxPow = Math.round(60 + 45 * r);            // F≈60 … S≈105
   const sigPow = maxPow + 35;                         // one signature move (cooldown ≥3 or charge)
-  const maxSkills = profile.typeSystem === 'pokemon' ? 4 : 6;
+  const skillCap = clamp(Math.round(num(maxSkills, 6)), 1, 12);
   const cap = (k, field, max, label) => { if ((k[field] ?? 0) > max) { notes.push(`${k.name} ${label} ${k[field]}→${max}`); k[field] = max; } };
-  if (sheet.skills.length > maxSkills) { notes.push(`기술 ${sheet.skills.length}개→${maxSkills}개`); sheet.skills = sheet.skills.slice(0, maxSkills); }
+  if (sheet.skills.length > skillCap) { notes.push(`기술 ${sheet.skills.length}개→${skillCap}개`); sheet.skills = sheet.skills.slice(0, skillCap); }
   let sigUsed = false;
   const damaging = k => ['physical', 'magic'].includes(k.kind);
   for (const k of sheet.skills) {
@@ -913,13 +955,22 @@ export function auditSheet(sheet, profile, { bonusTier = 0, clampStats: clampIn 
   if (clampStats && tiers[idx]) {
     const t = tiers[idx];
     const [lo, hi] = t.stat ?? [0, Infinity];
-    for (const key of Object.keys(sheet.stats ?? {})) {
+    const keys = Object.keys(sheet.stats ?? {});
+    // Allow strong character identity (+35% peak / -35% dump) while keeping the overall stat total fair for the tier.
+    const top = Math.round(hi * 1.35), bot = Math.max(1, Math.round(lo * 0.65));
+    for (const key of keys) {
       const v = sheet.stats[key];
-      const top = Math.round(hi * 1.1), bot = Math.round(lo * 0.9);
-      if (v > top) { notes.push(`${key} ${v}→${top} (${t.name}급 상한)`); sheet.stats[key] = top; }
+      if (v > top) { notes.push(`${key} ${v}→${top} (${t.name}급 특화 상한)`); sheet.stats[key] = top; }
       else if (v < bot && v > 0) sheet.stats[key] = bot;
     }
-    if (t.hp && sheet.maxHp > t.hp[1] * 1.15) { const m = Math.round(t.hp[1] * 1.15); notes.push(`HP ${sheet.maxHp}→${m}`); sheet.hp = Math.min(sheet.hp, m); sheet.maxHp = m; }
+    const total = keys.reduce((a, k) => a + (sheet.stats[k] ?? 0), 0);
+    const totalMax = Math.round(keys.length * hi * 1.05);
+    if (keys.length && total > totalMax) {
+      const ratio = totalMax / total;
+      notes.push(`스탯 합계 ${total}→${totalMax} (${t.name}급 총합 기준)`);
+      for (const k of keys) sheet.stats[k] = Math.max(bot, Math.round(sheet.stats[k] * ratio));
+    }
+    if (t.hp && sheet.maxHp > t.hp[1] * 1.3) { const m = Math.round(t.hp[1] * 1.3); notes.push(`HP ${sheet.maxHp}→${m}`); sheet.hp = Math.min(sheet.hp, m); sheet.maxHp = m; }
   }
   return { sheet, notes };
 }

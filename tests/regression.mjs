@@ -143,7 +143,7 @@ const snap = s => JSON.stringify({ st: s.battle.st, inv: s.inventory, n: s.battl
     // The rules page prints the (already de-tagged) profile name as text, so look for real tags/attributes.
     assert.ok(!/<[a-z]+\b[^>]*\son(error|load|mouseover)=|<script/i.test(panel.innerHTML), `unescaped markup in drawer ${page}`);
   }
-  assert.ok(!/data-v="rules">룰</.test(panel.innerHTML), 'rules should no longer be a top tab');
+  assert.ok(!/data-act="tab" data-v="rules"/.test(panel.innerHTML), 'rules should no longer be a top tab');
 });
 
 /* 8 */ await test('아군 충전기는 모았다가 다음 턴에 반드시 발동한다', () => {
@@ -740,6 +740,198 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.equal(seraSheet.tier, 'C');
   assert.ok(seraSheet.skills.some(k => k.name === '성광의 방패'), '세라 should learn new skill');
   assert.equal(bossSheet.tier, 'B', 'locked codex character must not be overwritten');
+});
+
+/* 43 */ await test('스킬 개수: 기본 2~6개 상한(포켓몬 룰도 6개)이고 명시적 요청 시 상한이 확장된다', () => {
+  const pokeProf = C.setTypeSystem(PROFILE, 'pokemon');
+  const mkSkills = n => Array.from({ length: n }, (_, i) => ({ name: `기술${i + 1}`, kind: 'physical', power: 55, cost: 15 }));
+  const sh1 = C.normalizeSheet({ name: '유나', tier: 'C', hp: 500, sp: 200, skills: mkSkills(6) }, pokeProf, { side: 'ally' });
+  C.auditSheet(sh1, pokeProf);
+  assert.equal(sh1.skills.length, 6, 'Pokémon mode should allow up to 6 skills by default');
+  assert.equal(C.requestedSkillCap('평범한 검사'), 6);
+  assert.equal(C.requestedSkillCap('스킬 8개로 만들어줘'), 8);
+  assert.equal(C.requestedSkillCap('스킬 하나 더 추가해줘', { current: sh1 }), 8);
+  const sh2 = C.normalizeSheet({ name: '아르카', tier: 'B', hp: 700, sp: 250, skills: mkSkills(8) }, PROFILE, { side: 'ally' });
+  C.auditSheet(sh2, PROFILE, { maxSkills: C.requestedSkillCap('스킬 8개') });
+  assert.equal(sh2.skills.length, 8, 'explicitly requested 8 skills should not be truncated');
+});
+
+/* 44 */ await test('상성 배율 압축: 세계관·포켓몬 모두 2배→1.5배, 4배→2배, 0.5배→0.75배, 0.25배→0.5배, 무효→0배로 적용된다', () => {
+  const worldProf = C.normalizeProfile({ elements: ['불', '물', '얼음', '바람', '대지', '전기'], chart: { fire: { ice: 2, wind: 2, water: 0.5, earth: 0.5 }, electric: { earth: 0 } } });
+  const pokeProf = C.setTypeSystem(worldProf, 'pokemon');
+  const make = (name, elements, ptypes, prof) => C.normalizeSheet({ name, tier: 'C', hp: 500, sp: 200, stats: { STR: 30, INT: 30, END: 30, WIL: 30, AGI: 30, LUK: 20 }, elements, ptypes }, prof, { side: 'enemy' });
+  const bw = E.createBattle({ party: [make('아군', ['불'], ['불꽃'], worldProf)], enemies: [make('단일약점', ['얼음'], ['얼음'], worldProf), make('이중약점', ['얼음', '바람'], ['얼음', '풀'], worldProf), make('단일반감', ['물'], ['물'], worldProf), make('이중반감', ['물', '대지'], ['물', '바위'], worldProf), make('무효', ['대지'], ['땅'], worldProf)], profile: worldProf, seed: 'mul-w' });
+  assert.equal(E.elementMul(bw.fighters[1], 'fire', bw).mul, 1.5, 'world 2x → 1.5x');
+  assert.equal(E.elementMul(bw.fighters[2], 'fire', bw).mul, 2, 'world 4x → 2x');
+  assert.equal(E.elementMul(bw.fighters[3], 'fire', bw).mul, 0.75, 'world 0.5x → 0.75x');
+  assert.equal(E.elementMul(bw.fighters[4], 'fire', bw).mul, 0.5, 'world 0.25x → 0.5x');
+  assert.equal(E.elementMul(bw.fighters[5], 'electric', bw).mul, 0, 'world immune → 0');
+  const bp = E.createBattle({ party: [make('아군', ['불'], ['불꽃'], pokeProf)], enemies: [make('풀', ['바람'], ['풀'], pokeProf), make('풀벌레', ['바람'], ['풀', '벌레'], pokeProf), make('물', ['물'], ['물'], pokeProf), make('물드래곤', ['물'], ['물', '드래곤'], pokeProf), make('땅', ['대지'], ['땅'], pokeProf)], profile: pokeProf, seed: 'mul-p' });
+  assert.equal(E.elementMul(bp.fighters[1], 'fire', bp).mul, 1.5, 'pokemon 2x → 1.5x');
+  assert.equal(E.elementMul(bp.fighters[2], 'fire', bp).mul, 2, 'pokemon 4x → 2x');
+  assert.equal(E.elementMul(bp.fighters[3], 'fire', bp).mul, 0.75, 'pokemon 0.5x → 0.75x');
+  assert.equal(E.elementMul(bp.fighters[4], 'fire', bp).mul, 0.5, 'pokemon 0.25x → 0.5x');
+  assert.equal(E.elementMul(bp.fighters[5], 'electric', bp).mul, 0, 'pokemon immune → 0');
+  assert.equal(bw.scale, bp.scale, 'world and pokemon share clean base scale');
+});
+
+/* 45 */ await test('세계관/포켓몬 속성 동시 생성 및 전환: world↔pokemon 왕복 전환해도 커스텀 세계관 상성표와 양쪽 속성이 유지된다', () => {
+  const worldProf = C.normalizeProfile({
+    elements: ['불', '성광', '심연'],
+    pokeMap: { 성광: '페어리', 심연: '악' },
+    chart: { 성광: { 심연: 2 }, 심연: { 성광: 0.5 } },
+  });
+  const switchedPoke = C.setTypeSystem(worldProf, 'pokemon');
+  const switchedBack = C.setTypeSystem(switchedPoke, 'world');
+  assert.equal(switchedBack.chart['성광']?.['심연'], 2, 'custom world chart must survive world→pokemon→world switch');
+  assert.equal(switchedBack.chart['심연']?.['성광'], 0.5);
+  const sh = C.normalizeSheet({ name: '세라핀', tier: 'B', hp: 600, sp: 200, ptypes: ['페어리'] }, switchedPoke, { side: 'ally' });
+  assert.deepEqual(C.typesFor(sh, 'pokemon'), ['fairy']);
+  assert.ok(C.typesFor(sh, 'world').length >= 1, 'world elements should be populated even when created from ptypes');
+});
+
+/* 46 */ await test('전투 스텝 재생 순서: 느린 캐릭터의 부가효과(상태이상·스탯변화·SP)가 자기 턴 전 스텝에 미리 뜨지 않는다', async () => {
+  const UI = await import(here + 'ui.js');
+  const start = {
+    아리아: { hp: 500, maxHp: 500, sp: 100, maxSp: 100, down: false, statuses: [], stages: {}, row: 'front', charging: null, side: 'ally' },
+    고블린: { hp: 400, maxHp: 400, sp: 80, maxSp: 80, down: false, statuses: [], stages: {}, row: 'front', charging: null, side: 'enemy' },
+  };
+  const events = [
+    { t: 'turn', n: 1 },
+    { t: 'use', who: '아리아', skill: '검격', cost: 20, kind: 'physical' },
+    { t: 'hit', who: '아리아', target: '고블린', dmg: 120, hp: 280, maxHp: 400 },
+    { t: 'use', who: '고블린', skill: '독침', cost: 15, kind: 'physical' },
+    { t: 'hit', who: '고블린', target: '아리아', dmg: 60, hp: 440, maxHp: 500 },
+    { t: 'status', who: '아리아', status: 'poison', turns: 3 },
+    { t: 'stage', who: '아리아', stat: 'def', delta: -1 },
+    { t: 'dot', who: '아리아', status: 'poison', dmg: 40 },
+    { t: 'hit', who: '아리아', target: '아리아', dmg: 40, hp: 400, maxHp: 500, label: '중독' },
+  ];
+  const { steps } = UI.buildSteps(events, start, { showRolls: false });
+  assert.equal(steps.length, 3, 'should split into step1(아리아), step2(고블린), step3(턴종료 도트)');
+  // Step 1 (아리아의 턴): 고블린의 독침이 아직 발동 전이므로 아리아에게 중독·방어감소가 없어야 한다
+  assert.deepEqual(steps[0].statuses['아리아'], [], 'step 1 must NOT show poison before 고블린 acts');
+  assert.deepEqual(steps[0].stages['아리아'], {}, 'step 1 must NOT show def-1 before 고블린 acts');
+  assert.equal(steps[0].sp['아리아'], 80);
+  assert.equal(steps[0].sp['고블린'], 80, '고블린 SP must not decrease before its turn');
+  assert.equal(steps[0].hp['아리아'], 500);
+  assert.equal(steps[0].hp['고블린'], 280);
+  // Step 2 (고블린의 턴): 이제 독·방어감소·피해가 적용된다 (아직 턴 종료 도트는 미적용)
+  assert.equal(steps[1].statuses['아리아'].some(x => x.id === 'poison'), true);
+  assert.equal(steps[1].stages['아리아'].def, -1);
+  assert.equal(steps[1].hp['아리아'], 440);
+  assert.equal(steps[1].sp['고블린'], 65);
+  // Step 3 (턴 종료 도트): 중독 피해 40 적용
+  assert.equal(steps[2].hp['아리아'], 400);
+});
+
+/* 47 */ await test('교체 시 휘발성 상태이상(표식·실명·보호막·스탯변화)은 해제되고 지속 상태이상(화상·중독·빙결)은 유지된다', () => {
+  const f = {
+    stages: { pow: 2, def: -1 },
+    charging: { skill: '필살기' },
+    guard: true,
+    taunter: 'e1',
+    statuses: [
+      { id: 'burn', turns: 3 },
+      { id: 'poison', turns: 4 },
+      { id: 'mark', turns: 3 },
+      { id: 'blind', turns: 2 },
+      { id: 'shield', turns: 2 },
+    ],
+  };
+  E.clearVolatileOnSwitch(f);
+  assert.deepEqual(f.stages, {});
+  assert.equal(f.charging, null);
+  const ids = f.statuses.map(s => s.id);
+  assert.ok(ids.includes('burn') && ids.includes('poison'), 'persistent ailments must remain on switch');
+  assert.ok(!ids.includes('mark') && !ids.includes('blind') && !ids.includes('shield'), 'volatile statuses must clear on switch');
+});
+
+/* 48 */ await test('화상 물리감소·표식 회피하락·빙결 화염해동·버프/디버프 비례 피해(scaleStages)가 정상 작동한다', () => {
+  const a = C.normalizeSheet({ name: '검사', tier: 'B', hp: 700, sp: 200, stats: { STR: 50, MAG: 50, DEF: 40, RES: 40, SPD: 50, LUK: 30 }, skills: [{ name: '화염참', kind: 'physical', power: 60, cost: 10, element: '불', acc: 100 }] }, PROFILE, { side: 'ally' });
+  const t = C.normalizeSheet({ name: '기사', tier: 'B', hp: 700, sp: 200, stats: { STR: 40, MAG: 40, DEF: 40, RES: 40, SPD: 40, LUK: 30 }, skills: [] }, PROFILE, { side: 'enemy' });
+  const b = E.createBattle({ party: [a], enemies: [t], profile: PROFILE, seed: 'fx-test' });
+  const fa = b.fighters[0], ft = b.fighters[1];
+  const phys = C.normalizeSkill({ name: '참격', kind: 'physical', power: 60, acc: 80 });
+  const baseDmg = E.rawDamage(b, fa, ft, phys);
+  fa.statuses.push({ id: 'burn', turns: 3 });
+  const burnDmg = E.rawDamage(b, fa, ft, phys);
+  assert.ok(burnDmg < baseDmg * 0.85, 'burn must reduce physical damage by 20%');
+  fa.statuses = [];
+  const baseHit = E.hitChance(fa, ft, phys);
+  ft.statuses.push({ id: 'mark', turns: 3 });
+  const markHit = E.hitChance(fa, ft, phys);
+  assert.ok(markHit > baseHit, 'mark must lower target evasion / raise hit chance');
+  // scaleStages
+  const scaled = C.normalizeSkill({ name: '결속일격', kind: 'physical', power: 60, scaleStages: 'self' });
+  const s0 = E.rawDamage(b, fa, ft, scaled);
+  fa.stages.pow = 2; fa.stages.spd = 2;
+  const s1 = E.rawDamage(b, fa, ft, scaled);
+  assert.ok(s1 > s0 * 1.4, 'scaleStages=self should boost damage based on positive self stages');
+  // fire thaws freeze
+  fa.stages = {}; ft.statuses = [{ id: 'freeze', turns: 2 }];
+  const res = E.resolveTurn(b, [{ actor: fa.id, type: 'skill', skill: '화염참', target: ft.id }]);
+  assert.ok(res.events.some(e => e.t === 'thaw' && e.who === ft.name && e.byFire), 'fire attack must thaw frozen target');
+  const ftAfter = res.battle.fighters.find(x => x.id === ft.id);
+  assert.ok(!ftAfter.statuses.some(s => s.id === 'freeze'));
+});
+
+/* 49 */ await test('피해 배율 치트(dealMul/takeMul)가 아군 가하는 피해와 받는 피해를 정확히 조절한다', () => {
+  const a = C.normalizeSheet({ name: '용사', tier: 'B', hp: 700, sp: 200, stats: { STR: 50, INT: 40, END: 40, WIL: 40, AGI: 60, LUK: 30 }, skills: [{ name: '강타', kind: 'physical', power: 60, cost: 10, acc: 100 }] }, PROFILE, { side: 'ally' });
+  const t = C.normalizeSheet({ name: '오크', tier: 'B', hp: 700, sp: 200, stats: { STR: 50, INT: 40, END: 40, WIL: 40, AGI: 40, LUK: 30 }, skills: [{ name: '내려치기', kind: 'physical', power: 60, cost: 0, acc: 100 }] }, PROFILE, { side: 'enemy' });
+  const b1 = E.createBattle({ party: [a], enemies: [t], profile: PROFILE, seed: 'cheat1', dealMul: 1, takeMul: 1 });
+  const b2 = E.createBattle({ party: [a], enemies: [t], profile: PROFILE, seed: 'cheat1', dealMul: 2, takeMul: 0 });
+  const k = C.normalizeSkill({ name: '강타', kind: 'physical', power: 60, acc: 100 });
+  const d1 = E.rawDamage(b1, b1.fighters[0], b1.fighters[1], k);
+  const d2 = E.rawDamage(b2, b2.fighters[0], b2.fighters[1], k);
+  assert.ok(Math.abs(d2 - d1 * 2) < 1, 'dealMul=2 must double ally outgoing damage');
+  const res = E.resolveTurn(b2, [{ actor: b2.fighters[0].id, type: 'defend' }]);
+  assert.equal(res.battle.fighters[0].hp, res.battle.fighters[0].maxHp, 'takeMul=0 must reduce enemy damage to 0');
+});
+
+/* 50 */ await test('파티전: 플레이어가 쓰러지고 AI 동료만 남으면 다음 턴 진행 버튼이 노출되고 턴이 진행된다', async () => {
+  const Party = (await import(here + 'modes/party.js')).default;
+  const p = C.normalizeSheet({ name: '주인공', tier: 'C', hp: 300, sp: 100, skills: [] }, PROFILE, { side: 'ally' });
+  const ally = C.normalizeSheet({ name: '동료기사', tier: 'C', hp: 400, sp: 100, skills: [{ name: '일격', kind: 'physical', power: 60, cost: 10, acc: 100 }] }, PROFILE, { side: 'ally' });
+  const foe = C.normalizeSheet({ name: '슬라임', tier: 'C', hp: 400, sp: 100, skills: [{ name: '몸통박치기', kind: 'physical', power: 40, cost: 0, acc: 100 }] }, PROFILE, { side: 'enemy' });
+  const b = Party.create({ spec: { title: '테스트', place: '들판', flee: true }, profile: PROFILE, party: [p], allies: [ally], enemies: [foe], seed: 'solo-ai', settings: {} });
+  b.fighters[0].hp = 0; b.fighters[0].down = true;
+  const menu = Party.menu(b, 'main', { ui: {}, inventory: [] });
+  assert.ok(menu.some(m => m.act === 'm:auto'), 'must expose auto-advance button when only AI allies remain');
+  const act = Party.onAct('m:auto', null, b, { ui: {} });
+  assert.equal(act.cmd.actor, '__auto__');
+  const prevTurn = b.turn;
+  const res = E.resolveTurn(b, [act.cmd]);
+  assert.equal(res.battle.turn, prevTurn + 1, 'turn must advance smoothly with AI ally acting');
+});
+
+/* 51 */ await test('1:1 대결 + 동료: 대기 동료로 교체하면 해당 동료의 스킬을 직접 선택해 사용할 수 있다', async () => {
+  const Duel = (await import(here + 'modes/duel.js')).default;
+  const p = C.normalizeSheet({ name: '주인공', tier: 'B', hp: 600, sp: 200, skills: [{ name: '베기', kind: 'physical', power: 60, cost: 10 }] }, PROFILE, { side: 'ally' });
+  const ally = C.normalizeSheet({ name: '마도사', tier: 'B', hp: 600, sp: 200, skills: [{ name: '별빛포', kind: 'magic', power: 80, cost: 20, acc: 100 }] }, PROFILE, { side: 'ally' });
+  const foe = C.normalizeSheet({ name: '적기사', tier: 'B', hp: 600, sp: 200, skills: [{ name: '찌르기', kind: 'physical', power: 50, cost: 0 }] }, PROFILE, { side: 'enemy' });
+  const b0 = Duel.create({ spec: { title: '결투', place: '투기장', flee: true }, profile: PROFILE, party: [p, ally], enemies: [foe], seed: 'duel-ally', settings: {} });
+  const swAct = Duel.onAct('m:switch', '마도사', b0);
+  const b1 = E.resolveTurn(b0, [swAct.cmd]).battle;
+  const activeAlly = b1.fighters.find(f => f.side === 'ally' && !f.bench);
+  assert.equal(activeAlly.name, '마도사');
+  const menu = Duel.menu(b1, 'main', { ui: {}, inventory: [] });
+  assert.ok(menu.some(m => m.label === '별빛포' || m.v === '별빛포'), 'switched-in ally skill must appear in duel menu');
+  const skAct = Duel.onAct('m:skill', '별빛포', b1);
+  const res = E.resolveTurn(b1, [skAct.cmd]);
+  assert.ok(res.events.some(e => e.t === 'use' && e.who === '마도사' && e.skill === '별빛포'), 'switched-in ally must execute the chosen skill');
+});
+
+/* 52 */ await test('기회주의→약점포착 명칭 변경 및 동급 캐릭터 스탯 특화 편차(총합 예산 내 ±35% 허용)', () => {
+  assert.equal(C.TRAITS.opportunist.ko, '약점포착');
+  const legacy = C.normalizeSheet({ name: '구시트', trait: '기회주의', tier: 'B', hp: 600, sp: 200 }, PROFILE, { side: 'ally' });
+  assert.equal(legacy.trait, 'opportunist', 'legacy 기회주의 alias must still normalize to opportunist');
+  // S-tier mage with high INT (195) & low STR (80) should keep its distinct profile instead of being flattened
+  const mage = C.normalizeSheet({ name: '대마도사', tier: 'S', hp: 1300, sp: 400, stats: { STR: 80, INT: 195, END: 95, WIL: 170, AGI: 145, LUK: 120 }, skills: [] }, PROFILE, { side: 'ally' });
+  C.auditSheet(mage, PROFILE, { clampStats: true });
+  assert.ok(mage.stats.INT >= 180, `mage INT specialty should be preserved (got ${mage.stats.INT})`);
+  assert.ok(mage.stats.STR <= 95, `mage low STR should remain distinct (got ${mage.stats.STR})`);
+  assert.ok(mage.stats.INT - mage.stats.STR >= 85, 'same-tier characters must preserve strong stat specialization');
 });
 
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);

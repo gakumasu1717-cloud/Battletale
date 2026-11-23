@@ -76,11 +76,11 @@ export function mapOf(place = '', mode = '') {
  * View fighter: { name, tier, types[], hp, maxHp, hpUnknown, showNums, sp, maxSp, statuses[], note, noteCls,
  *                 down, side, selected, posture, sub, sprite }
  */
-export function vf(f, { side, intel = 2, typeSystem = 'world', note = '', noteCls = '', selected = false, posture = null, sub = '' } = {}) {
+export function vf(f, { side, intel = 2, typeSystem = 'world', note = '', noteCls = '', selected = false, posture = null, sub = '', spLabel = 'SP' } = {}) {
   return {
     name: f.name, tier: f.tier, types: typesFor(f, typeSystem).map(t => ({ id: t, label: typeName(t, typeSystem) })),
     hp: f.hp, maxHp: f.maxHp, hpUnknown: side === 'enemy' && intel === 0, showNums: side !== 'enemy' || intel >= 2,
-    sp: side === 'ally' || (!f.noSp && intel >= 1) ? f.sp : null, maxSp: f.maxSp, statuses: f.statuses ?? [], note, noteCls,
+    sp: f.maxSp > 0 && (side === 'ally' || !f.noSp) ? f.sp : null, maxSp: f.maxSp, spLabel, statuses: f.statuses ?? [], note, noteCls,
     down: !!(f.down || f.out), out: f.out, side, selected, posture, sub, threat: f.threat,
     row: f.row === 'back' ? 'back' : 'front', shape: shapeOf(f, { side, intel }), portrait: f.portrait?.src ? f.portrait : null, hidden: side === 'enemy' && intel === 0,
     stages: f.stages ?? {}, typeSystem,
@@ -190,6 +190,8 @@ export function enemyCard(F, ctx, { small = false } = {}) {
   const state = F.out === 'yield' ? '항복' : F.out ? '이탈' : F.down ? '기절' : '';
   const intent = F.note && !F.down ? `<div class="en-intent ${F.noteCls ?? ''}" title="${h(F.noteTitle || F.note)}" data-act="pk:tip" data-v="${h(F.noteTitle || F.note)}">${h(F.note)}</div>` : '';
   const types = (F.types.length ? F.types : F.typeSystem === 'pokemon' ? [{ id: 'normal', label: '노말' }] : []).map(x => `<span class="pk-tdot t-${x.id}">${h(x.label)}</span>`).join('');
+  const spPct = F.sp != null && F.maxSp > 0 ? clamp(Math.round(F.sp / Math.max(1, F.maxSp) * 100), 0, 100) : null;
+  const spBar = spPct != null ? `<div class="en-sp" title="${h(F.spLabel ?? 'SP')} ${F.showNums ? `${F.sp}/${F.maxSp}` : `${spPct}%`}"><div style="width:${spPct}%"></div><span>${h(F.spLabel ?? 'SP')} ${F.showNums ? `${F.sp}/${F.maxSp}` : `${spPct}%`}</span></div>` : '';
   return `<div class="en-card ${small ? 'small' : ''} ${st.cls} ${fx.hit}" style="--tc:${TYPE_HEX[t] ?? '#6b6e78'};${st.style}--hd:${fx.hd}s" ${!F.down || fx.html ? `data-act="pk:pick" data-v="${h(F.name)}"` : ''}>
     ${intent}${F.threat === 'boss' ? CROWN : ''}
     ${artHtml(F)}
@@ -197,7 +199,7 @@ export function enemyCard(F, ctx, { small = false } = {}) {
     <div class="en-overlay">
       <div class="en-top"><span class="en-name">${h(F.name)}</span>${F.threat === 'elite' ? '<span class="en-elite">★</span>' : ''}<span class="en-tier">${h(F.tier || '')}</span></div>
       <div class="en-types">${types}</div>
-      ${hpTrail(F, ctx, 'en-hp')}
+      ${hpTrail(F, ctx, 'en-hp')}${spBar}
       ${state || F.statuses.length || Object.values(F.stages ?? {}).some(Boolean) ? `<div class="en-chips">${state ? `<span class="pk-st down">${state}</span>` : ''}${chipsHtml(F)}</div>` : ''}
     </div>${fx.html}</div>`;
 }
@@ -293,8 +295,8 @@ export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, 
     if (mul === 0) tags.push({ text: '무효', cls: 'bad' });
     else {
       const est = Math.min(100, Math.round((E.estimate(b, actor, foe, k) / Math.max(1, foe.hp)) * 100));
-      tags.push({ text: `≈${est}%`, cls: mul >= 2 ? 'good' : mul < 1 ? 'weak' : '' });
-      if (mul >= 2) tags.push({ text: `×${mul}`, cls: 'good' }); else if (mul < 1) tags.push({ text: `×${mul}`, cls: 'weak' });
+      tags.push({ text: `≈${est}%`, cls: mul > 1.01 ? 'good' : mul < 0.99 ? 'weak' : '' });
+      if (mul > 1.01) tags.push({ text: `×${mul}`, cls: 'good' }); else if (mul < 0.99) tags.push({ text: `×${mul}`, cls: 'weak' });
     }
   }
   const first = skillCard(k, { sys }).lines.find(l => !/^(선공|후공|재사용|\d+회 공격|적 전체|아군|자신|명중|HP \d+% 회복)/.test(l));
@@ -341,7 +343,7 @@ export function inspectHtml(f, { b, profile, intel = 2, side, intent = '' }) {
   const world = known && f.stats ? Object.entries(f.stats).map(([k, v]) => `<span>${h(k)} <b>${v}</b></span>`).join('') : '';
   return `<div class="pk-inspect"><div class="pk-ins-box">
     <div class="pk-ins-head"><b>${h(f.name)}</b> <small>${h(f.tier ?? '')}</small> ${types.map(t => `<span class="bt-type t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}<button class="pk-ins-x" data-act="pk:inspect-close">✕</button></div>
-    <div class="pk-ins-hp">${h(profile.hpLabel)} <b>${hp}</b>${side !== 'enemy' ? ` · ${h(profile.spLabel)} <b>${f.sp} / ${f.maxSp}</b>` : ''}${f.row && b?.format !== 'singles' ? ` · ${f.row === 'back' ? '후열' : '전열'}` : ''}</div>
+    <div class="pk-ins-hp">${h(profile.hpLabel)} <b>${hp}</b>${f.maxSp > 0 && (side !== 'enemy' || !f.noSp) ? ` · ${h(profile.spLabel)} <b>${side !== 'enemy' || intel >= 2 ? `${f.sp} / ${f.maxSp}` : `${Math.round(f.sp / Math.max(1, f.maxSp) * 100)}%`}</b>` : ''}${f.row && b?.format !== 'singles' ? ` · ${f.row === 'back' ? '후열' : '전열'}` : ''}</div>
     ${intent ? `<div class="pk-ins-intent">다음 행동: ${h(intent)}</div>` : ''}
     ${f.statuses?.length ? `<div class="pk-chips">${f.statuses.map(x => `<span class="pk-st st-${x.id}">${STATUS[x.id]?.ko} ${x.turns}턴</span>`).join('')}</div>` : ''}
     <div class="pk-stats">${rows}</div>
@@ -357,32 +359,53 @@ const KIND_ICON = { physical: '⚔', magic: '✦', heal: '✚', buff: '▲', deb
 const KIND_NAME = { physical: '물리', magic: '특수', heal: '회복', buff: '강화', debuff: '방해', guard: '방어', revive: '부활', cleanse: '정화' };
 const STG = { pow: '공격', mag: '특공', def: '방어', res: '특방', spd: '스피드', acc: '명중', eva: '회피', luk: '운' };
 
-export function skillCard(k, { sys = 'world', spLabel = 'SP', targets = null, disabled = false, why = '', act = 'm:skill', v = null, extra = [] } = {}) {
-  const t = k.element && !['none', 'physical'].includes(k.element) ? typeIn(k.element, sys) : 'normal';
+const SCALE_TEXT = {
+  self: '자신 버프 수 비례 피해 (+12%/단계)',
+  target: '적 디버프·상태이상 수 비례 피해 (+12%/개)',
+  ally: '아군 전체 버프 수 비례 피해 (+8%/단계)',
+};
+
+/** Detailed human-readable mechanics lines for a skill (shared by combat cards & codex skill details). */
+export function skillDetailLines(k, { verbose = false } = {}) {
   const lines = [];
   if (k.hits > 1) lines.push(`${k.hits}회 공격`);
-  if (k.target === 'enemies') lines.push('적 전체'); else if (k.target === 'allies') lines.push('아군 전체'); else if (k.target === 'ally') lines.push('아군 1명'); else if (k.target === 'self' && !['physical', 'magic'].includes(k.kind) && !Object.keys(k.stages ?? {}).length && k.kind !== 'heal') lines.push('자신');
+  if (k.target === 'enemies') lines.push('적 전체');
+  else if (k.target === 'allies') lines.push('아군 전체');
+  else if (k.target === 'ally') lines.push('아군 1명');
+  else if (k.target === 'self' && (verbose || (!['physical', 'magic'].includes(k.kind) && !Object.keys(k.stages ?? {}).length && k.kind !== 'heal'))) lines.push('대상: 자신');
+  if (verbose && k.target === 'enemy') lines.push('대상: 적 1명');
+  if (verbose && ['physical', 'magic'].includes(k.kind)) lines.push(`사거리: ${k.range === 'melee' ? '근접(전열)' : '원거리'}`);
   if (k.priority > 0) lines.push(`선공 +${k.priority}`); else if (k.priority < 0) lines.push(`후공 ${k.priority}`);
-  if (k.acc && k.acc !== 95) lines.push(k.acc >= 100 ? '필중' : `명중 ${k.acc}`);
-  if (k.status) lines.push(`${STATUS[k.status.id]?.ko ?? k.status.id} ${k.status.chance < 100 ? `${k.status.chance}%` : ''}`.trim());
+  if (k.acc && (verbose || k.acc !== 95)) lines.push(k.acc >= 100 ? '필중' : `명중 ${k.acc}%`);
+  if (k.status) {
+    const def = STATUS[k.status.id];
+    const base = `${def?.ko ?? k.status.id}${k.status.chance < 100 ? ` ${k.status.chance}%` : ''}${k.status.turns ? ` (${k.status.turns}턴)` : ''}`;
+    lines.push(verbose && def?.desc ? `${base} — ${def.desc}` : base);
+  }
   for (const [s2, v2] of Object.entries(k.stages ?? {})) lines.push(`${k.kind === 'buff' && k.target === 'self' ? '자신' : k.kind === 'buff' ? '아군' : '대상'} ${STG[s2] ?? s2} ${v2 > 0 ? '▲' : '▼'}${Math.abs(v2)}`);
   for (const [s2, v2] of Object.entries(k.selfStages ?? {})) lines.push(`자신 ${STG[s2] ?? s2} ${v2 > 0 ? '▲' : '▼'}${Math.abs(v2)}`);
   if (k.kind === 'heal') lines.push(`HP ${k.power}% 회복`);
   if (k.selfHeal) lines.push(`자신 HP ${k.selfHeal}% 회복`);
-  if (k.drain) lines.push(`흡수 ${Math.round(k.drain * 100)}%`);
-  if (k.crit) lines.push('급소율 ↑');
+  if (k.drain) lines.push(`피해 흡수 ${Math.round(k.drain * 100)}%`);
+  if (k.crit) lines.push('급소율 상승');
   if (k.bonusIf) lines.push(bonusText(k.bonusIf));
-  if (k.recoil) lines.push(`반동 ${Math.round(k.recoil * 100)}%`);
+  if (k.scaleStages && SCALE_TEXT[k.scaleStages]) lines.push(SCALE_TEXT[k.scaleStages]);
+  if (k.recoil) lines.push(`반동 피해 ${Math.round(k.recoil * 100)}%`);
   if (k.hpCost) lines.push(`HP ${k.hpCost}% 소모`);
-  if (k.protect) lines.push('이번 턴 공격 전부 막기 (연속 사용 시 확률↓)');
-  if (k.pivot) lines.push('쓴 뒤 교체');
-  if (k.move) lines.push(k.move === 'back' ? '쓴 뒤 후열로' : '쓴 뒤 전열로');
-  if (k.pull) lines.push('후열 적을 전열로 끌어냄');
+  if (k.protect) lines.push('이번 턴 공격 방어 (연속 사용 시 성공률 감소)');
+  if (k.pivot) lines.push(verbose ? '쓴 뒤 교체 (1:1: 대기 동료와 교체 / 파티전: 후열 후퇴)' : '쓴 뒤 교체');
+  if (k.move) lines.push(verbose ? (k.move === 'back' ? '쓴 뒤 후열로 이동 (파티전 전용)' : '쓴 뒤 전열로 이동 (파티전 전용)') : (k.move === 'back' ? '쓴 뒤 후열로' : '쓴 뒤 전열로'));
+  if (k.pull) lines.push(verbose ? '후열 적을 전열로 끌어냄 (파티전 전용)' : '후열 적을 전열로 끌어냄');
   if (k.once) lines.push('전투당 1회');
-  if (k.charge) lines.push('충전 후 발동');
+  if (k.charge) lines.push('1턴 충전 후 발동');
   if (k.cooldown) lines.push(`재사용 ${k.cooldown}턴`);
-  lines.push(...extra);
-  const fx = (k.status ? 1 : 0) + Object.keys(k.stages ?? {}).length + Object.keys(k.selfStages ?? {}).length + (k.selfHeal ? 1 : 0) + (k.drain ? 1 : 0) + (k.priority ? 1 : 0) + (k.bonusIf ? 1 : 0) + (k.pivot || k.protect ? 1 : 0);
+  return lines;
+}
+
+export function skillCard(k, { sys = 'world', spLabel = 'SP', targets = null, disabled = false, why = '', act = 'm:skill', v = null, extra = [] } = {}) {
+  const t = k.element && !['none', 'physical'].includes(k.element) ? typeIn(k.element, sys) : 'normal';
+  const lines = [...skillDetailLines(k, { verbose: false }), ...extra];
+  const fx = (k.status ? 1 : 0) + Object.keys(k.stages ?? {}).length + Object.keys(k.selfStages ?? {}).length + (k.selfHeal ? 1 : 0) + (k.drain ? 1 : 0) + (k.priority ? 1 : 0) + (k.bonusIf ? 1 : 0) + (k.scaleStages ? 1 : 0) + (k.pivot || k.protect ? 1 : 0);
   const rarity = k.basic ? 'paper' : k.cooldown >= 3 || k.power >= 110 || k.once ? 'art' : k.power >= 80 || fx >= 2 ? 'limited' : fx ? 'hard' : 'paper';
   return { name: k.name, cost: k.cost ?? 0, spLabel, type: t, typeLabel: typeName(t === 'normal' && k.element !== 'normal' ? 'normal' : k.element, sys), kind: k.kind, power: ['physical', 'magic'].includes(k.kind) ? k.power : null,
     lines, rarity, disabled, why, act, v: v ?? k.name, target: targets, desc: k.desc ?? '' };

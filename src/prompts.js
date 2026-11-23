@@ -87,7 +87,8 @@ export const SHEET_SCHEMA = `{
   "name": "", "tierReason": "FIRST, one line: quote any rank the persona/card/lore/story states for them (in whatever ladder the world uses) and how it maps to the tier list — or 'no stated rank, judged from <evidence>'",
   "tier": "<one of the tier names>", "threat": "minion|normal|elite|boss",
   "hp": <max HP>, "sp": <max resource>, "stats": {<every stat key>: <number>},
-  "elements": ["1-2 types/elements in the active system"], "ptypes": ["ALWAYS 1-2 of the 18 Pokémon types that fit them (불꽃, 물, 풀, 전기, 얼음, 격투, 독, 땅, 비행, 에스퍼, 벌레, 바위, 고스트, 드래곤, 악, 강철, 페어리, 노말) — even in world-element rules, so the rule set can be switched"], "weak": [], "resist": [], "immune": [],
+  "elements": ["ALWAYS 1-2 of this world's elements (세계관 속성, from the world profile)"],
+  "ptypes": ["ALWAYS 1-2 of the 18 Pokémon types (포켓몬 속성: 불꽃, 물, 풀, 전기, 얼음, 격투, 독, 땅, 비행, 에스퍼, 벌레, 바위, 고스트, 드래곤, 악, 강철, 페어리, 노말) — always fill separately from elements so the user can freely switch systems"], "weak": [], "resist": [], "immune": [],
   "archetype": "burst|combo|tank|support|trickster — the ONE plan their kit is built around",
   "trait": "intimidate|vanguard|opportunist|medic|avenger|null — at most one fixed role passive, only if it clearly fits",
   "skills": [{
@@ -99,6 +100,7 @@ export const SHEET_SCHEMA = `{
     "stages": {"pow": 1, "def": -1}, "selfStages": {"def": 1}, "selfHeal": 0,
     "recoil": 0.25, "hpCost": 10, "once": true,
     "bonusIf": {"status": "mark|burn|poison|…|any", "mul": 1.6, "consume": true} | {"selfHpBelow": 0.5, "mul": 1.4} | {"targetFullHp": true, "mul": 1.3} | {"targetCharging": true, "mul": 1.5},
+    "scaleStages": "self|target|ally — optional: +12% dmg per self buff stage / target debuff stage / +8% per ally team buff stage (use sparingly on 1 signature/combo skill)",
     "pivot": true, "protect": true, "move": "front|back", "pull": true
   }],
   "passives": ["short text"], "desc": "one line",
@@ -108,19 +110,19 @@ export const SHEET_SCHEMA = `{
 const SKILL_GUIDE = `Skill design guide — rank sets the budget, the archetype sets the identity:
 - Pick ONE archetype and build the kit so its skills interlock, instead of one generic damage/buff/debuff move each:
   · burst — hard hitters that PAY for it (recoil, hpCost, a self stat drop like def -1, or once per battle).
-  · combo — one move APPLIES a trigger (status "mark", "vulnerable", burn, poison…), another EXPLOITS it via bonusIf (e.g. mark → bonusIf {"status":"mark","mul":1.7,"consume":true}).
-  · tank — guard/protect, shields, taunt, a hit that is stronger when they are hurt (bonusIf selfHpBelow).
-  · support — heals, cleanse, team buffs; only weak attacks.
-  · trickster — priority pokes, debuffs, pivot (hit then switch out — 1-on-1 only), pull/move (rows — party only).
+  · combo — one move APPLIES a trigger (status "mark" which lowers evasion, "blind" which lowers accuracy, "vulnerable", burn, poison, freeze…), another EXPLOITS it via bonusIf (e.g. mark → bonusIf {"status":"mark","mul":1.7,"consume":true}) or scaleStages ("self"|"target"|"ally", dmg scales with buff/debuff count — use sparingly!).
+  · tank — guard/protect, shields ("shield" status = -40% dmg taken), taunt, a hit that is stronger when they are hurt (bonusIf selfHpBelow).
+  · support — heals, cleanse, team buffs (target "allies" with stages/shield/regen); only weak attacks.
+  · trickster — priority pokes, debuffs (blind/mark/burn/poison/freeze), pivot (hit then switch out in 1v1, or step to back row in party), pull/move (rows — party only).
 - Every non-basic move needs a reason to press it NOW: a cost, a condition, a cooldown, or a setup. Avoid "same move, different number".
 - Rank budget (by position in the tier list, weakest → strongest): normal attack power ≈ 60 at the lowest rank up to ≈ 105 at the highest. ONE signature move may exceed that by up to +35 and must have cooldown 3-5, a charge turn, or "once". A real price (recoil ≥ 0.25, hpCost ≥ 10, self def/res -1 or more) buys up to +15-30 power. Multi-hit: ≤3 hits, low power per hit. Area attacks ≈ 80% power. pivot moves ≈ 75% power.
-- bonusIf multipliers: ≤1.6 (≤1.8 when it consumes the status, ≤1.4 for selfHpBelow/targetFullHp). "mark" does nothing alone; "vulnerable" = +35% damage taken for 2 turns.
+- bonusIf multipliers: ≤1.6 (≤1.8 when it consumes the status, ≤1.4 for selfHpBelow/targetFullHp). "mark" lowers evasion and sets up combos; "blind" lowers accuracy; "burn" deals DoT and reduces physical dmg by 20%; "freeze" freezes (thaws on fire hit or 25%/turn); "vulnerable" = +35% dmg taken. Persistent statuses (burn/poison/bleed/freeze/sleep/regen) stay on switch; tactical/volatile ones (mark/blind/stun/taunt/shield/stages) clear on switch. Don't overload kits with too many mechanics.
 - Priority moves: +1 (+2 only for upper ranks), power ≤ 50. Hard control (sleep/stun/freeze): ≤20% chance on attacks, ≤75% accuracy as a pure status move.
 - At most one secondary effect per attack, on at most half of the attacks (priced effects and mark/vulnerable setups don't count). Buff/debuff skills change at most 2 stages in total. Heals ≤ 35% of max HP (≤ 50% for upper ranks). Status moves that should deal damage are kind "physical"/"magic" with a status — a "debuff" has power 0.
 - Type coverage: with 3+ attacking moves, at least one uses a DIFFERENT type (or is normal/untyped) so one immunity never leaves them helpless.
 - cost (Temtem-like economy): standard ≈ 15-25% of max resource, strong ≈ 30%, signature ≈ 40-45%; hpCost moves cost little resource. Regen is ~5% per turn; resting gives +20%. Basic attacks are free and automatic — do not list one.
 - status ids: ${STATUS_IDS}. "stages" hit the target (or allies for buffs); "selfStages"/"selfHeal" (% of max HP) apply to the user. Omit unused fields.
-- ${'${maxSkills}'} skills at most, from the character's fighting style, class, gear and the world's tropes. Names in the story's language.
+- Create 2-${'${maxSkills}'} skills by default (fit the character's rank, fighting style, class, gear and the world's tropes — simpler/lower-rank fighters 2-3, seasoned/versatile fighters 4-6). Only exceed 6 skills (up to 10) if the user's description, wish list, revision instruction, or status window explicitly asks for more skills or lists more. Names in the story's language.
 - The engine clamps anything over budget, so over-designing only wastes the character's slots.`;
 
 const FAIRNESS = `Fairness rules (strict, two sides):
@@ -129,19 +131,23 @@ const FAIRNESS = `Fairness rules (strict, two sides):
 - THE DESCRIPTION IS CANON, TOO. The persona / character description and the lorebook are the world's facts, not wishes — also for the player. Concrete facts in them set the rank: a stated rank, a title or post (captain, guild master, court mage), achievements (defeated X, survived Y), years of training or service, named powers and what they can do, how others in the world treat them.
 - WISHES DON'T. Only vague praise with no concrete fact behind it ("a genius", "the strongest", "can beat anyone") and the user's wish list buy nothing: without a stated rank or concrete canon facts, a rookie is a rookie however cool the concept sounds.
 - NO LOWBALLING. The bottom two tiers are only for characters the sources show as untrained, new, weak or ordinary. A trained, professional or notable fighter is at least the middle tier, higher when the facts say so. When unsure between two tiers, take the one the concrete facts support — not the lower one by default.
-- Stats stay inside their tier's range and skills inside the rank budget.
+- STAT PERSONALITY (CRITICAL — avoid monotonous, identical numbers across same-rank characters!): Treat the tier's stat range [low–high] as the AVERAGE baseline, NOT a flat box for every stat. Give every character distinct specialization peaks (+15% to +35% above tier high on 1–2 signature stats, or +10–25% HP for tanks) balanced by genuine weak stats (-15% to -35% below tier low on 1–2 dump stats, staying above ~65% of tier low) so their OVERALL stat average stays inside the tier range. Never give same-rank characters flat, near-identical numbers (e.g. 225/235/240/245 across the board): an archmage spikes MAG/RES with visibly lower STR/DEF; a speed assassin spikes SPD with lower DEF/HP; a heavy tank spikes DEF/HP with low SPD; a bruiser spikes STR/HP with low MAG.
+- Skills stay inside the rank budget.
 - Nobody gets an answer to every situation (no "counters everything", no free full heals, no instant wins). Real characters have gaps: a fragile caster, a slow bruiser, a melee fighter with no ranged option.
 - If the user listed skills, treat them as a WISH LIST: keep their names and flavor, but set power, priority, accuracy and effects by the rank budget, and drop or weaken anything above it.`;
 
-/** Which types a sheet must pick from, so nobody (the player included) ends up typeless. */
-const typeRule = profile => (profile.typeSystem === 'pokemon'
-  ? `- "elements" is REQUIRED for every character, the player too: 1-2 of the 18 Pokémon types (${Object.values(POKE_KO).join(', ')}) that fit their powers, weapon, element or nature — read the description and lore for it. Only a plain human with no powers or gear is 노말.`
-  : profile.elements?.length
-    ? `- "elements" is REQUIRED for every character, the player too: 1-2 of THIS world's elements (${profile.elements.join(', ')}) that fit their powers, magic, weapon or nature — read the description and lore for it. Leave it empty only if they truly have no attribute. "ptypes" is still filled.`
-    : '');
+/** Always separate and populate BOTH world elements and Pokémon 18 types from creation so the user can freely switch rule sets. */
+const typeRule = profile => {
+  const worldEl = profile.elements?.length ? profile.elements.join(', ') : '불, 물, 얼음, 전기, 바람, 대지, 어둠, 빛';
+  const pokeEl = Object.values(POKE_KO).join(', ');
+  return `- BOTH "elements" and "ptypes" are REQUIRED for every character (the player too), separated from creation so world elements and Pokémon types can be switched freely:
+  · "elements" is REQUIRED (세계관 속성): 1-2 of THIS world's elements (${worldEl}) that fit their powers, magic, weapon or nature. Leave empty only if they truly have no attribute.
+  · "ptypes" is REQUIRED (포켓몬 속성): 1-2 of the 18 Pokémon types (${pokeEl}) that fit their nature/fighting style. Only a plain human with no powers or gear is 노말.
+  · Each skill's "element": ${profile.typeSystem === 'pokemon' ? `one of the 18 Pokémon types (${pokeEl}; untyped = 노말)` : `one of this world's elements (${worldEl}), or "none" for plain physical attacks`}.`;
+};
 
-export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '', own = '', brief = '', story = '' }) {
-  const maxSkills = profile.typeSystem === 'pokemon' ? 4 : 6;
+export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', current = null, instruction = '', roster = '', card = '', own = '', brief = '', story = '', maxSkills = 6 }) {
+  const skillCap = Math.max(6, Math.min(12, Number(maxSkills) || 6));
   const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance in both directions: you neither inflate nor shrink anyone. What the character's description and the lorebook say about them is canon. Output only JSON.`;
   const who = npc ? `the character "${personaName}"` : `the player character "${personaName}" ({{user}})`;
   const user = `## Rule set
@@ -159,7 +165,7 @@ ${!npc ? '- CRITICAL FOR {{user}}: If the Player persona above explicitly states
 - If the status window lists skills, turn each into a skill entry with fitting mechanics (keep its name).
 ${typeRule(profile)}
 ${FAIRNESS}
-${SKILL_GUIDE.replace('${maxSkills}', maxSkills)}`;
+${SKILL_GUIDE.replace('${maxSkills}', skillCap)}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
@@ -195,10 +201,10 @@ Answer with ONE JSON object:
 <sheet> = ${SHEET_SCHEMA}
 ${includePlayer ? '- The player entry comes first with role "player".' : '- The player is already done; do not list them.'}
 - "name" is the exact name used in the story. Write "tierReason" before "tier" for every character.
-- Keep sheets compact: ${profile.typeSystem === 'pokemon' ? 4 : '4-6'} skills each, short descs.
+- Keep sheets compact: 2-6 skills each (fit each character's complexity and rank), short descs.
 ${typeRule(profile)}
 ${FAIRNESS}
-${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}`;
+${SKILL_GUIDE.replace('${maxSkills}', 6)}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
@@ -262,7 +268,7 @@ ${codex ? `\n## Registered characters (stats and skills are already stored)\n${c
 - intel per enemy: 2 = the player scouted/analysed it or it is famous in the lore; 1 = seen clearly; 0 = unknown, hidden, never seen before.
 - terrain: real environmental factors from the scene (darkness, rain, high ground, narrow corridor, cover). stages are -1..+1 on pow, mag, def, res, spd, acc, eva for the side that benefits or suffers. Usually 0-2 entries.
 - Preparation counts: traps the player set, buffs taken, intel gathered, allies brought — reflect them in initiative, terrain, intel and allies.
-${SKILL_GUIDE.replace('${maxSkills}', profile.typeSystem === 'pokemon' ? 4 : 6)}
+${SKILL_GUIDE.replace('${maxSkills}', 6)}
 - Enemies follow the same rank budget (a boss may use one rank higher). Their rank comes from what they are in this world, not from the player's rank.
 - Mode flavor: in "duel" give the opponent mind-game tools (a protect/guard move, a pivot move if it has teammates, a big move that needs reading); in "party" make the group play as a unit — a front-row tank (trait vanguard or a taunt), a back-row damage dealer or healer, and moves that combo (one applies mark/vulnerable/burn, another exploits it), or a charger the player can break.`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
@@ -283,7 +289,7 @@ export function planMessages({ profile, scene, party, hint, inventory, modes = [
     duel: '"duel": a 1-on-1 battle with Pokémon singles rules: one fighter per side at a time, others wait and can be switched in (rival match, duel, sparring, boss fight against one foe). "enemies" is their team in send-out order.',
     stealth: '"stealth": a grid puzzle — sneaking past guards ("variant": "sneak") or fleeing pursuers ("variant": "chase"). Up to 4 guards walk the map; extra enemies join if caught.',
   };
-  const mookSchema = `{"kind": "mook", "name": "generic name", "count": 1, "threat": "minion|normal|elite", "tier": "<tier name>", "hp": <num>, "sp": <num>, "stats": {<stat keys>}, "elements": ["1-2 types"], "ptypes": ["1-2 Pokémon types"], "row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker", "skills": [{"name": "", "desc": "short", "kind": "physical|magic|heal|buff|debuff|guard", "power": 60, "cost": 20, "target": "enemy|enemies|ally|allies|self", "element": "", "acc": 95, "status": {"id": "${STATUS_IDS}", "chance": 30, "turns": 2}, "stages": {"pow": 1}}], "desc": "one short line"}`;
+  const mookSchema = `{"kind": "mook", "name": "generic name", "count": 1, "threat": "minion|normal|elite", "tier": "<tier name>", "hp": <num>, "sp": <num>, "stats": {<stat keys>}, "elements": ["1-2 world elements"], "ptypes": ["1-2 Pokémon types"], "row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker", "skills": [{"name": "", "desc": "short", "kind": "physical|magic|heal|buff|debuff|guard", "power": 60, "cost": 20, "target": "enemy|enemies|ally|allies|self", "element": "", "acc": 95, "status": {"id": "${STATUS_IDS}", "chance": 30, "turns": 2}, "stages": {"pow": 1}}], "desc": "one short line"}`;
   const user = `## Rule set
 ${profileText(profile)}
 ${brief ? `\n## World brief\n${brief}\n` : ''}
@@ -401,7 +407,7 @@ export function profileText(p) {
     `Name: ${p.name}`,
     `Stats: ${p.stats.map(s => `${s.key}${s.label && s.label !== s.key ? ` (${s.label})` : ''}`).join(', ')}; health "${p.hpLabel}", resource "${p.spLabel}"`,
     `Tiers, weakest → strongest (HP / resource / stat ranges${p.tiers.some(t => t.desc) ? ' — who belongs there' : ''}):\n${p.tiers.map(t => `  - ${t.name}${t.aliases?.length ? ` (= ${t.aliases.join(' / ')})` : ''}: ${t.hp.join('-')}/${t.sp.join('-')}/${t.stat.join('-')}${t.desc ? ` — ${t.desc}` : ''}`).join('\n')}`,
-    p.typeSystem === 'pokemon' ? `Type system: Pokémon rules. Use ONLY these 18 types for characters (1-2 each) and skills: ${Object.values(POKE_KO).join(', ')}. Official Pokémon type chart, same-type bonus ×1.5. Every combatant — monsters, thugs, humans — gets 1-2 types that fit its nature (a goblin: 악/독, a knight: 강철/격투, a plain human: 노말); every skill gets a type too (untyped = 노말). Matchups come ONLY from the chart: leave weak/resist/immune empty. "physical" skills use pow vs def, "magic" (= special) use mag vs res.` : p.elements?.length ? `Elements: ${p.elements.join(', ')}` : '',
+    p.typeSystem === 'pokemon' ? `Active type system: Pokémon rules (18 types: ${Object.values(POKE_KO).join(', ')}; official chart, STAB ×1.5; "physical" = pow vs def, "magic" = mag vs res; leave weak/resist/immune empty). World elements (for the separate "elements" field): ${p.elements?.length ? p.elements.join(', ') : '불, 물, 얼음, 전기, 바람, 대지, 어둠, 빛'}` : `Active type system: World elements (${p.elements?.length ? p.elements.join(', ') : 'none'}). Pokémon 18 types (for the separate "ptypes" field): ${Object.values(POKE_KO).join(', ')}.`,
     p.notes ? `Notes: ${p.notes}` : '',
   ].filter(Boolean).join('\n');
 }

@@ -1,6 +1,6 @@
 // Game controller: everything between "chat happened" and "engine resolved".
 // Kept free of SillyTavern globals so it can be tested with plain objects.
-import { normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, toPoke, typesFor, typeName } from './catalog.js';
+import { normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, requestedSkillCap, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL, threatOf, createBattle } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
 import { ruleMessages, setupMessages, briefText, sheetMessages, forgeMessages, planMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
@@ -103,6 +103,8 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   // Only an explicit choice in the panel or the status window's own rank field pins the tier; anything written in
   // the persona or description ("3등급", "프로기오", "B랭크") is read and mapped by the aux model.
   const fixedTier = partial?.tier || (s.playerTier && tierOf(profile, s.playerTier)?.name) || '';
+  const current = instruction && s.player ? s.player : null;
+  const maxSkills = requestedSkillCap([persona.text, extra, s.playerConcept, instruction].join('\n'), { statFields: partial ?? statFields, current });
   let raw = null;
   if (deps.auxReady()) {
     deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
@@ -113,7 +115,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
       const own = deps.matchLore ? ((await deps.matchLore(`${persona.name}\n${persona.text}`).catch(() => null))?.text ?? '') : '';
       const story = deps.mentions?.([persona.name]) ?? '';
       const worldLore = s.brief ? '' : await deps.lore();
-      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current: instruction && s.player ? s.player : null, instruction, tier: fixedTier }), { maxTokens: 2400 });
+      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current, instruction, tier: fixedTier, maxSkills }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -128,7 +130,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   }
   if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: fixedTier || profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
   if (persona.text) s.playerPersonaHash = hashStr(persona.text);
-  return applyPlayerSheet(s, deps, raw, { statFields, partial });
+  return applyPlayerSheet(s, deps, raw, { statFields, partial, maxSkills });
 }
 
 /**
@@ -160,7 +162,7 @@ export async function setupChat(s, deps, { player = true } = {}) {
 }
 
 /** Turn a raw (aux model) sheet into the player's sheet: normalize, audit, keep the portrait. */
-export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(), partial = null } = {}) {
+export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(), partial = null, maxSkills = 6 } = {}) {
   const profile = profileOf(s);
   const persona = deps.persona();
   if (raw.tierReason) deps.trace?.('balance', `등급 판단 · ${persona.name} → ${raw.tier ?? '?'}`, String(raw.tierReason));
@@ -168,7 +170,7 @@ export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(
   sheet.id = 'player';
   sheet.isPlayer = true;
   if (s.player?.portrait && !sheet.portrait) sheet.portrait = s.player.portrait;
-  const audit = auditSheet(sheet, profile, { clampStats: !statFields });
+  const audit = auditSheet(sheet, profile, { clampStats: !statFields, maxSkills });
   if (audit.notes.length) { deps.toast?.(`⚖️ 등급(${sheet.tier || '?'})에 맞게 조정: ${audit.notes.slice(0, 3).join(' · ')}${audit.notes.length > 3 ? ` 외 ${audit.notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, audit.notes.join('\n')); }
   if (!sheet.skills.length) sheet.skills = [normalizeSkill({ name: '전력 일격', kind: 'physical', power: 75, cost: Math.round(sheet.maxSp * 0.12) }, { maxSp: sheet.maxSp })];
   s.player = sheet;
@@ -204,11 +206,11 @@ export function rosterSheet(s, entry) {
   return s.roster[entry.id] ?? entry.sheet;
 }
 
-export function registerCharacter(s, deps, raw, { side = 'enemy', locked = false } = {}) {
+export function registerCharacter(s, deps, raw, { side = 'enemy', locked = false, maxSkills = 6 } = {}) {
   const profile = profileOf(s);
   const sheet = normalizeSheet(raw, profile, { side, seed: raw.name });
   if (raw.tierReason) deps.trace?.('balance', `등급 판단 · ${sheet.name} → ${sheet.tier || '?'}`, String(raw.tierReason));
-  const { notes } = auditSheet(sheet, profile, { clampStats: true, bonusTier: sheet.threat === 'boss' ? 1 : 0 });
+  const { notes } = auditSheet(sheet, profile, { clampStats: true, bonusTier: sheet.threat === 'boss' ? 1 : 0, maxSkills });
   if (notes.length) { deps.toast?.(`⚖️ ${sheet.name} 밸런스 조정: ${notes.slice(0, 3).join(' · ')}${notes.length > 3 ? ` 외 ${notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, notes.join('\n')); }
   const existing = codexFind(deps, sheet.name);
   const entry = { id: existing?.id ?? `c${uid()}`, name: sheet.name, sheet: { ...stripRuntime(sheet), side: undefined, codexId: undefined }, locked: existing?.locked ?? locked, updated: Date.now() };

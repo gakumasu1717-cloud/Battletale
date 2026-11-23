@@ -50,7 +50,7 @@ export default {
   id: 'duel', ko: '1:1 대결', icon: '🤺',
 
   create({ spec, profile, party, enemies, seed, settings }) {
-    const b = E.createBattle({ party, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, format: 'singles' });
+    const b = E.createBattle({ party, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, format: 'singles', dealMul: settings.dealMul ?? 1, takeMul: settings.takeMul ?? 1 });
     b.attackName = settings.attackName || '기본 공격';
     return b;
   },
@@ -155,8 +155,8 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const sys = b.typeSystem;
     const fo = field(b, 'enemy'), me = field(b, 'ally');
     const balls = side => team(b, side).map(f => (f.down ? 'x' : f.bench ? 'o' : '*'));
-    const foes = fo ? [vf(fo, { side: 'enemy', intel: fo.intel ?? 1, typeSystem: sys, note: fo.charging ? `⚡ ${fo.charging.skill}의 힘을 모으고 있다!` : tellOf(b, fo, 'ko'), noteCls: fo.charging ? 'charge' : 'tell' })] : [];
-    const allies = me ? [vf(me, { side: 'ally', typeSystem: sys, note: me.charging ? '힘을 모으는 중' : '' })] : [];
+    const foes = fo ? [vf(fo, { side: 'enemy', intel: fo.intel ?? 1, typeSystem: sys, spLabel: profile.spLabel, note: fo.charging ? `${fo.charging.skill}의 힘을 모으고 있다!` : tellOf(b, fo, 'ko'), noteCls: fo.charging ? 'charge' : 'tell' })] : [];
+    const allies = me ? [vf(me, { side: 'ally', typeSystem: sys, spLabel: profile.spLabel, note: me.charging ? '힘을 모으는 중' : '' })] : [];
     const intro = [];
     const lead = team(b, 'enemy')[0];
     if (lead) intro.push(`${josa(lead.name, '이', '가')} 승부를 걸어왔다!`);
@@ -181,7 +181,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
 
   side(b, ctx) {
     const items = (ctx.inventory ?? []).filter(i => i.count > 0);
-    return [{ label: '🎒 가방', cls: 'm-bag', page: 'bag', disabled: !items.length }, { label: '🔄 교체', cls: 'm-party', page: 'switch', disabled: !E.benchOf(b, 'ally').length }, { label: '🏃 도망', cls: 'm-run', act: 'm:flee', disabled: !b.flee }];
+    return [{ label: '가방', cls: 'm-bag', page: 'bag', disabled: !items.length }, { label: '교체', cls: 'm-party', page: 'switch', disabled: !E.benchOf(b, 'ally').length }, { label: '도망', cls: 'm-run', act: 'm:flee', disabled: !b.flee }];
   },
 
   forced: b => (b.needSwitch ? 'switch' : null),
@@ -205,17 +205,17 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const foe = field(b, 'enemy');
     const main = () => [
       ...me.skills.map(k => skillItem(k, { actor: me, b, sys, foe, cd: me.cds?.[k.name] ?? 0, used: !!(k.once && me.used?.[k.name]) })),
-      { bar: true, label: '⚔ 공격', act: 'm:basic', title: '노말 · 기본 공격 (무료)' },
-      { bar: true, label: '🛡 방어', act: 'm:defend', title: '받는 피해 ½ · 기력 +5%' },
-      { bar: true, label: '💤 휴식', act: 'm:rest', title: `기력 +20% (${me.sp}/${me.maxSp})` },
-      { bar: true, sep: true, icon: true, label: '🎒', page: 'bag', disabled: !items.length, title: '가방' },
-      { bar: true, icon: true, label: '🔄', page: 'switch', disabled: !bench.length, title: '교체' },
-      { bar: true, icon: true, label: '🏃', act: 'm:flee', disabled: !b.flee, title: '도망' },
+      { bar: true, label: '공격', act: 'm:basic', title: '노말 · 기본 공격 (무료)' },
+      { bar: true, label: '방어', act: 'm:defend', title: '받는 피해 ½ · 기력 +5%' },
+      { bar: true, label: '휴식', act: 'm:rest', title: `기력 +20% (${me.sp}/${me.maxSp})` },
+      { bar: true, sep: true, label: '가방', page: 'bag', disabled: !items.length, title: '가방' },
+      { bar: true, label: '교체', page: 'switch', disabled: !bench.length, title: '교체' },
+      { bar: true, label: '도망', act: 'm:flee', disabled: !b.flee, title: '도망' },
     ];
-    if (me?.charging) return [{ label: `⚡ ${me.charging.skill} 발동!`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' }];
+    if (me?.charging) return [{ label: `${me.charging.skill} 발동`, sub: '충전 완료 · 이번 턴에 자동으로 나가요', cls: 'm-fight', act: 'm:release' }];
     if (page === 'main' || page === 'fight') return main();
-    if (page === 'bag') return [...items.map(i => { const sp = i.spec ?? inferItem(i.name); return { label: i.name, meta: `×${i.count}`, sub: sp ? ({ heal: 'HP 회복', sp: '기력 회복', full: '완전 회복', cure: '상태이상 회복', revive: '부활', damage: '공격', buff: '강화' }[sp.kind]) : '효과 불명', cls: 'plain', act: 'm:item', v: i.name }; }), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
-    if (page === 'switch') return [...bench.map(mate), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
+    if (page === 'bag') return [...items.map(i => { const sp = i.spec ?? inferItem(i.name); return { label: i.name, meta: `×${i.count}`, sub: sp ? ({ heal: 'HP 회복', sp: '기력 회복', full: '완전 회복', cure: '상태이상 회복', revive: '부활', damage: '공격', buff: '강화' }[sp.kind]) : '효과 불명', cls: 'plain', act: 'm:item', v: i.name }; }), { label: '돌아가기', cls: 'back', page: 'main' }];
+    if (page === 'switch') return [...bench.map(mate), { label: '돌아가기', cls: 'back', page: 'main' }];
     return main();
   },
 
@@ -226,7 +226,7 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
       case 'm:skill': return { body: v, cmd: { actor: id, type: 'skill', skill: v } };
       case 'm:basic': return { body: '공격', cmd: { actor: id, type: 'attack' } };
       case 'm:defend': return { body: '방어', cmd: { actor: id, type: 'defend' } };
-      case 'm:release': return { body: '충전기 발동', cmd: { actor: id, type: 'release' } };
+      case 'm:release': return { body: '충전기 발동', cmd: { actor: id, type: 'release', skill: me?.charging?.skill } };
       case 'm:rest': return { body: '휴식', cmd: { actor: id, type: 'rest' } };
       case 'm:item': return v ? { body: `아이템 ${v}`, cmd: { actor: id, type: 'item', item: v, target: me?.name } } : null;
       case 'm:switch': return { body: `교체 → ${v}`, cmd: { actor: id, type: 'switch', target: v } };

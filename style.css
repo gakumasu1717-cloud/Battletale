@@ -1116,3 +1116,34 @@
 
 /* v0.16 world brief */
 .bt-pre{white-space:pre-wrap;font:inherit;margin:4px 0 0;opacity:.85}
+#bt-panel .bt-head { gap: 5px; }
+#bt-panel .bt-tsys, #bt-panel .bt-cheat-btn { font-size: 11px; padding: 2px 6px; white-space: nowrap; }
+#bt-panel .bt-tsys.poke { border-color: #e8a33d99; color: #f6d08a; }
+#bt-panel .bt-tsys.world { border-color: #5fb0f099; color: #9fd2ff; }
+#bt-panel .bt-cheat-btn.on { border-color: #e66b6b99; color: #ffadad; background: #e66b6b1c; }
+.pc-alttype { font-size: 10.5px; padding: 0 5px; border-radius: 5px; background: #ffffff10; color: var(--bt-dim, #b2b7c4); border: 1px dashed #ffffff24; white-space: nowrap; }
+
+/* Cheat multiplier bar */
+.bt-cheat-bar { margin: 6px 8px 2px; padding: 8px 10px; border-radius: 8px; background: #141822; border: 1px solid #ffffff1c; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.bt-ch-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.bt-ch-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bt-ch-row > span { min-width: 66px; font-size: 11.5px; opacity: .85; }
+.bt-ch-btns { display: flex; gap: 3px; flex-wrap: wrap; flex: 1; }
+.bt-ch-b { font-size: 11px; padding: 2px 6px; border-radius: 5px; border: 1px solid #ffffff22; background: #ffffff0a; color: inherit; cursor: pointer; }
+.bt-ch-b.on { background: #5a8aff38; border-color: #7ea6ff; color: #fff; font-weight: 600; }
+.bt-ch-in { width: 52px; padding: 2px 5px; font-size: 11.5px; border-radius: 5px; border: 1px solid #ffffff22; background: #0c0f16; color: inherit; text-align: center; }
+
+/* Codex / character expandable skill details */
+.pc-skill { cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+.pc-skill:hover { background: #ffffff0e; }
+.pc-skill.open { background: #ffffff12; border-color: var(--tc, #8a8c8a); }
+.pc-caret { font-size: 11px; opacity: .6; margin-left: 4px; }
+.pc-sdetail { margin-top: 6px; padding-top: 6px; border-top: 1px solid #ffffff18; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+.pc-sd-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 2px; font-size: 11px; opacity: .9; }
+.pc-sd-line { opacity: .9; line-height: 1.35; }
+.pc-sd-desc { margin-top: 3px; opacity: .75; line-height: 1.4; font-style: normal; }
+
+/* Enemy SP bar on battlefield card */
+.en-sp { position: relative; height: 11px; margin-top: 2px; border-radius: 4px; background: #0c1220cc; border: 1px solid #4c7dd444; overflow: hidden; }
+.en-sp > div { height: 100%; background: linear-gradient(90deg, #3a7bd5, #5ca9ff); transition: width .25s ease; }
+.en-sp > span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; line-height: 1; color: #eef5ff; text-shadow: 0 1px 2px #000c; font-weight: 600; }

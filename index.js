@@ -1,5 +1,5 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset } from './src/catalog.js';
+import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, requestedSkillCap } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaInfo, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
@@ -20,7 +20,7 @@ const DEFAULTS = {
   enabled: true, exclude: '', optIn: false,
   auxSource: 'main', auxProfile: '', auxUrl: '', auxKey: '', auxModel: '', auxMaxTokens: 10000, auxTemp: 0.4, auxTopP: null, auxReasoning: '', auxJsonMode: false, auxExtra: '', auxHeaders: '', auxProfilePreset: false, auxOverride: false, auxProfileModel: '', auxMaxInput: 16000, castScene: 20, sheetScene: 4, castBatch: 4, difficulty: 'normal', spCostScale: '1.3', auxCommands: true, sceneSize: 3, forgeLore: 'auto',
   startMode: 'hybrid', startTrigger: 'button', suggestStart: true, statTag: 'stat', statSync: 'all', trackChanges: true, loreBooks: '', loreBudget: 14000,
-  length: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
+  length: 1, dealMul: 1, takeMul: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
   timingMode: 'off', modes: { party: true, duel: true, stealth: true }, showThreat: true,
   playMode: 'panel', autoPlay: '1300', fightGuard: true, stateWatch: 'auto', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary', previewBeforeStart: true,
@@ -143,8 +143,8 @@ function deps() {
     toast,
     codex: codexStore(),
     cache: {
-      get: () => { const p = settings().profileCache?.[cacheKey()]; return p ? (settings().ruleSet === 'pokemon' && p.typeSystem !== 'pokemon' ? setTypeSystem(normalizeProfile(p), 'pokemon') : p) : null; },
-      set: p => { if (settings().ruleSet === 'pokemon' && p.typeSystem !== 'pokemon') Object.assign(p, setTypeSystem(p, 'pokemon')); settings().profileCache[cacheKey()] = p; const keys = Object.keys(settings().profileCache); if (keys.length > 30) delete settings().profileCache[keys[0]]; saveSettings(); },
+      get: () => { const p = settings().profileCache?.[cacheKey()]; return p ? normalizeProfile(p) : null; },
+      set: p => { settings().profileCache[cacheKey()] = clone(p); const keys = Object.keys(settings().profileCache); if (keys.length > 30) delete settings().profileCache[keys[0]]; saveSettings(); },
     },
   };
 }
@@ -505,7 +505,8 @@ const panelApi = {
       // Canon for rank judgement: the card (the bot may BE this character, or describe them) and story lines that mention them.
       const names = [name, ...String(aliases ?? '').split(',')].map(x => x.trim()).filter(Boolean);
       const seen = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(10, Number(settings().castScene) || 20) * 3 });
-      const raw = await deps().auxJson(sheetMessages({ profile, own: lore, persona: concept, personaName: name, npc: true, tier, current, instruction, roster: rosterBrief(name), card: characterText(), story: seen, brief: briefText(s.brief) }), { maxTokens: 2400 });
+      const maxSkills = requestedSkillCap([concept, instruction].join('\n'), { current });
+      const raw = await deps().auxJson(sheetMessages({ profile, own: lore, persona: concept, personaName: name, npc: true, tier, current, instruction, roster: rosterBrief(name), card: characterText(), story: seen, brief: briefText(s.brief), maxSkills }), { maxTokens: 2400 });
       if (raw.__truncated) toast('⚠ 보조모델 답이 중간에 잘렸어요. 받은 부분까지만 반영했어요 (⚙ 최대 응답 토큰을 늘려보세요).', 'warning');
       Object.assign(raw, { name, desc: raw.desc || concept.slice(0, 200) });
       if (tier) raw.tier = tier;
@@ -513,7 +514,7 @@ const panelApi = {
       if (aliases) raw.aliases = aliases;
       const old = prev ?? deps().codex.list().find(x => x.name === name);
       if (old?.sheet?.portrait && !raw.portrait) raw.portrait = old.sheet.portrait;
-      const e = registerCharacter(s, deps(), raw, { side: 'enemy', locked: old?.locked ?? false });
+      const e = registerCharacter(s, deps(), raw, { side: 'enemy', locked: old?.locked ?? false, maxSkills });
       if (old && old.id !== e.id) deps().codex.remove(old.id);
       deps().codex.put({ ...e, concept, history: [...(old?.history ?? []), ...(instruction ? [{ at: Date.now(), instruction }] : [])].slice(-8) });
       if (s.roster?.[e.id]) delete s.roster[e.id];
@@ -651,8 +652,17 @@ const panelApi = {
     const before = profileOf(s);
     s.profile = setTypeSystem(before, sys);
     remapTiers(s, before.tiers, s.profile.tiers);
+    // Live-sync active battle so switching between world elements and Pokémon types works even mid-battle.
+    const b = s.battle?.st?.b ?? s.battle?.st;
+    if (b && 'typeSystem' in b) {
+      b.typeSystem = s.profile.typeSystem;
+      b.chart = s.profile.chart;
+      b.stab = s.profile.stab;
+    }
+    settings().ruleSet = s.profile.typeSystem;
+    saveSettings();
     deps().cache.set(s.profile); await saveState(); afterChange();
-    toast(sys === 'pokemon' ? '🎮 포켓몬식 상세 룰 (18타입·공식 상성표)' : '🌍 세계관 속성 룰');
+    toast(sys === 'pokemon' ? '🎮 포켓몬 속성 체계로 전환 (18타입·공식 상성표)' : '🌍 세계관 속성 체계로 전환');
   },
   setTierPreset: async key => {
     const s = state();
@@ -733,6 +743,14 @@ function setSetting(key, value) {
   if (key.startsWith('mode.')) s.modes = { ...(s.modes ?? {}), [key.slice(5)]: !!value };
   else s[key] = value;
   saveSettings();
+  if (key === 'ruleSet') { panelApi.setRuleSet(value); return; }
+  if (key === 'dealMul' || key === 'takeMul') {
+    const b = state()?.battle?.st?.b ?? state()?.battle?.st;
+    if (b) {
+      if (key === 'dealMul') b.dealMul = Math.max(0.1, Math.min(10, Number(value) || 1));
+      if (key === 'takeMul') b.takeMul = Math.max(0, Math.min(10, Number(value) ?? 1));
+    }
+  }
   if (key === 'enabled') { const el = document.getElementById('bt_enabled'); if (el) el.checked = !!value; }
   if (key.startsWith('aux')) ui.auxTest = null;
   afterChange();
@@ -861,27 +879,6 @@ async function runSetup({ ask = true } = {}) {
   await saveState(); afterChange(); togglePanel(true);
 }
 
-async function onWand() {
-  if (!ctx().chatId) return toast('채팅을 먼저 열어주세요.', 'warning');
-  const s = state();
-  if (!enabledHere() || !s?.brief) return runSetup();
-  togglePanel(true);
-}
-
-/** Entry in SillyTavern's wand (extensions) menu next to the chat box. */
-function mountWand() {
-  const menu = document.getElementById('extensionsMenu');
-  if (!menu || document.getElementById('bt-wand')) return;
-  const el = document.createElement('div');
-  el.id = 'bt-wand';
-  el.className = 'list-group-item flex-container flexGap5 interactable';
-  el.tabIndex = 0;
-  el.title = 'BattleTale';
-  el.innerHTML = '<div class="fa-solid fa-shield-halved extensionsMenuExtensionButton"></div><span>BattleTale</span>';
-  el.addEventListener('click', () => { onWand(); });
-  menu.appendChild(el);
-}
-
 /* ---------------- Slash commands ---------------- */
 function registerCommands() {
   const c = ctx();
@@ -933,7 +930,8 @@ function registerCommands() {
   const onReady = () => {
     if (booted) return;
     booted = true;
-    for (const step of [bindSettings, () => mountPanel(panelApi), mountWand, registerCommands, () => { try { if (localStorage.getItem('bt-dock') === '1') toggleDock(true); } catch { /* ignore */ } }, afterChange]) {
+    document.getElementById('bt-wand')?.remove();
+    for (const step of [bindSettings, () => mountPanel(panelApi), registerCommands, () => { try { if (localStorage.getItem('bt-dock') === '1') toggleDock(true); } catch { /* ignore */ } }, afterChange]) {
       try { step(); } catch (e) { console.error('[BattleTale] boot step failed', e); }
     }
   };
@@ -946,7 +944,7 @@ function registerCommands() {
   ev.on(T.MESSAGE_SWIPED, () => setTimeout(() => processMessage(ctx().chat.length - 1), 50));
   ev.on(T.MESSAGE_EDITED, idx => { const m = ctx().chat?.[idx]; if (m && !m.is_user) processMessage(idx); else { const s = state(); if (s && syncHistory(s, ctx().chat, settings()).changed) { saveState(); afterChange(); } } });
   ev.on(T.MESSAGE_DELETED, () => { const s = state(); if (s && syncHistory(s, ctx().chat, settings()).changed) { toast('메시지 삭제에 맞춰 전투를 되돌렸어요.', 'warning'); saveState(); } afterChange(); });
-  ev.on(T.CHAT_CHANGED, () => { mountWand(); forgetActivated(); ui.actor = null; ui.target = null; setPrompt(''); afterChange(); });
+  ev.on(T.CHAT_CHANGED, () => { forgetActivated(); ui.actor = null; ui.target = null; setPrompt(''); afterChange(); });
   for (const t of [T.CHARACTER_MESSAGE_RENDERED, T.USER_MESSAGE_RENDERED, T.MORE_MESSAGES_LOADED, T.MESSAGE_UPDATED]) if (t) ev.on(t, renderAll);
   if (T.WORLD_INFO_ACTIVATED) ev.on(T.WORLD_INFO_ACTIVATED, rememberActivated);
   console.log('[BattleTale] loaded');

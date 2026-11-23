@@ -20,7 +20,7 @@ export const GRADE_ATTACK = { perfect: 1.0, good: 1, miss: 0.75 };       // perf
 export const GRADE_DEFENSE = { perfect: 0, good: 0.6, miss: 1.1 };
 
 /* ---------- Battle creation ---------- */
-export function createBattle({ party = [], allies = [], enemies = [], profile, seed, place = '', flee = true, length = 1, title = '', terrain = [], initiative = 'normal', format = 'multi', aiLevel = 'hard', costScale = 1 }) {
+export function createBattle({ party = [], allies = [], enemies = [], profile, seed, place = '', flee = true, length = 1, title = '', terrain = [], initiative = 'normal', format = 'multi', aiLevel = 'hard', costScale = 1, dealMul = 1, takeMul = 1 }) {
   const fighters = [];
   const add = (sheet, side, persistent) => {
     const f = clone(sheet);
@@ -78,9 +78,11 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
     id: `b${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
     seed: String(seed ?? Math.random()),
     turn: 1, status: 'active', title, place, flee: flee !== false, fleeTries: 0, aiLevel,
-    // Pokémon rules multiply harder (×2 chart, ×4 dual weakness, ×1.5 STAB on every move), so the base
-    // damage is lower there: an even STAB super-effective hit takes ~half a bar instead of all of it.
-    scale: (hpPerStat / 3.5) * clamp(num(length, 1), 0.3, 3) * (profile.typeSystem === 'pokemon' ? POKEMON_DAMAGE : 1),
+    // Type effectiveness itself is compressed (×2→×1.5, ×4→×2, ×0.5→×0.75, ×0.25→×0.5),
+    // so both world and Pokémon rules share the clean full base damage scale.
+    scale: (hpPerStat / 3.5) * clamp(num(length, 1), 0.3, 3),
+    dealMul: clamp(num(dealMul, 1), 0.1, 10),
+    takeMul: clamp(num(takeMul, 1), 0, 10),
     refStat: Math.max(1, ref(fighters).st),
     initiative: ['player', 'enemy'].includes(initiative) ? initiative : 'normal',
     chart: profile.chart ?? null, stab: profile.stab ?? 1.2, typeSystem: profile.typeSystem ?? 'world',
@@ -176,6 +178,18 @@ export const THREAT_LABEL = { overwhelming: '압도적', dangerous: '위험', ev
 /** Defending types. In the Pokémon rule set an untyped fighter is Normal. */
 export function typesOf(f, sys) { return typesFor(f, sys); }
 
+/** Compress raw stacked chart multipliers so matchups matter without one-shotting: ×2→×1.5, ×3→×1.75, ×4→×2, ×0.5→×0.75, ×0.25→×0.5. */
+export function compressTypeMul(raw) {
+  if (raw === 0) return 0;
+  if (raw >= 3.5) return 2;
+  if (raw >= 2.5) return 1.75;
+  if (raw >= 1.75) return 1.5;
+  if (raw > 1.01) return 1.25;
+  if (raw < 0.35) return 0.5;
+  if (raw < 0.99) return 0.75;
+  return 1;
+}
+
 export function elementMul(target, element, b = null) {
   const sys = b?.typeSystem;
   let raw = elementId(element);
@@ -183,16 +197,16 @@ export function elementMul(target, element, b = null) {
   if (sys === 'pokemon' && (!raw || raw === 'none' || raw === 'physical')) raw = 'normal';
   if (!raw || raw === 'none' || raw === 'physical') return { mul: 1, eff: null };
   const e = typeIn(raw, sys);
-  let mul = 1;
+  let rawMul = 1;
   const row = b?.chart?.[e];
-  if (row) for (const d of typesOf(target, sys)) if (row[d] != null) mul *= row[d];
+  if (row) for (const d of typesOf(target, sys)) if (row[d] != null) rawMul *= row[d];
   if (sys !== 'pokemon') {
     // World rules only: per-character weaknesses written in the lore.
-    if (target.immune?.includes(raw)) mul = 0;
-    else { if (target.weak?.includes(e)) mul *= 1.5; if (target.resist?.includes(e)) mul *= 0.5; }
+    if (target.immune?.includes(raw)) rawMul = 0;
+    else { if (target.weak?.includes(e)) rawMul *= 1.5; if (target.resist?.includes(e)) rawMul *= 0.5; }
   }
-  mul = clamp(mul, 0, 4);
-  return { mul, eff: mul === 0 ? 'immune' : mul > 1.01 ? (mul >= 2 ? 'super' : 'weak') : mul < 0.99 ? 'resist' : null };
+  const mul = compressTypeMul(clamp(rawMul, 0, 4));
+  return { mul, eff: mul === 0 ? 'immune' : mul >= 1.5 ? 'super' : mul > 1.01 ? 'weak' : mul < 0.99 ? 'resist' : null };
 }
 const stabOf = (b, a, skill) => {
   const sys = b?.typeSystem;
@@ -202,6 +216,27 @@ const stabOf = (b, a, skill) => {
   return typesOf(a, sys).includes(e) ? b.stab : 1;
 };
 
+/** Buff/debuff count scaling (Stored Power / Punishment / Team synergy style), capped for balance. */
+export function stageScaleMul(b, a, t, skill) {
+  const mode = skill?.scaleStages;
+  if (!mode || !a) return 1;
+  if (mode === 'self') {
+    const pos = Object.values(a.stages ?? {}).reduce((sum, v) => sum + (v > 0 ? v : 0), 0);
+    return 1 + Math.min(8, pos) * 0.12;
+  }
+  if (mode === 'target' && t) {
+    const neg = Object.values(t.stages ?? {}).reduce((sum, v) => sum + (v < 0 ? -v : 0), 0);
+    const badSt = (t.statuses ?? []).filter(s => !STATUS[s.id]?.good).length;
+    return 1 + Math.min(8, neg + badSt) * 0.12;
+  }
+  if (mode === 'ally' && b) {
+    const team = b.fighters.filter(x => x.side === a.side && onField(x));
+    const pos = team.reduce((sum, x) => sum + Object.values(x.stages ?? {}).reduce((s, v) => s + (v > 0 ? v : 0), 0), 0);
+    return 1 + Math.min(10, pos) * 0.08;
+  }
+  return 1;
+}
+
 export function rawDamage(b, a, t, skill, { rand = 0.925, crit = false, aoe = false } = {}) {
   const magic = skill.kind === 'magic';
   const A = stat(a, magic ? 'mag' : 'pow');
@@ -210,16 +245,20 @@ export function rawDamage(b, a, t, skill, { rand = 0.925, crit = false, aoe = fa
   dmg *= elementMul(t, skill.element, b).mul * stabOf(b, a, skill);
   if (crit) dmg *= 1.5;
   dmg *= rand;
+  if (!magic && a.statuses.some(s => s.id === 'burn')) dmg *= STATUS.burn.physOut ?? 0.8;
   if (t.guard) dmg *= 0.5;
   if (t.staggered) dmg *= 1.25;
   if (t.statuses.some(s => s.id === 'shield')) dmg *= STATUS.shield.dmgMul;
   if (t.statuses.some(s => s.id === 'vulnerable')) dmg *= STATUS.vulnerable.dmgIn;
   if (a.statuses.some(s => s.id === 'fear')) dmg *= STATUS.fear.dmgOut;
   if (bonusMet(a, t, skill)) dmg *= skill.bonusIf.mul;
+  if (skill.scaleStages) dmg *= stageScaleMul(b, a, t, skill);
   if (t.trait === 'vanguard' && t.row === 'front') dmg *= 0.8;
   if (a.trait === 'opportunist' && t.statuses.some(s => !STATUS[s.id]?.good && s.id !== 'mark')) dmg *= 1.25;
   if (skill.range === 'melee' && a.row === 'back') dmg *= 0.6;
   if (aoe) dmg *= 0.75;
+  if (a.side === 'ally' && t.side === 'enemy' && b?.dealMul != null) dmg *= b.dealMul;
+  if (a.side === 'enemy' && t.side === 'ally' && b?.takeMul != null) dmg *= b.takeMul;
   return dmg;
 }
 
@@ -237,7 +276,8 @@ export function bonusMet(a, t, skill) {
 
 export function hitChance(a, t, skill) {
   if (skill.acc >= 100 && !a.statuses.some(s => s.id === 'blind')) return 1;
-  const ratio = stat(a, 'acc') / Math.max(1, stat(t, 'eva'));
+  const eva = stat(t, 'eva') * (t.statuses.some(s => s.id === 'mark') ? (STATUS.mark.evaMul ?? 0.7) : 1);
+  const ratio = stat(a, 'acc') / Math.max(1, eva);
   let p = (skill.acc / 100) * (1 + 0.15 * Math.log2(clamp(ratio, 0.05, 20)));
   if (a.statuses.some(s => s.id === 'blind')) p *= STATUS.blind.accMul;
   if (t.statuses.some(s => STATUS[s.id].skip) || t.charging || t.staggered) p = Math.max(p, 0.98);
@@ -375,7 +415,14 @@ function act(b, f, a, rng, ev, inv, attackName) {
   if (a.type === 'surprised') { ev.push({ t: 'surprised', who: f.name, side: f.side }); return; }
   if (a.type === 'stagger' || f.staggered) { f.staggered = false; ev.push({ t: 'staggered', who: f.name }); return; }
   const skip = f.statuses.find(s => STATUS[s.id]?.skip);
-  if (skip) { ev.push({ t: 'skip', who: f.name, status: skip.id }); if (f.charging) breakCharge(f, ev); return; }
+  if (skip) {
+    if (skip.id === 'freeze' && rng.chance(STATUS.freeze.thawChance ?? 0.25)) {
+      f.statuses = f.statuses.filter(s => s.id !== 'freeze');
+      ev.push({ t: 'thaw', who: f.name });
+    } else {
+      ev.push({ t: 'skip', who: f.name, status: skip.id }); if (f.charging) breakCharge(f, ev); return;
+    }
+  }
   if (f.statuses.some(s => s.id === 'confuse') && !['defend', 'swap'].includes(a.type) && rng.chance(STATUS.confuse.selfHit)) {
     const dmg = Math.max(1, Math.round(rawDamage(b, f, f, basicAttack(f), { rand: 0.9 })));
     ev.push({ t: 'confused', who: f.name });
@@ -446,10 +493,19 @@ function act(b, f, a, rng, ev, inv, attackName) {
   }
 }
 
+/** Clear volatile statuses and stat stages when switching out; persistent ailments (burn/poison/bleed/freeze/sleep/regen) stay. */
+export function clearVolatileOnSwitch(f) {
+  f.stages = {};
+  f.charging = null;
+  f.guard = false;
+  f.taunter = null;
+  f.statuses = (f.statuses ?? []).filter(s => !STATUS[s.id]?.clearOnSwitch);
+}
+
 function actSwitch(b, f, a, ev) {
   const to = findFighter(b, a.target, { side: f.side, bench: true }) ?? benchOf(b, f.side)[0];
   if (!to) { ev.push({ t: 'wait', who: f.name }); return; }
-  f.bench = true; f.stages = {}; f.charging = null; f.guard = false;
+  f.bench = true; clearVolatileOnSwitch(f);
   to.bench = false;
   b.lastSwitch = { ...(b.lastSwitch ?? {}), [f.side]: b.turn };
   ev.push({ t: 'switch', who: f.name, to: to.name, side: f.side });
@@ -525,20 +581,27 @@ function useSkill(b, f, skill, wanted, rng, ev, cmd = {}, { released = false } =
     if (active(f) && skill.move && b.format !== 'singles' && f.row !== skill.move) {
       f.row = skill.move;
       if (!b.fighters.some(x => x.side === f.side && active(x) && x.row === 'front')) f.row = 'front';
-      else ev.push({ t: 'swap', who: f.name, row: f.row });
+      else ev.push({ t: 'swap', who: f.name, row: f.row, fromSkill: true });
     }
     if (active(f) && skill.pivot) pivotOut(b, f, ev);
   }
 }
 
-/** U-turn / Volt Switch: after the move, the user swaps with the best teammate on the bench (singles only). */
+/** U-turn / Volt Switch: in singles swaps with a bench teammate; in party mode steps back to the rear row if safe. */
 function pivotOut(b, f, ev) {
-  if (b.format !== 'singles' || b.status !== 'active') return;
+  if (b.status !== 'active') return;
+  if (b.format !== 'singles') {
+    if (f.row === 'front' && b.fighters.some(x => x !== f && x.side === f.side && active(x) && x.row === 'front')) {
+      f.row = 'back';
+      ev.push({ t: 'swap', who: f.name, row: 'back', fromSkill: true });
+    }
+    return;
+  }
   const bench = benchOf(b, f.side).filter(m => m.hp > 0);
   if (!bench.length) return;
   const foe = b.fighters.find(x => x.side !== f.side && onField(x));
   const to = foe ? bench.slice().sort((x, y) => sendScore(b, y, foe) - sendScore(b, x, foe))[0] : bench[0];
-  f.bench = true; f.stages = {}; f.charging = null; f.guard = false;
+  f.bench = true; clearVolatileOnSwitch(f);
   to.bench = false;
   ev.push({ t: 'switch', who: f.name, to: to.name, side: f.side, pivot: true });
   entryTrait(b, to, ev);
@@ -570,7 +633,8 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
             dmg *= GRADE_DEFENSE[dg] ?? 1;
             guarded = { perfect: 'parry', good: 'block', miss: 'flinch' }[dg];
           }
-          dmg = guarded === 'parry' ? 0 : Math.max(1, Math.round(dmg));
+          const zeroDmg = guarded === 'parry' || eff === 'immune' || (b.takeMul === 0 && f.side === 'enemy' && t.side === 'ally');
+          dmg = zeroDmg ? 0 : Math.max(1, Math.round(dmg));
           if (guarded === 'parry') {
             ev.push({ t: 'parry', who: t.name, attacker: f.name });
             const back = Math.max(1, Math.round(rawDamage(b, t, f, basicAttack(t), { rand: 0.9 }) * 0.6));
@@ -578,7 +642,7 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
             if (f.charging) breakCharge(f, ev);
             break;
           }
-          applyDamage(b, f, t, dmg, ev, { crit, eff, guarded, grade });
+          applyDamage(b, f, t, dmg, ev, { crit, eff, guarded, grade, element: skill.element });
           if (endure && active(t)) ev.push({ t: 'endure', who: t.name });
           landed++; dealt += dmg;
           if (skill.drain && dmg) heal(f, Math.round(dmg * skill.drain), ev, { drain: true });
@@ -609,7 +673,7 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
         t.down = false;
         t.hp = Math.max(1, Math.round(t.maxHp * Math.max(10, skill.power) / 100));
         t.statuses = [];
-        ev.push({ t: 'revive', who: t.name, hp: pct(t.hp, t.maxHp) });
+        ev.push({ t: 'revive', who: t.name, hp: pct(t.hp, t.maxHp), hpVal: t.hp });
         break;
       }
       case 'cleanse': {
@@ -670,13 +734,17 @@ function breakReward(b, src, ev) {
   if (total) ev.push({ t: 'breakbonus', side: src.side, who: src.name, sp: 10 });
 }
 
-function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = null, guarded = null, grade = null } = {}) {
+function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = null, guarded = null, grade = null, element = null } = {}) {
   const before = t.hp;
   t.hp = Math.max(0, t.hp - dmg);
   ev.push({ t: 'hit', who: src.name, target: t.name, dmg, crit, eff, from: pct(before, t.maxHp), to: pct(t.hp, t.maxHp), hp: t.hp, maxHp: t.maxHp, label, guarded, grade });
   if (dmg > 0) {
     const sl = t.statuses.findIndex(s => s.id === 'sleep');
     if (sl >= 0 && t.hp > 0) { t.statuses.splice(sl, 1); ev.push({ t: 'wake', who: t.name }); }
+    if (elementId(element) === 'fire' && t.hp > 0) {
+      const fr = t.statuses.findIndex(s => s.id === 'freeze');
+      if (fr >= 0) { t.statuses.splice(fr, 1); ev.push({ t: 'thaw', who: t.name, byFire: true }); }
+    }
     if (t.charging && t.hp > 0 && src !== t) {
       t.charging.taken += dmg;
       if (t.charging.taken >= t.charging.threshold) { breakCharge(t, ev); breakReward(b, src, ev); }
@@ -782,7 +850,7 @@ function useItem(b, f, a, rng, ev, inv) {
     case 'full': heal(target, target.maxHp, ev); target.sp = target.maxSp; target.statuses = target.statuses.filter(s => STATUS[s.id].good); break;
     case 'sp': { const g = Math.round(target.maxSp * spec.amount / 100); target.sp = Math.min(target.maxSp, target.sp + g); ev.push({ t: 'sp', who: target.name, amount: g }); break; }
     case 'cure': target.statuses = target.statuses.filter(s => STATUS[s.id].good); ev.push({ t: 'cleanse', who: target.name, removed: [] }); break;
-    case 'revive': if (target.down) { target.down = false; target.hp = Math.max(1, Math.round(target.maxHp * spec.amount / 100)); ev.push({ t: 'revive', who: target.name, hp: pct(target.hp, target.maxHp) }); } break;
+    case 'revive': if (target.down) { target.down = false; target.hp = Math.max(1, Math.round(target.maxHp * spec.amount / 100)); ev.push({ t: 'revive', who: target.name, hp: pct(target.hp, target.maxHp), hpVal: target.hp }); } break;
     case 'buff': applyStages(b, f, target, spec.stages ?? { pow: spec.amount ?? 1, mag: spec.amount ?? 1 }, ev, { force: true }); break;
     case 'damage': {
       const list = spec.target === 'enemies' ? foesOf(b, f) : [target];
@@ -988,7 +1056,7 @@ export function aiChoose(b, f, rng, attackName = '기본 공격') {
         if (s.hpCost) bonus -= s.hpCost * (hpRate(f) < 0.5 ? 1.5 : 0.5);
         if (s.pivot && b.format === 'singles' && benchOf(b, f.side).length) {
           const foe0 = foes[0];
-          const bad = foe0 && Math.max(0, ...foe0.skills.filter(k => ['physical', 'magic'].includes(k.kind)).map(k => elementMul(f, k.element, b).mul)) >= 2;
+          const bad = foe0 && Math.max(0, ...foe0.skills.filter(k => ['physical', 'magic'].includes(k.kind)).map(k => elementMul(f, k.element, b).mul)) >= 1.5;
           bonus += bad ? 25 : 4;
         }
         const costW = brutal && f.sp - s.cost < (f.skills.find(k => k.power >= 90)?.cost ?? 0) && r.score < 150 ? 30 : 15;
