@@ -298,6 +298,8 @@ function buildProfile(raw) {
     hpPerStat: p.hpPerStat ? clamp(num(p.hpPerStat, 0), 2, 80) : null,
     elements: Array.isArray(p.elements) ? p.elements.map(String) : [...DEFAULT_PROFILE.elements],
     notes: String(p.notes ?? ''),
+    // World element → swatch name (or #hex): the colour this world gives each element.
+    colors: p.colors && typeof p.colors === 'object' ? Object.fromEntries(Object.entries(p.colors).slice(0, 30).map(([k, v]) => [elementId(k), plain(v, 12)]).filter(([k, v]) => k && k !== 'none' && v)) : {},
     pokeMap: p.pokeMap && typeof p.pokeMap === 'object' ? Object.fromEntries(Object.entries(p.pokeMap).slice(0, 24).map(([k, v]) => [plain(k, 20), plain(v, 12)])) : {},
     typeSystem: poke ? 'pokemon' : 'world',
     chart: poke ? clone(POKEMON_CHART) : clone(worldChart ?? normalizeChart(p.chart)),
@@ -306,6 +308,73 @@ function buildProfile(raw) {
   };
   useTypeProfile(out);
   return out;
+}
+
+/* ---------- Rule editor: the profile as a few plain-text fields the user can edit ---------- */
+const rangeTxt = r => `${r[0]}~${r[1]}`;
+/** Profile → text fields (one tier per line, one attacking element per chart line). */
+export function rulesToText(p) {
+  // Show the world's own words (화염), not the engine's generic label (불).
+  const nameOf = id => (p.elements ?? []).find(e => elementId(e) === id) ?? typeName(id);
+  const chart = p.typeSystem === 'pokemon' ? (p.worldChart ?? {}) : (p.chart ?? {});
+  const chartLines = Object.entries(chart).map(([a, row]) => {
+    const by = test => Object.entries(row).filter(([, v]) => test(v)).map(([d]) => nameOf(d));
+    const parts = [['강함', by(v => v > 1)], ['약함', by(v => v > 0 && v < 1)], ['무효', by(v => v === 0)]].filter(([, l]) => l.length).map(([k, l]) => `${k}: ${l.join(', ')}`);
+    return parts.length ? `${nameOf(a)} → ${parts.join(' · ')}` : '';
+  }).filter(Boolean);
+  return {
+    name: p.name ?? '', hpLabel: p.hpLabel ?? 'HP', spLabel: p.spLabel ?? 'SP',
+    stats: p.stats.map(s => (s.label && s.label !== s.key ? `${s.key}(${s.label})` : s.key)).join(', '),
+    tiers: p.tiers.map(t => [t.name, `HP ${rangeTxt(t.hp)}`, `SP ${rangeTxt(t.sp)}`, `스탯 ${rangeTxt(t.stat)}`, t.aliases?.length ? `별칭: ${t.aliases.join(', ')}` : '', t.desc ?? ''].filter(Boolean).join(' | ')).join('\n'),
+    elements: (p.elements ?? []).join(', '),
+    colors: Object.entries(p.colors ?? {}).map(([k, v]) => `${nameOf(k)}: ${v}`).join(', '),
+    chart: chartLines.join('\n'),
+    notes: p.notes ?? '',
+  };
+}
+/** Text fields → a profile (built on the current one, so fields the form doesn't show are kept). Throws with a readable message. */
+export function rulesFromText(base, f) {
+  const nums = s => { const m = /(\d+)\s*[~\-–]\s*(\d+)/.exec(s); return m ? [Number(m[1]), Number(m[2])] : null; };
+  const stats = String(f.stats ?? '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean).map(x => { const m = /^([^()（）]+)[(（]([^)）]+)[)）]$/.exec(x); return m ? { key: m[1].trim(), label: m[2].trim() } : { key: x, label: x }; });
+  if (stats.length < 2) throw new Error('스탯은 2개 이상 적어 주세요 (예: STR(힘), AGI(민첩)).');
+  const tiers = String(f.tiers ?? '').split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
+    const [name, ...rest] = line.split('|').map(x => x.trim());
+    if (!name) throw new Error(`등급 ${i + 1}번째 줄에 이름이 없어요.`);
+    const t = { name };
+    const desc = [];
+    for (const part of rest) {
+      if (/^(hp|체력)\b/i.test(part) && nums(part)) t.hp = nums(part);
+      else if (/^(sp|mp|자원|마나|기력)\b/i.test(part) && nums(part)) t.sp = nums(part);
+      else if (/^(스탯|능력치|stat)/i.test(part) && nums(part)) t.stat = nums(part);
+      else if (/^(별칭|alias)/i.test(part)) t.aliases = part.replace(/^[^:：]*[:：]?/, '').split(/[,，\/]/).map(x => x.trim()).filter(Boolean);
+      else if (part) desc.push(part);
+    }
+    const prev = base.tiers.find(x => x.name === name) ?? base.tiers[Math.min(i, base.tiers.length - 1)];
+    return { hp: prev?.hp, sp: prev?.sp, stat: prev?.stat, ...t, ...(desc.length ? { desc: desc.join(' ') } : prev?.desc && prev.name === name ? { desc: prev.desc } : {}) };
+  });
+  if (!tiers.length) throw new Error('등급을 한 줄에 하나씩 적어 주세요.');
+  const elements = String(f.elements ?? '').split(/[,，\n]/).map(x => x.trim()).filter(Boolean);
+  const chart = {};
+  const MUL = { 강함: 2, 강: 2, 유리: 2, strong: 2, 약함: 0.5, 약: 0.5, 불리: 0.5, weak: 0.5, 반감: 0.5, 무효: 0, immune: 0 };
+  for (const [i, line] of String(f.chart ?? '').split('\n').map(l => l.trim()).filter(Boolean).entries()) {
+    const m = /^(.+?)\s*(?:→|->|=>|>)\s*(.+)$/.exec(line);
+    if (!m) throw new Error(`상성표 ${i + 1}번째 줄 형식: "불 → 강함: 얼음, 풀 · 약함: 물"`);
+    const row = (chart[m[1].trim()] ??= {});
+    for (const seg of m[2].split(/[·;]/)) {
+      const s = /^\s*([^:：]+?)\s*[:：]\s*(.+)$/.exec(seg);
+      const mul = s && MUL[s[1].trim().toLowerCase()];
+      if (mul == null) throw new Error(`상성표 ${i + 1}번째 줄: "강함: … · 약함: … · 무효: …" 중 하나로 적어 주세요.`);
+      for (const d of s[2].split(/[,，]/).map(x => x.trim()).filter(Boolean)) row[d] = mul;
+    }
+  }
+  const poke = base.typeSystem === 'pokemon';
+  return normalizeProfile({
+    ...base, name: String(f.name ?? base.name).trim() || base.name,
+    hpLabel: String(f.hpLabel ?? '').trim() || base.hpLabel, spLabel: String(f.spLabel ?? '').trim() || base.spLabel,
+    stats, map: undefined, tiers, elements: elements.length ? elements : base.elements, notes: String(f.notes ?? ''),
+    colors: f.colors == null ? base.colors : Object.fromEntries(String(f.colors).split(/[,，\n]/).map(x => x.split(/[:：=]/).map(y => y.trim())).filter(([k, v]) => k && v)),
+    ...(poke ? { worldChart: Object.keys(chart).length ? chart : false } : { chart: Object.keys(chart).length ? chart : false, worldChart: undefined }),
+  });
 }
 
 export function setTypeSystem(profile, system) {

@@ -159,10 +159,10 @@ ${me ? `Moves of ${me.name}: ${me.skills.map(k => `${k.name} [${k.kind}${k.power
     const allies = me ? [vf(me, { side: 'ally', typeSystem: sys, spLabel: profile.spLabel, note: me.charging ? '힘을 모으는 중' : '' })] : [];
     const intro = [];
     const lead = team(b, 'enemy')[0];
-    if (lead) intro.push(`${josa(lead.name, '이', '가')} 승부를 걸어왔다!`);
-    if (team(b, 'enemy').length > 1) intro.push(`상대는 ${team(b, 'enemy').length}명으로 맞선다!`);
-    if (team(b, 'ally')[0]) intro.push(`가라! ${team(b, 'ally')[0].name}!`);
-    const idle = b.needSwitch ? '다음은 누구를 내보낼까?' : me ? `${josa(me.name, '은', '는')} 무엇을 할까?` : '';
+    if (lead) intro.push(`${josa(lead.name, '이', '가')} 앞을 가로막았다.`);
+    if (team(b, 'enemy').length > 1) intro.push(`뒤로 ${team(b, 'enemy').length - 1}명이 더 버티고 있다.`);
+    if (team(b, 'ally')[0]) intro.push(`${josa(team(b, 'ally')[0].name, '이', '가')} 자세를 잡는다.`);
+    const idle = b.needSwitch ? '다음에 누가 나설지 고르자.' : me ? `${josa(me.name, '은', '는')} 다음 수를 고른다.` : '';
     return { foes, allies, idle, intro, foeBalls: balls('enemy'), allyBalls: balls('ally'), map: mapOf(b.place, 'duel') };
   },
 

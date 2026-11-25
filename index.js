@@ -1,5 +1,5 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
-import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, requestedSkillCap } from './src/catalog.js';
+import { rulesFromText, normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, requestedSkillCap } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag, statedRankIn } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaInfo, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
@@ -655,7 +655,7 @@ const panelApi = {
   promote: async id => { if (promoteToCodex(state(), deps(), id)) { toast('이 채팅의 성장 상태를 기본판에 반영했어요.'); afterChange(); } },
   resetRoster: async id => { const s = state(); delete s.roster[id]; await saveState(); afterChange(); toast('이 채팅의 성장 기록을 지웠어요.'); },
   joinCodex: async id => { const s = state(); const e = deps().codex.list().find(x => x.id === id); const j = e && joinParty(s, deps(), e.name); if (j) { await saveState(); afterChange(); toast(`${j.name} 동료 합류`); } else toast('이미 동료이거나 찾을 수 없어요.', 'warning'); },
-  genCodex: ({ id = null, name, concept = '', tier = '', shape = '', aliases = '', instruction = '' }) => work(async () => {
+  genCodex: ({ id = null, name, concept = '', tier = '', shape = '', aliases = '', instruction = '', feedback = '' }) => work(async () => {
     if (!effectiveAuxReady()) { toast('보조모델이 필요해요. 설정에서 연결해주세요.', 'warning'); return null; }
     const s = state();
     try {
@@ -669,7 +669,7 @@ const panelApi = {
       const names = [name, ...String(aliases ?? '').split(',')].map(x => x.trim()).filter(Boolean);
       const seen = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(10, Number(settings().castScene) || 20) * 3 });
       const maxSkills = requestedSkillCap([concept, instruction].join('\n'), { current });
-      const raw = await deps().auxJson(sheetMessages({ profile, own: lore, persona: concept, personaName: name, npc: true, tier, current, instruction, roster: rosterBrief(name), card: characterText(), story: seen, brief: briefText(s.brief), maxSkills }), { maxTokens: 2400 });
+      const raw = await deps().auxJson(sheetMessages({ profile, own: lore, persona: concept, personaName: name, npc: true, tier, current, instruction, roster: rosterBrief(name), card: characterText(), story: seen, brief: briefText(s.brief), maxSkills, feedback, previous: feedback && prev ? rosterSheet(s, prev) : null }), { maxTokens: 2400 });
       if (raw.__truncated) toast('보조모델 답이 중간에 잘렸어요. 받은 부분까지만 반영했어요 (설정의 최대 응답 토큰을 늘려보세요).', 'warning');
       Object.assign(raw, { name, desc: raw.desc || concept.slice(0, 200) });
       if (tier) raw.tier = tier;
@@ -679,7 +679,7 @@ const panelApi = {
       if (old?.sheet?.portrait && !raw.portrait) raw.portrait = old.sheet.portrait;
       const e = registerCharacter(s, deps(), raw, { side: 'enemy', locked: old?.locked ?? false, maxSkills });
       if (old && old.id !== e.id) deps().codex.remove(old.id);
-      deps().codex.put({ ...e, concept, history: [...(old?.history ?? []), ...(instruction ? [{ at: Date.now(), instruction }] : [])].slice(-8) });
+      deps().codex.put({ ...e, concept, history: [...(old?.history ?? []), ...(instruction || feedback ? [{ at: Date.now(), instruction: instruction || `피드백: ${feedback}` }] : [])].slice(-8) });
       if (s.roster?.[e.id]) delete s.roster[e.id];
       await saveState();
       toast(`${e.name} 등록 완료`, 'success');
@@ -843,6 +843,30 @@ const panelApi = {
     const res = ['win', 'lose', 'fled', 'success', 'stopped'].includes(r) ? r : 'stopped';
     if (stopBattle(s, res, settings())) { await saveState(); afterChange(); toast(res === 'stopped' ? '전투를 중단했어요.' : `전투를 종료했어요 (${res}).`); }
   },
+  /** Rebuild a character from scratch with the user's feedback: the sheet, and the signature passive if it had one. */
+  regenCharacter: (target, feedback = '') => work(async () => {
+    const s = state();
+    if (!s) return;
+    if (!effectiveAuxReady()) return toast('보조모델이 필요해요. 설정에서 연결해 주세요.', 'warning');
+    const fb = String(feedback ?? '').trim().slice(0, 800);
+    trace('start', `캐릭터 전체 재생성 · ${target === 'player' ? s.player?.name ?? '나' : target}`, fb ? `피드백: ${fb}` : '(피드백 없음)');
+    let hadPassive = false;
+    if (target === 'player') {
+      hadPassive = !!s.player?.customPassive;
+      try { await ensurePlayer(s, deps(), { force: true, extra: s.playerConcept || '', feedback: fb }); } catch (e) { return toast(`재생성 실패: ${e.message}`, 'error'); }
+      await saveState();
+    } else {
+      const e = deps().codex.list().find(x => x.id === target);
+      if (!e) return;
+      hadPassive = !!rosterSheet(s, e)?.customPassive;
+      const sh = e.sheet ?? {};
+      const out = await panelApi.genCodex({ id: e.id, name: e.name, concept: e.concept ?? sh.desc ?? '', tier: '', shape: sh.shape ?? '', aliases: (sh.aliases ?? []).join(', '), feedback: fb });
+      if (!out) return;
+    }
+    if (hadPassive) await panelApi.genPassive(target, fb ? `사용자 피드백: ${fb}` : '');
+    afterChange();
+    toast(`전체 재생성 완료${hadPassive ? ' (고유 부가효과 포함)' : ''}. 이전 버전은 ${target === 'player' ? '되돌릴 수 없으니 마음에 안 들면 다시 재생성해 주세요' : '도감 "이전 버전"에서 되돌릴 수 있어요'}.`, 'success');
+  }),
   genSheet: (extra, instruction = '') => work(async () => {
     const s = state();
     s.playerConcept = extra || s.playerConcept || '';
@@ -908,6 +932,23 @@ const panelApi = {
     try { await ensureProfile(s, deps(), { force: true }); toast('룰 분석 완료! 시트도 새 룰로 다시 만들면 좋아요.', 'success'); } catch (e) { toast(`룰 분석 실패: ${e.message}`, 'error'); }
     await saveState(); afterChange();
   }),
+  /** The plain-text rule editor: rule set + world brief. Returns true when saved. */
+  saveRulesText: async (fields, brief) => {
+    const s = state();
+    if (!s) return false;
+    let next;
+    try { next = rulesFromText(profileOf(s), fields); } catch (err) { toast(err.message, 'warning'); return false; }
+    s.profile = next;
+    deps().cache.set(next);
+    const clip = (v, n) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+    const teller = String(brief?.storyteller ?? '').split(/\n+/).map(x => x.trim()).filter(Boolean).slice(0, 4).map(x => x.slice(0, 160)).join('\n');
+    const parts = { combat: clip(brief?.combat, 500), ranks: clip(brief?.ranks, 400), elements: clip(brief?.elements, 300), player: clip(brief?.player, 300), storyteller: teller };
+    if (Object.values(parts).some(Boolean)) s.brief = { at: s.brief?.at ?? Date.now(), parts, edited: Date.now() };
+    trace('setup', `룰 직접 편집 · ${next.name}`, `등급: ${next.tiers.map(t => t.name).join(' → ')}\n속성: ${next.elements.join(', ')}`);
+    await saveState(); afterChange();
+    toast('룰을 저장했어요. 이미 만든 시트에 반영하려면 캐릭터를 다시 만들어 주세요.', 'success');
+    return true;
+  },
   saveRules: async j => { const s = state(); s.profile = normalizeProfile(j); deps().cache.set(s.profile); await saveState(); afterChange(); },
   saveSheets: async j => {
     const s = state();

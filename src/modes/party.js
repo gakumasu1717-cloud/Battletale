@@ -327,8 +327,8 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     });
     const allies = b.fighters.filter(f => f.side === 'ally').map(f => vf(f, { side: 'ally', typeSystem: sys, spLabel: profile.spLabel, selected: actor?.id === f.id && this.controlled(b).length > 1, note: f.row === 'back' ? '후열' : '' }));
     const names = b.fighters.filter(f => f.side === 'enemy').map(f => f.name);
-    const intro = [names.length === 1 ? `${josa(names[0], '이', '가')} 나타났다!` : names.length === 2 ? `${josa(names[0], '과', '와')} ${josa(names[1], '이', '가')} 나타났다!` : `${names[0]} 외 ${names.length - 1}명이 나타났다!`];
-    const idle = actor ? `${josa(actor.name, '은', '는')} 무엇을 할까?`
+    const intro = [names.length === 1 ? `${josa(names[0], '과', '와')} 맞닥뜨렸다.` : names.length === 2 ? `${josa(names[0], '과', '와')} ${josa(names[1], '이', '가')} 길을 막아섰다.` : `${names[0]} 외 ${names.length - 1}명이 둘러싸고 있다.`];
+    const idle = actor ? `${josa(actor.name, '은', '는')} 다음 수를 고른다.`
       : b.fighters.some(f => f.side === 'ally' && E.active(f)) ? '남은 동료들이 싸우고 있다 — 다음 턴을 진행하자.'
       : '행동할 수 있는 동료가 없다…';
     return { foes, allies, intro, map: mapOf(b.place, 'party'), idle };

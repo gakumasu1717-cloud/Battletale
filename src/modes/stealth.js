@@ -521,7 +521,7 @@ function board(st, profile, ctx) {
       if (walkable(st, a.x, a.y) && walkable(st, b2.x, b2.y) && !guardAt(st, a.x, a.y) && !guardAt(st, b2.x, b2.y) && P.sp >= Math.max(1, Math.round(P.maxSp * 0.06))) reach.add(`${key(b2.x, b2.y)}:run`);
     }
   }
-  const pColor = TYPE_HEX[typeIn(P.elements?.[0] ?? 'none', 'pokemon')] ?? TYPE_HEX[(P.elements ?? [])[0]] ?? '#e8a33d';
+  const pColor = (P.elements?.[0] ? TYPE_HEX[P.elements[0]] : '#e8a33d');
   let cells = '';
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const t = tile(st, x, y);

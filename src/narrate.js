@@ -4,7 +4,7 @@ import { DIFF_KO, active } from './engine.js';
 
 const stName = (id, lang) => STATUS[id]?.[lang === 'ko' ? 'ko' : 'en'] ?? id;
 const STAT_EN = { pow: 'physical attack', mag: 'magic attack', def: 'defense', res: 'resistance', spd: 'speed', acc: 'accuracy', eva: 'evasion', luk: 'luck' };
-const effKo = { super: '효과가 굉장했다!', weak: '약점!', resist: '효과가 별로…', immune: '효과 없음' };
+const effKo = { super: '상성 우위', weak: '약점', resist: '상성 열세', immune: '통하지 않음' };
 const effEn = { super: "super effective", weak: 'weakness hit', resist: 'not very effective', immune: 'no effect' };
 const RESULT_KO = { win: '승리', lose: '패배', fled: '도주 성공', stopped: '전투 중단', success: '성공' };
 const RESULT_EN = { win: 'VICTORY', lose: 'DEFEAT', fled: 'ESCAPED', stopped: 'STOPPED', success: 'SUCCESS' };
@@ -178,7 +178,7 @@ export function pkLines(events, { showRolls = true } = {}) {
     const L = (...xs) => out.push(...xs.filter(Boolean));
     switch (e.t) {
       case 'turn': if (e.ambush) L('기습이다!'); break;
-      case 'use': L(e.basic ? `${e.who}의 공격!` : `${e.who}의 ${e.skill}!`, e.line ? `${e.who}: 「${e.line}」` : ''); break;
+      case 'use': L(e.basic ? `${j(e.who, '이', '가')} 달려들었다.` : `${j(e.who, '이', '가')} ${j(e.skill, '을', '를')} 펼쳤다.`, e.line ? `${e.who}: 「${e.line}」` : ''); break;
       case 'hit':
         if (e.label === '반격') { L(`${e.who}의 반격!`); break; }
         if (e.label) { L(`${j(e.target, '은', '는')} ${e.label}${hasBatchim(e.label) ? '으로' : '로'} 피해를 입었다!`); break; }
@@ -186,14 +186,14 @@ export function pkLines(events, { showRolls = true } = {}) {
         if (e.note === 'finisher') L('결정타가 꽂혔다!');
         if (e.guarded === 'block') L(`${j(e.target, '은', '는')} 공격을 막아냈다!`);
         if (e.guarded === 'flinch') L(`${j(e.target, '은', '는')} 대응이 늦었다!`);
-        if (e.crit) L('급소에 맞았다!');
-        if (e.eff === 'super') L('효과가 굉장했다!');
-        else if (e.eff === 'weak') L('약점을 찔렀다!');
-        else if (e.eff === 'resist') L('효과가 별로인 듯하다…');
-        else if (e.eff === 'immune') L(`${e.target}에게는 효과가 없는 것 같다…`);
+        if (e.crit) L('빈틈을 정확히 꿰뚫었다.');
+        if (e.eff === 'super') L('상성이 맞아떨어져 깊이 파고들었다.');
+        else if (e.eff === 'weak') L('약점을 찔렀다.');
+        else if (e.eff === 'resist') L('상성이 나빠 위력이 꺾였다.');
+        else if (e.eff === 'immune') L(`${e.target}에게는 전혀 통하지 않았다.`);
         break;
-      case 'miss': L(`${e.target}에게는 맞지 않았다!`); break;
-      case 'down': L(e.line ? `${e.who}: 「${e.line}」` : '', `${j(e.who, '은', '는')} 쓰러졌다!`); break;
+      case 'miss': L(`${j(e.target, '은', '는')} 공격을 흘려 피했다.`); break;
+      case 'down': L(e.line ? `${e.who}: 「${e.line}」` : '', `${j(e.who, '은', '는')} 무너져 내렸다.`); break;
       case 'dot': L(`${j(e.who, '은', '는')} ${STATUS[e.status]?.ko ?? e.status} 때문에 ${e.dmg}의 피해를 입었다!`); break;
       case 'consume': { const nm = STATUS[e.status]?.ko ?? e.status ?? '표식'; L(`${e.who}에게 걸린 ${j(nm, '이', '가')} 터졌다!`); break; }
       case 'finisher': L(e.line ? `${e.who}: 「${e.line}」` : '', `${j(e.who, '이', '가')} ${j(e.target, '을', '를')} 끝장냈다!`); break;
@@ -206,7 +206,7 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'confused': L(`${j(e.who, '은', '는')} 혼란에 빠져 자신을 공격했다!`); break;
       case 'defend': L(e.auto ? `${j(e.who, '은', '는')} 몸을 사리며 방어 태세를 취했다!` : `${j(e.who, '은', '는')} 방어 태세를 취했다!`); break;
       case 'wait': L(`${j(e.who, '은', '는')} 잠시 숨을 고르며 기다렸다.`); break;
-      case 'notarget': L('하지만 대상이 없었다!'); break;
+      case 'notarget': L('겨눌 상대가 남아 있지 않았다.'); break;
       case 'flee': L(e.blocked ? '이 싸움에서는 도망칠 수 없다!' : e.ok ? '무사히 도망쳤다!' : '도망칠 수 없었다!'); break;
       case 'item': L(`${j(e.who, '은', '는')} ${j(e.item, '을', '를')} 사용했다!`); break;
       case 'noitem': L(e.unusable ? `${e.item}${hasBatchim(e.item) ? '은' : '는'} 지금 쓸 수 없다!` : `${e.item}이(가) 없다!`); break;
@@ -242,8 +242,8 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'hpcost': L(`${j(e.who, '은', '는')} 몸을 깎아 힘을 끌어냈다!`); break;
       case 'combo': L('연계가 터졌다!'); break;
       case 'endure': L(`${j(e.who, '은', '는')} 간신히 버텼다!`); break;
-      case 'passive': L(`✦ ${e.who}의 「${e.name}」 발동!${e.msg ? ` (${e.msg})` : ''}`); break;
-      case 'protect': L(e.ok ? `${j(e.who, '은', '는')} 방어 태세를 굳혔다!` : '그러나 실패했다!'); break;
+      case 'passive': L(`${e.who}의 「${e.name}」${e.msg ? ` — ${e.msg}` : ''}`); break;
+      case 'protect': L(e.ok ? `${j(e.who, '은', '는')} 방어 태세를 굳혔다.` : '자세를 잡기도 전에 틈을 내줬다.'); break;
       case 'protected': L(`${j(e.who, '은', '는')} 공격을 막아냈다!`); break;
       case 'breakbonus': L('기세를 탔다! 기력이 돌아온다!'); break;
       case 'glance': L(`${j(e.who, '이', '가')} 이쪽을 봤지만… 눈치채지 못했다.`); break;
@@ -256,10 +256,10 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'hideroll': L(e.ok ? '숨는 데 성공했다!' : '숨을 곳이 들통났다!'); break;
       case 'lost': L('추격자를 따돌렸다!'); break;
       case 'winded': L(`${j(e.who, '은', '는')} 숨이 차올랐다!`); break;
-      case 'switch': L(e.side === 'ally' ? `돌아와, ${e.who}!` : `${j(e.who, '이', '가')} 물러났다!`, e.side === 'ally' ? `가라! ${e.to}!` : `${j(e.to, '이', '가')} 나왔다!`); break;
-      case 'sendout': L(e.side === 'ally' ? `가라! ${e.who}!` : `상대는 ${j(e.who, '을', '를')} 내보냈다!`); break;
-      case 'choose': L('다음은 누구를 내보낼까?'); break;
-      case 'end': L({ win: '승리했다!', success: '해냈다!', lose: '눈앞이 캄캄해졌다…', fled: '무사히 빠져나왔다!', stopped: '대치가 끝났다.' }[e.result]); break;
+      case 'switch': L(`${j(e.who, '이', '가')} 뒤로 물러나고 ${j(e.to, '이', '가')} 앞으로 나섰다.`); break;
+      case 'sendout': L(`${j(e.who, '이', '가')} 앞으로 나섰다.`); break;
+      case 'choose': L('다음에 누가 나설지 고르자.'); break;
+      case 'end': L({ win: '싸움이 끝났다. 이겼다.', success: '해냈다.', lose: '더는 버티지 못했다. 패배다.', fled: '무사히 빠져나왔다.', stopped: '대치가 끝났다.' }[e.result]); break;
       default: break;
     }
   }

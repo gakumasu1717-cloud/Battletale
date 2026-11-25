@@ -124,7 +124,7 @@ export async function ensureProfile(s, deps, { force = false } = {}) {
   return profile;
 }
 
-export async function ensurePlayer(s, deps, { force = false, extra = '', instruction = '' } = {}) {
+export async function ensurePlayer(s, deps, { force = false, extra = '', instruction = '', feedback = '' } = {}) {
   if (s.player && !force) return s.player;
   const profile = await ensureProfile(s, deps);
   const persona = deps.persona();
@@ -150,7 +150,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
       const own = deps.matchLore ? ((await deps.matchLore(`${persona.name}\n${persona.text}`).catch(() => null))?.text ?? '') : '';
       const story = deps.mentions?.([persona.name]) ?? '';
       const worldLore = s.brief ? '' : await deps.lore();
-      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current, instruction, tier: fixedTier, statedRank: mapRank || (!fixedTier && stated ? `${statedRaw} (= ${stated.name})` : ''), maxSkills }), { maxTokens: 2400 });
+      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current, instruction, feedback, previous: feedback ? s.player : null, tier: fixedTier, statedRank: mapRank || (!fixedTier && stated ? `${statedRaw} (= ${stated.name})` : ''), maxSkills }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -696,9 +696,12 @@ function pickMode(spec, settings, override) {
   return m;
 }
 
+/** Party-fight caps: {{user}} + up to 4 allies on the field, up to 8 enemies; up to 5 companions travel along. */
+export const LIMITS = Object.freeze({ allies: 4, enemies: 8, companions: 5 });
+
 function buildState(s, spec, mode, { seed, settings }) {
   const profile = profileOf(s);
-  const enemies = spec.enemies.slice(0, 8).map((e, i) => {
+  const enemies = spec.enemies.slice(0, LIMITS.enemies).map((e, i) => {
     const sh = normalizeSheet(e, profile, { side: 'enemy', seed: `${seed}:e${i}` });
     if (!e.codexId) auditSheet(sh, profile, { clampStats: true, bonusTier: (sh.threat === 'boss' ? 1 : 0) + (settings.difficulty === 'nightmare' ? 1 : 0) });
     else sh.codexId = e.codexId;
@@ -708,7 +711,7 @@ function buildState(s, spec, mode, { seed, settings }) {
   // the characters travelling with the player come along.
   const decided = spec.alliesDecided || (spec.allies?.length > 0);
   const pool = decided ? spec.allies ?? [] : s.companions.filter(c => c.hp > 0).map(c => clone(c));
-  const allies = pool.slice(0, 4).map((e, i) => {
+  const allies = pool.slice(0, LIMITS.allies).map((e, i) => {
     const sh = normalizeSheet(e, profile, { side: 'ally', seed: `${seed}:a${i}` });
     if (e.codexId) sh.codexId = e.codexId; else auditSheet(sh, profile, { clampStats: true });
     return sh;
@@ -1105,7 +1108,7 @@ export function applyChanges(s, ops, deps = null) {
       }
       case 'forget': if (s.player) s.player.skills = s.player.skills.filter(x => norm(x.name) !== norm(op.name)); break;
       case 'join': {
-        if (s.companions.length >= 5) break;
+        if (s.companions.length >= LIMITS.companions) { done.push(`동료 합류 불가: 이미 ${LIMITS.companions}명 (최대)`); break; }
         const reg = joinParty(s, { ...(globalDeps ?? {}) }, op.sheet.name);
         if (reg) { done.push(`동료 합류: ${reg.name} (도감)`); break; }
         const c = normalizeSheet(op.sheet, profile, { side: 'ally', seed: op.sheet.name });

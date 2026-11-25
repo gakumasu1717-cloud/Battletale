@@ -1464,6 +1464,57 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   void top;
 });
 
+/* 65 */ await test('룰 직접 편집: 텍스트 ↔ 룰 왕복, 상성표 문법, 잘못된 입력은 읽을 수 있는 오류', () => {
+  const base = C.normalizeProfile({ name: '검술 세계', stats: ['STR', 'AGI', 'END'], elements: ['화염', '물', '얼음'],
+    tiers: [{ name: '견습', hp: [100, 200], sp: [20, 50], stat: [10, 20], desc: '입문' }, { name: '기사', hp: [300, 500], sp: [50, 100], stat: [30, 50], aliases: ['B랭크'] }],
+    chart: { fire: { ice: 2, water: 0.5 } } });
+  const t = C.rulesToText(base);
+  assert.ok(t.tiers.includes('기사 | HP 300~500') && t.tiers.includes('별칭: B랭크'));
+  const back = C.rulesFromText(base, t);
+  assert.deepEqual(back.tiers.map(x => [x.name, x.hp, x.aliases ?? []]), base.tiers.map(x => [x.name, x.hp, x.aliases ?? []]));
+  assert.deepEqual(back.chart, base.chart, 'chart must survive a round trip');
+  const edited = C.rulesFromText(base, { ...t, tiers: t.tiers + '\n도미누스 | HP 2000~4000 | SP 300~500 | 스탯 200~300 | 별칭: 황제급 | 정점', chart: '화염 → 강함: 얼음 · 무효: 물\n물 → 강함: 화염' });
+  assert.equal(edited.tiers.at(-1).name, '도미누스');
+  assert.deepEqual(edited.tiers.at(-1).stat, [200, 300]);
+  assert.equal(C.tierOf(edited, '황제급').name, '도미누스');
+  assert.equal(edited.chart.fire.water, 0); assert.equal(edited.chart.water.fire, 2);
+  for (const bad of [{ ...t, stats: 'STR' }, { ...t, tiers: '' }, { ...t, chart: '화염 강함 얼음' }, { ...t, chart: '화염 → 셈: 얼음' }]) assert.throws(() => C.rulesFromText(base, bad), /스탯|등급|상성표/);
+});
+
+/* 66 */ await test('기술·타입 색: 룰마다 따로 · 세계관은 룰이 속성마다 고른 색 · 화면끼리 같은 색', async () => {
+  const PK = await import(here + 'pkui.js');
+  const world = C.normalizeProfile({ elements: ['화염', '성광', '혼돈'], colors: { 화염: '주황', 성광: '황금' } });
+  PK.setColorContext(world);
+  assert.equal(PK.typeHex(C.elementId('화염')), PK.SWATCHES.주황, 'the rule set picks the colour');
+  assert.equal(PK.typeHex(C.elementId('성광')), PK.SWATCHES.황금);
+  assert.equal(PK.typeHex(C.elementId('혼돈')), PK.SWATCHES.먹색, 'no pick: coloured by meaning');
+  assert.ok(Object.values(PK.SWATCHES).includes(PK.typeHex('크르르')), 'unknown names still use a swatch');
+  assert.equal(PK.TYPE_HEX.light, PK.typeHex('light'));
+  const fireWorld = PK.typeHex('fire');
+  PK.setColorContext(C.setTypeSystem(world, 'pokemon'));
+  assert.notEqual(PK.typeHex('fire'), fireWorld, 'Pokémon rules use their own type colours');
+  assert.notEqual(PK.typeHex('fairy'), PK.typeHex('light', 'world'));
+  assert.ok(PK.tdot('fire', '불꽃').includes(`background:${PK.typeHex('fire')}`));
+  // rule editor round trip
+  const txt = C.rulesToText(world);
+  assert.match(txt.colors, /화염: 주황/);
+  const ed = C.rulesFromText(world, { ...txt, colors: '화염: 핏빛, 혼돈: 보라' });
+  assert.equal(ed.colors[C.elementId('혼돈')], '보라');
+  PK.setColorContext(null);
+});
+
+/* 67 */ await test('전투 서술: 포켓몬 대사 없이 일반 서술 · 파티전 상한 표시와 초과 인원 기록', async () => {
+  const N = await import(here + 'narrate.js');
+  const lines = N.pkLines([{ t: 'sendout', side: 'ally', who: '레아' }, { t: 'switch', side: 'ally', who: '레아', to: '틸' }, { t: 'hit', who: 'a', target: 'b', eff: 'super', crit: true }, { t: 'end', result: 'lose' }, { t: 'use', who: '카인', skill: '검격' }]);
+  const all = lines.join('\n');
+  assert.doesNotMatch(all, /가라!|돌아와|눈앞이 캄캄|효과가 굉장|급소에 맞았다/);
+  assert.match(all, /카인이 검격을 펼쳤다/);
+  assert.equal(G.LIMITS.allies, 4); assert.equal(G.LIMITS.enemies, 8);
+  const spec = P.parseBattleBody(JSON.stringify({ enemies: Array.from({ length: 11 }, (_, i) => `적${i}`), allies: Array.from({ length: 6 }, (_, i) => `아군${i}`) }));
+  assert.equal(spec.enemies.length, 8); assert.equal(spec.allies.length, 4);
+  assert.deepEqual(spec.trimmed, { enemies: 3, allies: 2 });
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

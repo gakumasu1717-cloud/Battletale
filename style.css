@@ -1327,3 +1327,16 @@
 #bt-panel .pc-card .sk-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
 #bt-panel .bt-cp-err { margin-top: 6px; padding: 6px 8px; border-radius: 7px; background: #e0605a1c; border: 1px solid #e0605a55; color: #ffcfc9; font-size: 12px; }
 #bt-panel .bt-cp-err code { font-size: 11.5px; color: #ffe2de; word-break: break-all; }
+#bt-panel .pc-addpic { margin-left: 2px; font-size: 11px; min-height: 22px; padding: 0 8px; color: var(--bt-dim); }
+#bt-panel .bt-warn { color: #ffcf8a; }
+
+/* battlefield mood follows the lead enemy's type colour under the active rules */
+.bf-mood { position: absolute; inset: 0; pointer-events: none; z-index: 0; background: radial-gradient(90% 70% at 50% 30%, color-mix(in srgb, var(--mt) 26%, transparent), transparent 70%); }
+.bf-field > :not(.bf-mood) { position: relative; z-index: 1; }
+.bf-field > .bf-place { position: absolute; }
+#bt-panel .bt-swatches { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+#bt-panel .bt-swatches span { font-size: 11px; padding: 1px 7px; border-radius: 99px; color: #fff; text-shadow: 0 1px 1px #0008; }
+#bt-panel .bt-rules-form input[type=text], #bt-panel .bt-rules-form textarea, #bt-panel .bt-fb textarea { width: 100%; }
+#bt-panel .bt-rules-form .bt-row { align-items: flex-end; }
+#bt-panel .bt-rules-form .bt-row > label.bt-f { margin: 0; white-space: nowrap; }
+#bt-panel .bt-rules-form #bt-rf-tiers, #bt-panel .bt-rules-form #bt-rf-chart { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre; overflow-x: auto; }

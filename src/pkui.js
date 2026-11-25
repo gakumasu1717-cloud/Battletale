@@ -1,6 +1,6 @@
 // Pokémon-style battle screen pieces: scene, info boxes, HP bars, sprites, menu grid.
 import { escapeHtml as h, clamp } from './util.js';
-import { STATUS, typeName, typeIn, typesFor, skillLine, POKE_TYPES, ELEMENT_KO, bonusText } from './catalog.js';
+import { STATUS, typeName, typeIn, typesFor, skillLine, POKE_TYPES, ELEMENT_KO, bonusText, toPoke } from './catalog.js';
 import * as E from './engine.js';
 
 const hpCls = p => (p > 50 ? 'g' : p > 20 ? 'y' : 'r');
@@ -35,7 +35,58 @@ export function pixelSvg(shape, color) {
   return (svgCache[key] = `<svg class="pk-pix" viewBox="-1 -1 18 18" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><g filter="url(#o)">${rects}</g>${shape === 'unknown' ? '<text x="8" y="11.5" font-size="8" text-anchor="middle" fill="#fff" font-weight="900" font-family="monospace">?</text>' : ''}</svg>`);
 }
 
-export const TYPE_HEX = { normal: '#8a8c8a', fire: '#d8401f', water: '#2b74d6', grass: '#3a9128', electric: '#c09a00', ice: '#36b6d8', fighting: '#e07000', poison: '#8238b5', ground: '#86501f', earth: '#86501f', flying: '#6f9fd6', wind: '#6f9fd6', psychic: '#d93a6c', aether: '#d93a6c', bug: '#829018', rock: '#9c9670', ghost: '#633a63', dragon: '#4654c8', dark: '#4f3e3f', steel: '#56909f', fairy: '#d863d8', light: '#d863d8', poison2: '#8238b5' };
+/* ---------- Type colours ----------
+ * A fixed set of usable colours (SWATCHES). Each rule set decides which colour a type gets:
+ *  - Pokémon rules: the 18 types keep their own colours (POKE_HEX).
+ *  - World rules: the world's rule set picks a swatch per element (profile.colors, chosen by the setup / rule analysis
+ *    and editable in the rule editor); an element without a pick gets one by what its name means.
+ * Skill chips, skill cards, fighter cards and the battlefield mood all read the colour from here, so every screen
+ * shows the same colour for the same type under the active rules. */
+export const SWATCHES = Object.freeze({
+  홍염: '#d4442c', 주황: '#e07a1f', 황금: '#c9a227', 노랑: '#cbb51c', 연두: '#86ad2a', 초록: '#3f9a3c', 청록: '#1f9e8f',
+  하늘: '#45a6d6', 파랑: '#2f6fd0', 남색: '#3b4aa8', 보라: '#7d4fc9', 자주: '#a63f9a', 분홍: '#d65f9e', 핏빛: '#9e2236',
+  갈색: '#93642f', 모래: '#b39a62', 은색: '#7f98a3', 백광: '#c8b98a', 회색: '#8a8c8a', 먹색: '#4f4859',
+});
+const POKE_HEX = { normal: '#9fa19f', fire: '#e62829', water: '#2980ef', grass: '#3fa129', electric: '#c9a400', ice: '#3dcef3', fighting: '#ff8000', poison: '#9141cb', ground: '#915121', flying: '#81b9ef', psychic: '#ef4179', bug: '#91a119', rock: '#afa981', ghost: '#704170', dragon: '#5060e1', dark: '#624d4e', steel: '#60a1b8', fairy: '#ef70ef' };
+// World elements with no pick from the rule set: a swatch by meaning.
+const WORLD_DEFAULT = { normal: '회색', none: '회색', physical: '회색', fire: '홍염', water: '파랑', ice: '하늘', electric: '노랑', wind: '청록', earth: '갈색', rock: '모래', light: '백광', dark: '먹색', aether: '보라', poison: '자주', grass: '초록', fighting: '주황', bug: '연두', ghost: '남색', dragon: '핏빛', steel: '은색', ground: '갈색', flying: '청록', psychic: '분홍', fairy: '분홍' };
+const WORLD_GUESS = [
+  [/용암|화염|불|염|열|태양|fire|flame|heat|lava|sun/i, '홍염'], [/피|혈|blood/i, '핏빛'], [/얼음|빙|냉|설|서리|ice|frost|snow/i, '하늘'], [/물|수|해|파도|water|sea|tide/i, '파랑'],
+  [/뇌|번개|전기|electr|thunder|lightning/i, '노랑'], [/바람|풍|하늘|공기|wind|air|sky/i, '청록'], [/바위|돌|암석|rock|stone/i, '모래'], [/수정|crystal/i, '하늘'],
+  [/땅|대지|흙|모래|earth|sand|ground/i, '갈색'], [/금속|강철|철|기계|metal|steel|iron/i, '은색'], [/독|부식|산|toxic|poison|venom|acid/i, '자주'],
+  [/풀|나무|숲|식물|생명|자연|plant|wood|forest|nature|life/i, '초록'], [/영혼|유령|망령|사령|죽음|저주|ghost|spirit|soul|death|curse/i, '남색'],
+  [/용|drag/i, '핏빛'], [/어둠|암흑|그림자|혼돈|공허|악|dark|shadow|chaos|void/i, '먹색'], [/신성|성광|빛|광|천|holy|light|divine|radiant/i, '백광'],
+  [/정신|마나|비전|에테르|시간|공간|환상|마법|mind|psy|arcane|aether|time|space|illusion|magic/i, '보라'], [/무|격|권|기공|fight|martial/i, '주황'], [/황금|금|gold/i, '황금'],
+];
+const SWATCH_LIST = Object.keys(SWATCHES).filter(k => k !== '회색');
+let colorCtx = { sys: 'world', colors: {} };
+/** Use this rule profile's colours (called before each render). */
+export function setColorContext(p) { colorCtx = { sys: p?.typeSystem === 'pokemon' ? 'pokemon' : 'world', colors: p?.colors ?? {} }; }
+const swatchHex = v => (SWATCHES[v] ?? (/^#[0-9a-f]{6}$/i.test(String(v ?? '')) ? v : null));
+/** The colour of a type id under the active rules. */
+export function typeHex(id, sys = colorCtx.sys) {
+  const k = String(id ?? '').trim();
+  if (sys === 'pokemon') return POKE_HEX[k] ?? POKE_HEX[toPoke(k)] ?? POKE_HEX.normal;
+  if (!k) return SWATCHES.회색;
+  const picked = swatchHex(colorCtx.colors[k]);
+  if (picked) return picked;
+  if (WORLD_DEFAULT[k]) return SWATCHES[WORLD_DEFAULT[k]];
+  for (const [re, sw] of WORLD_GUESS) if (re.test(k)) return SWATCHES[sw];
+  let x = 0;
+  for (const ch of k) x = (x * 31 + ch.codePointAt(0)) >>> 0;
+  return SWATCHES[SWATCH_LIST[x % SWATCH_LIST.length]];
+}
+/** Swatch name a world element shows with right now (for the rule editor). */
+export function swatchOf(id) {
+  const k = String(id ?? '').trim();
+  if (colorCtx.colors[k] && SWATCHES[colorCtx.colors[k]]) return colorCtx.colors[k];
+  if (WORLD_DEFAULT[k]) return WORLD_DEFAULT[k];
+  for (const [re, sw] of WORLD_GUESS) if (re.test(k)) return sw;
+  return '';
+}
+/** Kept for old call sites: TYPE_HEX[id] answers with the active rules' colour. */
+export const TYPE_HEX = new Proxy(POKE_HEX, { get: (_, k) => (typeof k === 'string' ? typeHex(k) : undefined) });
+export const tdot = (id, label, attrs = '') => `<span class="pk-tdot" style="background:${typeHex(id)}" ${attrs}>${h(label)}</span>`;
 
 const SHAPE_WORDS = [
   ['fairy', /요정|정령|페어리|님프|fairy|sprite|pixie|nymph|wisp/i],
@@ -99,7 +150,7 @@ export function infoBox(F, ctx, { compact = false } = {}) {
     + Object.entries(F.stages ?? {}).filter(([, v]) => v).map(([k, v]) => `<span class="pk-stage ${v > 0 ? 'up' : 'down'}">${STAGE_SHORT[k] ?? k}${v > 0 ? '▲' : '▼'}${Math.abs(v)}</span>`).join('');
   const state = F.out === 'yield' ? '항복' : F.out ? '이탈' : F.down ? '기절' : '';
   const tlist = F.types.length ? F.types : F.typeSystem === 'pokemon' ? [{ id: 'normal', label: '노말' }] : [];
-  const types = tlist.map(t => `<span class="pk-tdot t-${t.id}" title="${h(t.label)}">${h(t.label)}</span>`).join('');
+  const types = tlist.map(t => `${tdot(t.id, t.label, `title="${h(t.label)}"`)}`).join('');
   const nums = F.showNums ? `<span class="pk-nums">${F.hp}/${F.maxHp}</span>` : '';
   const sp = F.sp != null && !compact ? `<div class="pk-spl"><div style="width:${clamp(Math.round(F.sp / Math.max(1, F.maxSp) * 100), 0, 100)}%"></div></div>` : '';
   return `<div class="pk-info ${F.side} ${F.selected ? 'sel' : ''} ${F.down ? 'down' : ''} ${compact ? 'compact' : ''}" data-act="pk:inspect" data-v="${h(F.name)}">
@@ -189,7 +240,7 @@ export function enemyCard(F, ctx, { small = false } = {}) {
   const st = cardState(F, ctx);
   const state = F.out === 'yield' ? '항복' : F.out ? '이탈' : F.down ? '기절' : '';
   const intent = F.note && !F.down ? `<div class="en-intent ${F.noteCls ?? ''}" title="${h(F.noteTitle || F.note)}" data-act="pk:tip" data-v="${h(F.noteTitle || F.note)}">${h(F.note)}</div>` : '';
-  const types = (F.types.length ? F.types : F.typeSystem === 'pokemon' ? [{ id: 'normal', label: '노말' }] : []).map(x => `<span class="pk-tdot t-${x.id}">${h(x.label)}</span>`).join('');
+  const types = (F.types.length ? F.types : F.typeSystem === 'pokemon' ? [{ id: 'normal', label: '노말' }] : []).map(x => `${tdot(x.id, x.label)}`).join('');
   const spPct = F.sp != null && F.maxSp > 0 ? clamp(Math.round(F.sp / Math.max(1, F.maxSp) * 100), 0, 100) : null;
   const spBar = spPct != null ? `<div class="en-sp" title="${h(F.spLabel ?? 'SP')} ${F.showNums ? `${F.sp}/${F.maxSp}` : `${spPct}%`}"><div style="width:${spPct}%"></div><span>${h(F.spLabel ?? 'SP')} ${F.showNums ? `${F.sp}/${F.maxSp}` : `${spPct}%`}</span></div>` : '';
   return `<div class="en-card ${small ? 'small' : ''} ${st.cls} ${fx.hit}" style="--tc:${TYPE_HEX[t] ?? '#6b6e78'};${st.style}--hd:${fx.hd}s" ${!F.down || fx.html ? `data-act="pk:pick" data-v="${h(F.name)}"` : ''}>
@@ -225,7 +276,9 @@ export function scene(V, ctx, { box = '' } = {}) {
   const back = foes.filter(F => F.row === 'back'), front = foes.filter(F => F.row !== 'back');
   const row = (list, small) => (list.length ? `<div class="bf-row ${small ? 'back' : 'front'} n${Math.min(4, list.length)}">${list.map(F => enemyCard(F, ctx, { small })).join('')}</div>` : '');
   const shake = (ctx?.ui?.lastEvents ?? []).some(e => (e.t === 'hit' && (e.crit || e.eff === 'super')) || ['break', 'down', 'enrage'].includes(e.t));
-  return `<div class="bf-field map-${V.map ?? 'field'} ${V.sceneCls ?? ''} ${shake ? 'shake' : ''}">
+  const lead = front[0] ?? back[0];
+  const moodId = lead?.types?.[0]?.id;
+  return `<div class="bf-field map-${V.map ?? 'field'} ${V.sceneCls ?? ''} ${shake ? 'shake' : ''}"${moodId ? ` style="--mt:${typeHex(moodId)}"` : ''}>${moodId ? '<div class="bf-mood"></div>' : ''}
       ${V.place ? `<div class="bf-place">${h(V.place)}</div>` : ''}
       <div class="bf-foes">${balls(V.foeBalls)}${row(back, true)}${row(front, false)}</div>
     </div>${box}
@@ -238,7 +291,7 @@ export function skillSheet(c) {
   const col = TYPE_HEX[c.type] ?? '#8a8c8a';
   const kind = KIND_NAME[c.kind] ?? c.kind ?? '';
   return `<div class="pk-inspect sk-sheet" data-act="pk:peek-close"><div class="pk-ins-box" style="--tc:${col}">
-    <div class="pk-ins-head"><i class="sk-dot"></i><b>${h(c.name)}</b>${c.typeLabel ? `<span class="pk-tdot t-${c.type}">${h(c.typeLabel)}</span>` : ''}<small>${h(c.kindLabel ?? kind)}</small><button class="pk-ins-x" data-act="pk:peek-close">✕</button></div>
+    <div class="pk-ins-head"><i class="sk-dot"></i><b>${h(c.name)}</b>${c.typeLabel ? `${tdot(c.type, c.typeLabel)}` : ''}<small>${h(c.kindLabel ?? kind)}</small><button class="pk-ins-x" data-act="pk:peek-close">✕</button></div>
     <div class="sk-sheet-nums">${c.power != null ? `<span><small>위력</small><b>${c.power}</b></span>` : ''}<span><small>${h(c.spLabel ?? 'SP')}</small><b>${c.cost ?? 0}</b></span>${c.est != null ? `<span><small>예상</small><b>≈${c.est}%</b></span>` : ''}</div>
     ${c.lines?.length ? `<div class="sk-sheet-fx">${c.lines.map(l => `<span>${h(l)}</span>`).join('')}</div>` : ''}
     ${c.desc ? `<div class="sk-sheet-desc">${h(c.desc)}</div>` : ''}
@@ -418,7 +471,7 @@ export function skillCard(k, { sys = 'world', spLabel = 'SP', targets = null, di
 }
 
 export function handHtml(cards, sel) {
-  return `<div class="lr-hand">${cards.map((c, i) => `<div class="lr-card r-${c.rarity} t-${c.type} ${i === sel ? 'sel' : ''} ${c.disabled ? 'off' : ''}" data-act="pk:card" data-i="${i}" title="${h(c.desc || c.name)}">
+  return `<div class="lr-hand">${cards.map((c, i) => `<div style="--tc:${typeHex(c.type)}" class="lr-card r-${c.rarity} t-${c.type} ${i === sel ? 'sel' : ''} ${c.disabled ? 'off' : ''}" data-act="pk:card" data-i="${i}" title="${h(c.desc || c.name)}">
     <div class="lr-top"><span class="lr-cost">${c.cost ?? ''}</span><span class="lr-typ">${h(c.typeLabel ?? '')}</span></div>
     <div class="lr-art"><span class="lr-kind">${c.icon ?? KIND_ICON[c.kind] ?? '◆'}</span>${c.power != null ? `<b class="lr-pow">${c.power}</b>` : ''}<span class="lr-kn">${h(c.kindLabel ?? KIND_NAME[c.kind] ?? '')}</span></div>
     <div class="lr-name">${h(c.name)}</div>

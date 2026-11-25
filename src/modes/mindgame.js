@@ -318,7 +318,7 @@ Pick the stance the player's words describe (e.g. "I wait for his swing and turn
     const tell = st.broken.foe ? '자세 붕괴 — 결정타 기회!' : st.tell ? `${STANCE_KO[st.tell.stance]} 기색 (확신도 ${relKo(st.tell.rel)})` : '';
     const foes = [vf(B, { side: 'enemy', intel: lvl, typeSystem: sys, note: tell, noteCls: st.broken.foe ? 'release' : 'tell', posture: lvl >= 1 ? st.posture.foe : null })];
     const allies = [vf(A, { side: 'ally', typeSystem: sys, posture: st.posture.me, note: st.broken.me ? '자세 붕괴!' : st.opened.me ? '빈틈!' : '' })];
-    const idle = st.broken.foe ? `${josa(B.name, '의', '의')} 자세가 무너졌다! 지금이다!` : st.tell ? `${TELL_KO[st.tell.stance]}… ${josa(A.name, '은', '는')} 어떻게 할까?` : `${josa(A.name, '은', '는')} 어떻게 할까?`;
+    const idle = st.broken.foe ? `${josa(B.name, '의', '의')} 자세가 무너졌다! 지금이다!` : st.tell ? `${TELL_KO[st.tell.stance]}… ${josa(A.name, '은', '는')} 다음 수를 고른다.` : `${josa(A.name, '은', '는')} 다음 수를 고른다.`;
     return { foes, allies, idle: idle.replace('의의', '의'), sceneCls: 'duel' };
   },
 

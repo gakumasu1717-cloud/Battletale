@@ -76,6 +76,7 @@ const RULE_SCHEMA = `{
   },
   "tiers": [ {"name": "F", "aliases": ["the same rank in the world's OTHER rank systems"], "desc": "who sits at this rank in THIS world, one short line (e.g. 'fresh guild recruits, street thugs')", "hp": [150, 250], "sp": [10, 30], "stat": [12, 20]}, ... ],  // power tiers from weakest to strongest with typical ranges. Use the world's OWN rank names when it has them (hunter F~S, martial-arts realms, guild ranks, named magic-power grades…). Worlds often have SEVERAL ladders at once (e.g. a hunter grade AND a mana grade with its own names like Inchio < Progio < Dominus < Arcanum < Exceedus): pick the main one for "name" and line the others up in "aliases" by what the lore says they correspond to. Use the lore's numbers when it has them; otherwise design a sensible scale (ordinary person ≈ HP 100, stat 10). "desc" is required: it is how later sheets decide who belongs where.
   "elements": ["불", "물", ...],                        // elements/attributes that exist in this world (may be empty)
+  "colors": {"<each world element>": "<one of: 홍염 주황 황금 노랑 연두 초록 청록 하늘 파랑 남색 보라 자주 분홍 핏빛 갈색 모래 은색 백광 회색 먹색>"},   // the colour that fits what the element IS in this world (its look, mood, the lore's imagery); different elements get different colours where possible
   "pokeMap": {"<each world element>": "<closest of the 18 Pokémon types>"},   // so the Pokémon rule set can be switched on without losing types
   "chart": {"<attacking element>": {"<defending element>": 2}},   // matchups between the elements above: 2 = strong, 0.5 = weak, 0 = no effect. Only non-neutral pairs. From the lore when it states them, otherwise sensible from what each element is. {} when there are no elements.
   "notes": "1-3 sentences on how fights work in this world (rank gaps, magic vs. tech, lethality)"`;
@@ -146,7 +147,7 @@ const typeRule = profile => {
   · Each skill's "element": ${profile.typeSystem === 'pokemon' ? `one of the 18 Pokémon types (${pokeEl}; untyped = 노말)` : `one of this world's elements (${worldEl}), or "none" for plain physical attacks`}.`;
 };
 
-export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', statedRank = '', current = null, instruction = '', roster = '', card = '', own = '', brief = '', story = '', maxSkills = 6 }) {
+export function sheetMessages({ profile, lore, persona, personaName, statFields, scene, extra, npc = false, keepSkills = '', tier = '', statedRank = '', current = null, instruction = '', feedback = '', previous = null, roster = '', card = '', own = '', brief = '', story = '', maxSkills = 6 }) {
   const skillCap = Math.max(6, Math.min(12, Number(maxSkills) || 6));
   const system = `You build combat character sheets for a turn-based engine, faithful to a roleplay world's rules and its power ranks. You are strict about balance in both directions: you neither inflate nor shrink anyone. What the character's description and the lorebook say about them is canon. Output only JSON.`;
   const who = npc ? `the character "${personaName}"` : `the player character "${personaName}" ({{user}})`;
@@ -155,7 +156,7 @@ ${profileText(profile)}
 ${brief ? `\n## World brief (this world's combat basics)\n${brief}\n` : ''}
 ## PRIMARY SOURCE — who ${who} is. Canon: read every line before judging rank, type and skills${tier ? `\nRank: ${tier} (FIXED by the user/world — use exactly this tier, its stat/HP ranges and its skill budget)` : ''}
 ${persona || '(no description)'}${statedRank ? `\n\n## STATED RANK (from the status window / story — canon, never downgrade)\n{{user}}'s rank is written as "${statedRank}". Find where this rank sits in the world (lore, brief, description) and set "tier" to the step of the tier list that matches it; quote it in "tierReason". If the lore says nothing, judge from how the world treats that title — a title the world treats as top-ranked maps to the top steps.` : ''}${own ? `\n\n### Lorebook entries about them, their abilities and their ranks (canon)\n${own}` : ''}${story ? `\n\n### What the story so far shows them doing\n${story}` : ''}
-${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${keepSkills ? `\n## The user's wished-for concept and skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}\n` : ''}${lore ? `\n## World info (general rules, ranks, places — for context)\n${lore}\n` : ''}${card ? `\n## Character card (${npc ? 'canon setting — may describe this character' : 'the world and the other main character — may mention {{user}}'})\n${card}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
+${statFields ? `\n## Their current status window (authoritative numbers — copy them)\n${JSON.stringify(statFields)}\n` : ''}${keepSkills ? `\n## The user's wished-for concept and skills (a WISH LIST — keep names and flavor, but every number follows the rank budget)\n${keepSkills}\n` : ''}${lore ? `\n## World info (general rules, ranks, places — for context)\n${lore}\n` : ''}${card ? `\n## Character card (${npc ? 'canon setting — may describe this character' : 'the world and the other main character — may mention {{user}}'})\n${card}\n` : ''}${scene ? `\n## Recent story\n${scene}\n` : ''}${extra ? `\n## Extra instructions\n${extra}\n` : ''}${roster ? `\n## Characters already registered in this world (keep strength consistent: same rank ≈ similar HP, stats and skill power; higher rank clearly stronger)\n${roster}\n` : ''}${current ? `\n## Current sheet — revise it; keep everything the request does not mention\n${sheetText(current, profile)}\n` : ''}${feedback ? `\n## The user's feedback on the last version — it came out wrong. Build a NEW sheet from the sources above that fixes this (the rank budget and fairness rules still apply)\n${feedback}${previous ? `\nLast version (for reference only, do not copy it):\n${sheetText(previous, profile)}` : ''}\n` : ''}${instruction ? `\n## Revision request from the user (follow it, but the rank budget and fairness rules still apply)\n${instruction}\n` : ''}
 ## Task
 Answer with ONE JSON object in this shape:
 ${SHEET_SCHEMA}
@@ -245,8 +246,8 @@ A confrontation is starting in the latest scene. Answer with ONE JSON object:
   "outmatched": false,                 // true only with a canon reason the foe outclasses {{user}} (see rules)
   "outmatchedWhy": "",
   "terrain": [{"desc": "short description", "side": "all|ally|enemy", "stages": {"acc": -1}}],
-  "enemies": [ <sheet> + {"row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker"} ],
-  "allies": [ <sheet> or {"ref": "<registered name>"} ],   // who REALLY fights beside the player right now (party mode). Read the recent story: only characters present in the scene and on the player's side. Registered characters → {"ref"}. Nobody there → []
+  "enemies": [ <sheet> + {"row": "front|back", "intel": 0|1|2, "style": "aggressive|defensive|tricky|balanced|berserker"} ],   // AT MOST 8 — a bigger crowd is described in "why" and fielded as its 8 most dangerous members (or one "swarm" entry)
+  "allies": [ <sheet> or {"ref": "<registered name>"} ],   // AT MOST 4 besides {{user}}   // who REALLY fights beside the player right now (party mode). Read the recent story: only characters present in the scene and on the player's side. Registered characters → {"ref"}. Nobody there → []
   "goal": "stealth: what the player must reach or do",
   "stones": 2,                         // stealth: pebbles to throw as distractions (0-5)
   "loot": ["what could really be gained"]
@@ -310,8 +311,8 @@ Read the latest scene and decide who is actually fighting right now. Answer with
   "initiative": "player|enemy|normal",
   "outmatched": false, "outmatchedWhy": "",
   "terrain": [{"desc": "short description", "side": "all|ally|enemy", "stages": {"acc": -1}}],
-  "enemies": [ <codexRef> | <mookSheet> | <majorRef> ],
-  "allies": [ <codexRef> | <mookSheet> | <majorRef> ],
+  "enemies": [ <codexRef> | <mookSheet> | <majorRef> ],   // AT MOST 8
+  "allies": [ <codexRef> | <mookSheet> | <majorRef> ],    // AT MOST 4 besides {{user}}
   "goal": "stealth only",
   "stones": 2,
   "loot": ["what could really be gained"]
@@ -530,7 +531,7 @@ export function worldPrompt({ mode, player, party, profile, statusWindow, change
     out.push('[Fights in this story are resolved by an external turn-based dice engine.]',
       'When a fight is about to begin, write the build-up, stop before the first blow and end with one block:',
       '<bt-battle>', 'mode: party|duel|stealth', 'place: where', 'flee: yes|no', 'initiative: player|enemy|normal', 'enemy: Name | tier <tier> | threat minion|normal|elite|boss | row front|back | skills A, B', 'ally: Name | tier <tier> (NPCs fighting beside {{user}})', 'goal: (stealth) what {{user}} must reach', '</bt-battle>',
-      `Enemies come from the scene and the lore. Tiers: ${profile.tiers.map(t => t.name).join(', ')}. One enemy line per combatant.`);
+      `Enemies come from the scene and the lore. Tiers: ${profile.tiers.map(t => t.name).join(', ')}. One enemy line per combatant — at most 8 enemies and 4 allies.`);
   } else if (mode === 'hybrid') {
     out.push('[Fights in this story are resolved by an external turn-based dice engine.]',
       'When a confrontation is about to begin (fight, ambush, duel, sneaking past enemies, a chase) — or the scene is ALREADY dangerous — write the build-up, stop before the first blow or step, and end the response with its own line:',

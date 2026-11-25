@@ -86,8 +86,11 @@ function fromJson(j) {
   if (Array.isArray(j.terrain)) spec.terrain = j.terrain.filter(Boolean).map(t => (typeof t === 'string' ? { desc: t } : t));
   for (const k of ['goal', 'style', 'why', 'distance', 'alert', 'stones', 'outmatchedWhy']) if (j[k] != null) spec[k] = j[k];
   if (j.outmatched === true || /^(true|yes)$/i.test(String(j.outmatched ?? ''))) spec.outmatched = true;
-  spec.enemies = listOf(Array.isArray(j) ? j : j.enemies).slice(0, 8);
-  spec.allies = listOf(j.allies).slice(0, 4);
+  // Same caps as game.js LIMITS (party: {{user}} + 4 allies, 8 enemies); what was cut is kept for the preview note.
+  const allE = listOf(Array.isArray(j) ? j : j.enemies), allA = listOf(j.allies);
+  spec.enemies = allE.slice(0, 8);
+  spec.allies = allA.slice(0, 4);
+  if (allE.length > 8 || allA.length > 4) spec.trimmed = { enemies: Math.max(0, allE.length - 8), allies: Math.max(0, allA.length - 4) };
   spec.alliesDecided = Array.isArray(j.allies);   // the builder looked at the scene and chose (maybe nobody)
   spec.loot = Array.isArray(j.loot) ? j.loot.map(String) : j.loot ? String(j.loot).split(',') : [];
   return spec.enemies.length ? spec : null;
