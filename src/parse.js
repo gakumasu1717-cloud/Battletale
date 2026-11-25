@@ -281,13 +281,31 @@ export function readStatTag(text, tag = 'stat') {
   try { re = new RegExp(`<\\s*${q}\\s*>([\\s\\S]*?)<\\s*\\/\\s*${q}\\s*>`, 'giu'); } catch { return null; }
   const all = [...String(text ?? '').matchAll(re)];
   if (!all.length) return null;
-  const body = all.at(-1)[1];
+  return statFieldsOf(all.at(-1)[1]);
+}
+
+/** "Key: value | Key: value" or one "Key: value" per line (bullets, **bold**, HTML tags around keys are fine). */
+export function statFieldsOf(body) {
   const fields = {};
-  for (const part of body.split('|')) {
-    const m = /^\s*([^:：]+?)\s*[:：]\s*([\s\S]*?)\s*$/.exec(part);
-    if (m) fields[m[1].trim()] = m[2].trim();
+  const text = String(body ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ');
+  const parts = text.split(/\n|\|/);
+  for (const part of parts) {
+    const m = /^\s*(?:[-*•·▶►]\s*)?\**\s*([^:：\n]{1,24}?)\s*\**\s*[:：]\s*([\s\S]*?)\s*$/.exec(part);
+    if (m && m[2]) fields[m[1].replace(/[*_\[\]【】]/g, '').trim()] = m[2].replace(/\*\*/g, '').trim();
   }
   return Object.keys(fields).length ? fields : null;
+}
+
+/**
+ * The player's rank as written in recent story messages (a status window the user's regex may hide from the prompt,
+ * a narration line "…도미누스 등급의…"). Raw message text is used, so display/prompt regexes don't hide it.
+ * Returns the last value found, or ''. It is only a hint for the aux model, never pinned on its own.
+ */
+export function statedRankIn(texts) {
+  const re = /(?:등급|랭크|계급|위계|품계|경지|서열|rank|tier|grade)\s*\**\s*[:：=]\s*\**\s*([^\n|<>,/()\[\]]{1,24})/giu;
+  let found = '';
+  for (const t of texts) for (const m of String(t ?? '').matchAll(re)) { const v = m[1].replace(/\*+/g, '').trim(); if (v && !/^(없음|none|-|\?)$/i.test(v)) found = v; }
+  return found;
 }
 
 /** Convert status-window fields into a partial sheet using the profile's stat keys. */

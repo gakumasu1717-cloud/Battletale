@@ -1,7 +1,7 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
 import { normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, requestedSkillCap } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
-import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag } from './src/parse.js';
+import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag, statedRankIn } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaInfo, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
@@ -175,6 +175,8 @@ function deps() {
     rosterBrief: except => rosterBrief(except),
     persona: () => { const info = personaInfo(); return { name: ctx().name1 || 'User', text: info.text, source: info.source }; },
     statFields: lastStatFields,
+    // Raw text of the last story messages: a status window hidden by a display/prompt regex still counts.
+    statedRank: () => statedRankIn((ctx().chat ?? []).filter(m => !m.is_user && !m.is_system).slice(-8).map(m => m.mes)),
     scene: (n = settings().sceneSize ?? 3) => recentScene(ctx().chat, n, stripBlocks),
     toast,
     codex: codexStore(),

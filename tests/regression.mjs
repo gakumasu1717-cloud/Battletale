@@ -1436,6 +1436,34 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.ok(r.battle.turn >= 2, 'battle must keep going');
 });
 
+/* 64 */ await test('상태창의 등급 이름이 등급표에 없어도 낮아지지 않는다: AI가 매핑하고 별칭으로 기억', async () => {
+  // newline status windows and hidden-by-regex ranks are read from raw text
+  assert.deepEqual(P.readStatTag('<stat>\n- **등급**: 도미누스\nHP: 900/900\n</stat>', 'stat'), { 등급: '도미누스', HP: '900/900' });
+  assert.equal(P.statedRankIn(['평범한 대화', '<div class="status">이름: 카인<br>등급: 도미누스<br>HP: 1</div>']), '도미누스');
+  assert.equal(P.statedRankIn(['등급: 없음']), '');
+  const s = G.stateOf({}); s.profile = C.normalizeProfile({ stats: ['STR', 'INT', 'AGI', 'END', 'SEN', 'LUK'], tiers: ['D', 'C', 'B', 'A', 'S'].map((name, i) => ({ name, hp: [300 + i * 300, 500 + i * 400], sp: [50, 100 + i * 50], stat: [25 + i * 30, 50 + i * 50] })) });
+  let asked = null;
+  const deps = {
+    persona: () => ({ name: '카인', text: '제국 최강의 기사.' }), statFields: () => ({ 등급: '도미누스', HP: '900/900' }), statedRank: () => '도미누스',
+    auxReady: () => true, toast: () => {}, trace: () => {}, lore: async () => '', settings: () => ({}), cache: { set: () => {} },
+    auxJson: async msgs => { asked = msgs.map(m => m.content).join('\n'); return { tier: 'S', tierReason: '도미누스는 최상위', stats: { STR: 300 }, skills: ['검격: 물리 90'] }; },
+  };
+  const top = PROFILE.tiers.at(-1).name;
+  const sh = await G.ensurePlayer(s, deps, { force: true });
+  assert.ok(/STATED RANK[\s\S]*도미누스/.test(asked), 'the stated rank must reach the aux prompt');
+  assert.ok(!/FIXED by the user/.test(asked), 'an unknown rank must not be pinned as-is');
+  assert.equal(sh.tier, 'S', `tier came out ${sh.tier}`);
+  assert.ok(sh.maxHp >= 900);
+  assert.ok(s.profile.tiers.find(t => t.name === 'S').aliases.includes('도미누스'), 'mapping not remembered');
+  assert.equal(C.tierOf(s.profile, '도미누스').name, 'S');
+  // from now on the status window pins it directly
+  asked = null;
+  const sh2 = await G.ensurePlayer(s, { ...deps, auxJson: async msgs => { asked = msgs.map(m => m.content).join('\n'); return { tier: 'C', stats: {}, skills: [] }; } }, { force: true });
+  assert.equal(sh2.tier, 'S', 'known alias must pin the tier');
+  assert.ok(/FIXED by the user/.test(asked));
+  void top;
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

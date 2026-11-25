@@ -132,7 +132,12 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   const partial = sheetFromStatFields(statFields, profile);
   // Only an explicit choice in the panel or the status window's own rank field pins the tier; anything written in
   // the persona or description ("3등급", "프로기오", "B랭크") is read and mapped by the aux model.
-  const fixedTier = partial?.tier || (s.playerTier && tierOf(profile, s.playerTier)?.name) || '';
+  // A rank name the ladder doesn't know ("도미누스" in a world whose ladder came out as 하급…전설) must not be pinned
+  // as-is: an unknown tier means default stats and mid-ladder caps. Hand it to the aux model to map instead.
+  const statedRaw = String(partial?.tier || deps.statedRank?.() || '').trim();
+  const stated = statedRaw && tierOf(profile, statedRaw);
+  const fixedTier = (s.playerTier && tierOf(profile, s.playerTier)?.name) || (partial?.tier && stated ? stated.name : '') || '';
+  const mapRank = statedRaw && !stated ? statedRaw : '';
   const current = instruction && s.player ? s.player : null;
   const maxSkills = requestedSkillCap([persona.text, extra, s.playerConcept, instruction].join('\n'), { statFields: partial ?? statFields, current });
   let raw = null;
@@ -145,7 +150,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
       const own = deps.matchLore ? ((await deps.matchLore(`${persona.name}\n${persona.text}`).catch(() => null))?.text ?? '') : '';
       const story = deps.mentions?.([persona.name]) ?? '';
       const worldLore = s.brief ? '' : await deps.lore();
-      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current, instruction, tier: fixedTier, maxSkills }), { maxTokens: 2400 });
+      raw = await deps.auxJson(sheetMessages({ profile, lore: worldLore, persona: persona.text, personaName: persona.name, statFields, own, story, brief: briefText(s.brief), card: deps.character?.() ?? '', scene: deps.scene?.(Number(deps.settings?.()?.sheetScene) || 4), keepSkills: extra || s.playerConcept || '', current, instruction, tier: fixedTier, statedRank: mapRank || (!fixedTier && stated ? `${statedRaw} (= ${stated.name})` : ''), maxSkills }), { maxTokens: 2400 });
     } catch (e) {
       if (force) throw e;
       deps.toast?.(`시트 생성 실패 → 상태창/기본값 사용 (${e.message})`, 'warning');
@@ -154,11 +159,16 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
       raw.stats = { ...(raw.stats ?? {}), ...partial.stats };
       if (partial.hp) raw.hp = partial.hp;
       if (partial.sp) raw.sp = partial.sp;
-      if (partial.tier) raw.tier = partial.tier;
     }
     if (raw && fixedTier) raw.tier = fixedTier;
+    // The aux mapped an unknown rank: remember it as an alias so the status window resolves from now on.
+    if (raw && mapRank) {
+      const t = tierOf(profile, raw.tier);
+      if (t && rememberRankAlias(s, deps, t.name, mapRank)) deps.trace?.('balance', `등급 이름 연결 · ${mapRank} → ${t.name}`, '상태창·설명에 쓰인 등급 이름을 등급표의 단계에 연결했어요. 이후 상태창은 이 단계로 읽어요.');
+    }
   }
   if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: fixedTier || profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
+  if (mapRank && !tierOf(profile, raw.tier)) deps.toast?.(`"${mapRank}" 등급을 등급표에서 찾지 못했어요. 캐릭터 → 편집에서 등급을 직접 골라 주세요.`, 'warning');
   if (persona.text) s.playerPersonaHash = hashStr(persona.text);
   return applyPlayerSheet(s, deps, raw, { statFields, partial, maxSkills });
 }
@@ -172,7 +182,7 @@ export async function setupChat(s, deps, { player = true } = {}) {
   const persona = deps.persona();
   const fields = deps.statFields?.();
   const n = Math.max(4, Math.min(20, Number(deps.settings?.()?.castScene) || 12));
-  const raw = await deps.auxJson(setupMessages({ lore: await deps.lore(), character: deps.character(), persona: persona.text, personaName: persona.name, history: deps.scene?.(n) ?? '', statTag: fields ? JSON.stringify(fields) : '' }), { maxTokens: 4000 });
+  const raw = await deps.auxJson(setupMessages({ lore: await deps.lore(), character: deps.character(), persona: persona.text, personaName: persona.name, history: deps.scene?.(n) ?? '', statTag: [fields ? JSON.stringify(fields) : '', deps.statedRank?.() ? `{{user}}'s rank as written in the story/status window: "${deps.statedRank()}" — this rank name MUST appear in the tier ladder (as a step name or in its aliases), at the position the world gives it.` : ''].filter(Boolean).join(' / ') }), { maxTokens: 4000 });
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.tiers)) throw new Error('보조모델 답에 등급 체계가 없어요');
   const pokemon = s.profile?.typeSystem === 'pokemon' || deps.settings?.()?.ruleSet === 'pokemon';
   let profile = normalizeProfile(raw);
@@ -189,6 +199,20 @@ export async function setupChat(s, deps, { player = true } = {}) {
   // A sheet made before the setup was judged without it; only build one when there is none (edits are kept).
   if (player && !s.player) await ensurePlayer(s, deps);
   return s.brief;
+}
+
+/** Add a world rank name as an alias of a ladder step (kept in the chat's profile and the cached rule set). */
+export function rememberRankAlias(s, deps, tierName, alias) {
+  const p = profileOf(s);
+  const t = p.tiers?.find(x => x.name === tierName);
+  const a = String(alias ?? '').trim().slice(0, 24);
+  if (!t || !a || norm(a) === norm(t.name) || (t.aliases ?? []).some(x => norm(x) === norm(a))) return false;
+  // The same name must not point at two steps.
+  for (const o of p.tiers) if (o !== t && o.aliases) o.aliases = o.aliases.filter(x => norm(x) !== norm(a));
+  t.aliases = [...(t.aliases ?? []), a].slice(-6);
+  s.profile = p;
+  deps.cache?.set?.(p);
+  return true;
 }
 
 /** Turn a raw (aux model) sheet into the player's sheet: normalize, audit, keep the portrait. */
