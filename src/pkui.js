@@ -270,19 +270,51 @@ export function allyCard(F, ctx) {
     </div>${fx.html}</div>`;
 }
 
-/** Field = enemy rows (back above front) · message ticker · ally HUD strip. */
+/* ---------- Battlefield: a quiet record sheet ----------
+ * One row per fighter: a type-coloured edge, name / rank / type in text, a thin HP bar with numbers, statuses as words,
+ * and the enemy's intent as a plain line under it. No art, glows or badges; the colour lives on the edge only.
+ * Rows keep data-act="pk:pick" / "pk:inspect", so targeting, long-press details and the turn FX work as before. */
+const STATE_KO = F => (F.out === 'yield' ? '항복' : F.out ? '이탈' : F.down ? '쓰러짐' : '');
+function statusText(F) {
+  const st = F.statuses.map(s => `${STATUS_SHORT[s.id] ?? STATUS[s.id]?.ko ?? s.id}${s.turns ? ` ${s.turns}` : ''}`);
+  const stg = Object.entries(F.stages ?? {}).filter(([, v]) => v).map(([k, v]) => `${STAGE_SHORT[k] ?? k} ${v > 0 ? '+' : ''}${v}`);
+  return [...st, ...stg].join(' · ');
+}
+function unitRow(F, ctx, side) {
+  const t = F.types[0]?.id ?? 'normal';
+  const fx = fxLayer(F, ctx);
+  const cs = cardState(F, ctx);
+  const pct = F.hpUnknown ? 100 : clamp(Math.round(F.hp / Math.max(1, F.maxHp) * 100), 0, 100);
+  const prev = ctx?.ui?.prevHp?.[F.name];
+  const from = F.hpUnknown || prev == null ? pct : prev;
+  const num = F.hpUnknown ? '???' : F.showNums ? `${F.hp}/${F.maxHp}` : `${pct}%`;
+  const spPct = F.sp != null && F.maxSp > 0 ? clamp(Math.round(F.sp / Math.max(1, F.maxSp) * 100), 0, 100) : null;
+  const types = (F.types.length ? F.types : F.typeSystem === 'pokemon' ? [{ id: 'normal', label: '노말' }] : []).map(x => h(x.label)).join('·');
+  const rank = [F.threat === 'boss' ? '보스' : F.threat === 'elite' ? '정예' : '', F.tier || '', types].filter(Boolean).join(' · ');
+  const state = STATE_KO(F);
+  const sts = statusText(F);
+  const intent = side === 'enemy' && F.note && !F.down ? `<div class="ur-intent ${F.noteCls ?? ''}" title="${h(F.noteTitle || F.note)}">${h(F.note)}</div>`
+    : side === 'ally' && F.note && !F.down && F.note !== '후열' ? `<div class="ur-intent">${h(F.note)}</div>` : '';
+  return `<div class="ur ${side} ${cs.cls} ${fx.hit}" style="--tc:${typeHex(t)};${cs.style}--hd:${fx.hd}s" ${!F.down || fx.html ? `data-act="pk:pick" data-v="${h(F.name)}"` : ''}>
+    <div class="ur-l1"><b class="ur-name">${h(F.name)}</b><span class="ur-rank">${rank}</span>${side === 'ally' && F.row === 'back' ? '<span class="ur-row">후열</span>' : ''}<button class="ur-i" data-act="pk:inspect" data-v="${h(F.name)}" title="상세">상세</button></div>
+    <div class="ur-bars"><div class="ur-hp"><div class="ur-trail" style="width:${Math.max(from, pct)}%" data-to="${pct}"></div><div class="pk-hp-fill ${F.hpUnknown ? 'u' : hpCls(pct)}" style="width:${from}%" data-to="${pct}"></div></div><span class="ur-num">${h(num)}</span></div>
+    ${spPct != null ? `<div class="ur-bars sp"><div class="ur-sp"><div style="width:${spPct}%"></div></div><span class="ur-num">${h(F.spLabel ?? 'SP')} ${F.showNums ? `${F.sp}/${F.maxSp}` : `${spPct}%`}</span></div>` : ''}
+    ${state || sts ? `<div class="ur-st">${state ? `<b>${state}</b>${sts ? ' · ' : ''}` : ''}${h(sts)}</div>` : ''}
+    ${intent}${fx.html}</div>`;
+}
+
+/** Field = enemies (front line, then back line) · message box · allies. */
 export function scene(V, ctx, { box = '' } = {}) {
   const foes = V.foes ?? [], allies = V.allies ?? [];
   const back = foes.filter(F => F.row === 'back'), front = foes.filter(F => F.row !== 'back');
-  const row = (list, small) => (list.length ? `<div class="bf-row ${small ? 'back' : 'front'} n${Math.min(4, list.length)}">${list.map(F => enemyCard(F, ctx, { small })).join('')}</div>` : '');
-  const shake = (ctx?.ui?.lastEvents ?? []).some(e => (e.t === 'hit' && (e.crit || e.eff === 'super')) || ['break', 'down', 'enrage'].includes(e.t));
+  const group = (list, label, side) => (list.length ? `<div class="ur-group">${label ? `<div class="ur-gl">${label}</div>` : ''}${list.map(F => unitRow(F, ctx, side)).join('')}</div>` : '');
   const lead = front[0] ?? back[0];
   const moodId = lead?.types?.[0]?.id;
-  return `<div class="bf-field map-${V.map ?? 'field'} ${V.sceneCls ?? ''} ${shake ? 'shake' : ''}"${moodId ? ` style="--mt:${typeHex(moodId)}"` : ''}>${moodId ? '<div class="bf-mood"></div>' : ''}
-      ${V.place ? `<div class="bf-place">${h(V.place)}</div>` : ''}
-      <div class="bf-foes">${balls(V.foeBalls)}${row(back, true)}${row(front, false)}</div>
+  return `<div class="bf-sheet"${moodId ? ` style="--mt:${typeHex(moodId)}"` : ''}>
+      <div class="bf-head"><span>적 ${foes.filter(F => !F.down).length}/${foes.length}</span>${V.place ? `<span class="bf-where">${h(V.place)}</span>` : ''}</div>
+      ${group(front, back.length ? '전열' : '', 'enemy')}${group(back, '후열', 'enemy')}
     </div>${box}
-    <div class="bf-allies">${balls(V.allyBalls)}${allies.map(F => allyCard(F, ctx)).join('')}</div>${V.banner ?? ''}`;
+    <div class="bf-sheet ally">${allies.length ? `<div class="bf-head"><span>아군</span></div>${allies.map(F => unitRow(F, ctx, 'ally')).join('')}` : ''}</div>${V.banner ?? ''}`;
 }
 
 /** Skill details in the panel's own style (bottom sheet), from a skillCard() object. */
@@ -318,8 +350,8 @@ export function menuGrid(items, { cols = 2, main = false } = {}) {
       const cost = it.over ? '<em class="sk-cost over">과로</em>' : it.cost ? `<em class="sk-cost">${h(it.cost)}</em>` : '<em class="sk-cost free">무료</em>';
       return `<button class="pk-btn sk ${it.over ? 'over' : ''}" style="--tc:${col}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''} title="${h(it.title ?? '')}">
         <span class="sk-l1"><i class="sk-dot"></i><b>${h(it.label)}</b>${cost}</span>
-        <span class="sk-l2">${it.tags.slice(0, 4).map(t => `<span class="sk-tag ${t.cls ?? ''}">${h(t.text ?? t)}</span>`).join('')}${it.why ? `<span class="sk-tag why">${h(it.why)}</span>` : ''}</span>
-        ${it.peek !== false ? `<span class="sk-info" data-act="pk:peekbtn" data-i="${i}" title="상세">ⓘ</span>` : ''}</button>`;
+        <span class="sk-l2">${it.tags.slice(0, 3).map(t => `<span class="sk-tag ${t.cls ?? ''}">${h(t.text ?? t)}</span>`).join('<i class="sk-sep">·</i>')}${it.why ? `<i class="sk-sep">·</i><span class="sk-tag why">${h(it.why)}</span>` : ''}</span>
+        ${it.peek !== false ? `<span class="sk-info" data-act="pk:peekbtn" data-i="${i}" title="상세">?</span>` : ''}</button>`;
     }
     return `<button class="pk-btn ${it.cls ?? ''}" data-act="pk:item" data-i="${i}" ${it.disabled ? 'disabled' : ''}>
     <b>${h(it.label)}</b>${it.meta ? `<em>${h(it.meta)}</em>` : ''}${it.sub ? `<small>${h(it.sub)}</small>` : ''}${it.fx ? `<i class="pk-fx">${h(it.fx)}</i>` : ''}</button>`;
@@ -340,8 +372,8 @@ export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, 
   const over = (k.cost ?? 0) > actor.sp;
   const tags = [];
   if (['physical', 'magic'].includes(k.kind)) tags.push({ text: `${k.kind === 'magic' ? '마법' : '물리'} ${k.power}${k.hits > 1 ? `×${k.hits}` : ''}` });
-  else if (k.kind === 'heal') tags.push({ text: `✚${k.power}%` });
-  else tags.push({ text: { buff: '▲강화', debuff: '▼방해', guard: k.protect ? '막기' : '방어', revive: '✚부활', cleanse: '❖정화' }[k.kind] ?? k.kind });
+  else if (k.kind === 'heal') tags.push({ text: `회복 ${k.power}%` });
+  else tags.push({ text: { buff: '강화', debuff: '방해', guard: k.protect ? '막기' : '방어', revive: '부활', cleanse: '정화' }[k.kind] ?? k.kind });
   if (k.priority > 0) tags.push({ text: '선공', cls: 'prio' });
   if (foe && ['physical', 'magic'].includes(k.kind)) {
     const mul = E.elementMul(foe, k.element, b).mul;
@@ -361,7 +393,7 @@ export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, 
 
 /** After the HTML is in the page: slide HP bars from their old width to the new one. */
 export function animateBars(root) {
-  const bars = root?.querySelectorAll?.('.pk-hp-fill[data-to], .en-trail[data-to]') ?? [];
+  const bars = root?.querySelectorAll?.('.pk-hp-fill[data-to], .en-trail[data-to], .ur-trail[data-to]') ?? [];
   if (!bars.length) return;
   // The fill drops at once; the pale trail behind it follows a moment later (CSS delay) — the "delayed drain".
   const go = () => bars.forEach(b => { b.style.width = `${b.dataset.to}%`; if (b.classList.contains('pk-hp-fill')) b.className = b.className.replace(/\b[gyr]\b/, hpCls(+b.dataset.to)); });

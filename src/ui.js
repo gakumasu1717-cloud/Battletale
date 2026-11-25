@@ -46,7 +46,7 @@ export function mountPanel(callbacks) {
   const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
   panel.addEventListener('pointerdown', e => {
     // Long-press a fighter on the field (or a guard on the map) → details.
-    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v]');
+    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .ur[data-v]');
     if (who) {
       cancelPress();
       pressTimer = setTimeout(() => { pressTimer = null; api.ui.inspect = who.dataset.v; longPressed = true; refreshPanel(); }, 420);
@@ -64,7 +64,7 @@ export function mountPanel(callbacks) {
   // Right-click (PC) = the same details a long-press opens on touch screens.
   panel.addEventListener('contextmenu', e => {
     const btn = e.target.closest?.('.pk-btn[data-act="pk:item"]');
-    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .pk-info[data-v]');
+    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .pk-info[data-v], .ur[data-v]');
     if (!btn && !who) return;
     e.preventDefault();
     if (btn) { const it = api.ui.menuItems?.[Number(btn.dataset.i)]; if (it && ['m:skill', 'm:basic'].includes(it.act)) api.ui.peek = Number(btn.dataset.i); }
@@ -734,7 +734,7 @@ function battleTab(s) {
       const items = M.menu(b.st, page, ctx);
       ui.menuItems = items;
       const mini = items.length && items.every(it => it.mini);
-      const order = page === 'main' && M.order ? orderLine(M.order(b.st)) : '';
+      const order = page === 'main' && M.order && !stepping ? orderLine(M.order(b.st)) : '';
       const skillsMain = items.some(it => it.tags);
       menu = `${order}${menuGrid(items, { main: page === 'main' && !mini && !skillsMain, cols: mini ? (items.length > 4 ? 3 : items.length) : 2 })}${barRow(items)}`;
     }
