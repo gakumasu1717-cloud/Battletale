@@ -287,6 +287,25 @@ export function readStatTag(text, tag = 'stat') {
   return statFieldsOf(all.at(-1)[1]);
 }
 
+/**
+ * Find the bot's own status window when the configured tag isn't used: any <tag>…</tag> block whose body reads as
+ * 3+ "key: value" fields, at least one of them a health / resource / rank field. Returns the tag name or ''.
+ * Raw message text is searched, so a display regex that turns the block into HTML doesn't hide it.
+ */
+export function detectStatTag(texts) {
+  const KEY = /^(hp|sp|mp|체력|생명력|마나|기력|정신력|스태미나|등급|랭크|계급|레벨|lv|rank|tier|level)$/i;
+  const SKIP = new Set(['bt-change', 'bt-start', 'bt-battle', 'bt-end', 'div', 'span', 'p', 'b', 'i', 'br', 'details', 'summary', 'table', 'tr', 'td', 'font', 'img', 'small', 'code', 'pre', 'think', 'thinking']);
+  for (const t of [...texts].reverse()) {
+    for (const m of String(t ?? '').matchAll(/<\s*([a-zA-Z가-힣][\w가-힣-]{0,23})\s*>([\s\S]{8,3000}?)<\s*\/\s*\1\s*>/g)) {
+      const tag = m[1];
+      if (SKIP.has(tag.toLowerCase())) continue;
+      const f = statFieldsOf(m[2]);
+      if (f && Object.keys(f).length >= 3 && Object.keys(f).some(k => KEY.test(k.replace(/\s+/g, '')))) return tag;
+    }
+  }
+  return '';
+}
+
 /** "Key: value | Key: value" or one "Key: value" per line (bullets, **bold**, HTML tags around keys are fine). */
 export function statFieldsOf(body) {
   const fields = {};

@@ -203,9 +203,15 @@ export function refreshPanel() {
 /* Message window plays itself: each step (or two intro lines) stays up for a beat, longer when it has more
  * lines. Tapping still advances at once; ⓘ details, the settings drawer or another tab pause it. */
 let autoTimer = null, autoKey = '';
+const PAGE = 4;
+/** One tap / one auto tick: next page of this step's lines, else the next step, else the next intro lines. */
 function advanceTalk() {
   const ui = api.ui;
-  if (ui.steps && (ui.stepPos ?? 0) < ui.steps.length) { ui.stepPos += 1; showStep(ui.stepPos); return; }
+  if (ui.steps && (ui.stepPos ?? 0) < ui.steps.length) {
+    const lines = ui.steps[ui.stepPos]?.lines ?? [];
+    if ((ui.linePos ?? 0) + PAGE < lines.length) { ui.linePos = (ui.linePos ?? 0) + PAGE; return; }
+    ui.stepPos += 1; ui.linePos = 0; showStep(ui.stepPos); return;
+  }
   ui.msgPos = (ui.msgPos ?? 0) + 2;
 }
 function scheduleAuto() {
@@ -216,11 +222,11 @@ function scheduleAuto() {
   if (!ms || tab !== 'battle' || (!stepping && !talking) || ui.inspect || ui.peek != null || ui.settingsOpen || (!stepping && api.state?.()?.battle?.status !== 'active')) {
     clearTimeout(autoTimer); autoTimer = null; autoKey = ''; return;
   }
-  const key = stepping ? `s${ui.stepPos}/${ui.steps.length}` : `m${ui.msgPos}/${ui.msg.length}`;
+  const key = stepping ? `s${ui.stepPos}.${ui.linePos ?? 0}/${ui.steps.length}` : `m${ui.msgPos}/${ui.msg.length}`;
   if (key === autoKey && autoTimer) return;
   clearTimeout(autoTimer);
   autoKey = key;
-  const lines = stepping ? Math.min(4, ui.steps[ui.stepPos]?.lines?.length ?? 1) : 2;
+  const lines = stepping ? Math.max(1, Math.min(PAGE, (ui.steps[ui.stepPos]?.lines?.length ?? 1) - (ui.linePos ?? 0))) : 2;
   autoTimer = setTimeout(() => {
     autoTimer = null;
     if (autoKey !== key) return;
@@ -566,7 +572,7 @@ export function endTurn(events) {
   clearTimeout(autoTimer); autoTimer = null; autoKey = '';
   ui.lastEvents = events;
   const { steps, maxHp } = buildSteps(events, ui.turnStart ?? {});
-  ui.steps = steps; ui.stepPos = 0; ui.stepMax = maxHp;
+  ui.steps = steps; ui.stepPos = 0; ui.linePos = 0; ui.stepMax = maxHp;
   ui.msg = []; ui.msgPos = 0;
   ui.page = 'main';
   ui.pending = null;
@@ -587,7 +593,7 @@ function showStep(i) {
 function skipTalk() {
   const ui = api.ui;
   ui.msgPos = (ui.msg ?? []).length;
-  if (ui.steps) ui.stepPos = ui.steps.length;
+  if (ui.steps) { ui.stepPos = ui.steps.length; ui.linePos = 0; }
 }
 
 function personaBanner(busy) {
@@ -701,8 +707,11 @@ function battleTab(s) {
   const head = `<div class="pk-head"><span class="pk-title">${h(b.title || M.ko)}</span><span class="pk-turn">${b.st.turn}턴</span>
     ${threat ? `<span class="bt-chip threat-${b.threat.level}">${threat}</span>` : ''}${b.spec?.difficulty && b.spec.difficulty !== 'normal' ? `<span class="bt-chip diff-${b.spec.difficulty}">${{ easy: '쉬움', hard: '어려움', nightmare: '악몽' }[b.spec.difficulty]}</span>` : ''}<button class="pk-more" data-act="stop" title="중단">중단</button></div>
     ${terrChip || modeSel ? `<div class="pk-head2">${terrChip}${modeSel}</div>` : ''}`;
+  const stepLines = stepping ? ui.steps[ui.stepPos].lines : [];
+  const lp = ui.linePos ?? 0;
+  const morePages = stepping && lp + PAGE < stepLines.length;
   const box = stepping
-    ? `<div class="pk-msg talk" data-act="pk:next">${ui.steps[ui.stepPos].lines.slice(0, 4).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span><span class="pk-stepn">${ui.stepPos + 1}/${ui.steps.length}</span>${ui.steps.length - ui.stepPos > 1 ? '<button class="pk-skip" data-act="pk:skip" title="건너뛰기">건너뛰기</button>' : ''}</div>`
+    ? `${playOrder(ui)}<div class="pk-msg talk" data-act="pk:next">${stepLines.slice(lp, lp + PAGE).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">${morePages ? '…' : '▼'}</span><span class="pk-stepn">${ui.stepPos + 1}/${ui.steps.length}</span>${ui.steps.length - ui.stepPos > 1 ? '<button class="pk-skip" data-act="pk:skip" title="이번 턴 남은 장면 건너뛰기">건너뛰기</button>' : ''}</div>`
     : talking
     ? `<div class="pk-msg talk" data-act="pk:next">${msg.slice(pos, pos + 2).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span>${msg.length - pos > 2 ? '<button class="pk-skip" data-act="pk:skip" title="건너뛰기">건너뛰기</button>' : ''}</div>`
     : `<div class="pk-msg idle">${h(V.idle ?? '')}</div>`;
@@ -753,7 +762,10 @@ function battleTab(s) {
   const peekCard = peekIt && M.peek ? M.peek(b.st, peekIt, ctx) : null;
   const est = peekIt?.tags?.find(t => String(t.text ?? t).startsWith('≈'));
   const peeker = peekCard ? skillSheet({ ...peekCard, est: est ? Number(String(est.text ?? est).replace(/\D/g, '')) : null }) : '';
-  const recent = b.history.slice(-3).flatMap(e => [`— ${e.turn}턴 —`, ...pkLines(e.events)]);
+  const hist = b.history.slice(-12);
+  const playing = stepping && hist.length ? hist.at(-1) : null;
+  const shownNow = playing ? ui.steps.slice(0, ui.stepPos).flatMap(st => st.lines).concat(stepLines.slice(0, lp + PAGE)) : null;
+  const recent = hist.flatMap(e => [`— ${e.turn}턴 —`, ...(e === playing ? shownNow : pkLines(e.events))]);
   const log = recent.length ? `<details class="pk-log" ${ui.logOpen ? 'open' : ''} data-log><summary>전투 기록</summary><div>${recent.map(l => `<div class="${l.startsWith('—') ? 'pk-log-t' : ''}">${h(l)}</div>`).join('')}</div></details>` : '';
   return `<div class="pk-wrap lr ${busy ? 'busy' : ''}">${head}${stage}${showBox && !inField ? box : ''}<div class="pk-actions ${busy ? 'off' : ''}">${menu}</div>${log}${inspector}${peeker}
     ${api.settings().playMode === 'chat' ? '<div class="bt-note">채팅 모드: 버튼은 입력창에 명령을 넣어요.</div>' : ''}</div>`;
@@ -774,7 +786,21 @@ function miniStatus(V, b, p) {
 function orderLine(order) {
   if (!order?.length || order.length < 2) return '';
   const short = n => (n.length > 5 ? `${n.slice(0, 4)}…` : n);
-  return `<div class="pk-order">${order.map((o, i) => `<span class="${o.side}"><i>${i + 1}</i>${h(short(o.name))}</span>`).join('<b>›</b>')}</div>`;
+  return `<div class="pk-order" title="속도 순서예요. 실제로는 방어·교체·아이템·선공 기술이 먼저, 힘을 모으는 기술은 나중에 움직여요.">${order.map((o, i) => `<span class="${o.side}"><i>${i + 1}</i>${h(short(o.name))}</span>`).join('<b>›</b>')}<small class="pk-order-k">속도순</small></div>`;
+}
+
+/** The order this turn actually played in (from its steps), with the actor on screen highlighted. */
+function playOrder(ui) {
+  const sideOf = n => ui.turnStart?.[n]?.side ?? '';
+  const acts = [];
+  (ui.steps ?? []).forEach((st, i) => {
+    if (st.upkeep) return;
+    const who = st.events.find(e => e.who)?.who;
+    if (who) acts.push({ who, i });
+  });
+  if (acts.length < 2) return '';
+  const short = n => (n.length > 5 ? `${n.slice(0, 4)}…` : n);
+  return `<div class="pk-order pk-order-live">${acts.map((a, k) => `<span class="${sideOf(a.who)} ${a.i === ui.stepPos ? 'now' : a.i < ui.stepPos ? 'done' : ''}"><i>${k + 1}</i>${h(short(a.who))}</span>`).join('<b>›</b>')}<small class="pk-order-k">이번 턴</small></div>`;
 }
 
 /* Pokémon-style message window: the last turn, short. */
@@ -1266,9 +1292,11 @@ function onClick(e) {
   if (act === 'pk:inspect') { e.stopPropagation(); api.ui.inspect = v; return refreshPanel(); }
   if (act === 'pk:inspect-close') { api.ui.inspect = null; return refreshPanel(); }
   if (act === 'pk:next') {
-    const ui = api.ui;
-    if (ui.steps && (ui.stepPos ?? 0) < ui.steps.length) { ui.stepPos += 1; showStep(ui.stepPos); return refreshPanel(); }
-    ui.msgPos = (ui.msgPos ?? 0) + 2; return refreshPanel();
+    // A double tap within 180 ms is one tap: fast clicking used to jump over whole steps.
+    const now = Date.now();
+    if (now - (api.ui.lastTap ?? 0) < 180) return;
+    api.ui.lastTap = now;
+    advanceTalk(); return refreshPanel();
   }
   if (act === 'pk:skip') { e.stopPropagation(); skipTalk(); api.ui.prevHp = null; return refreshPanel(); }
   if (act === 'pk:item') {

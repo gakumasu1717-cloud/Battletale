@@ -1,7 +1,7 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
 import { rulesFromText, normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, requestedSkillCap } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
-import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag, statedRankIn } from './src/parse.js';
+import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag, statedRankIn, detectStatTag } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaInfo, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
@@ -94,8 +94,24 @@ function cacheKey() {
   return [ch?.avatar ?? c.groupId ?? 'none', ch?.data?.extensions?.world ?? '', c.chatMetadata?.world_info ?? '', settings().loreBooks].join('|');
 }
 
+/**
+ * The status-window tag in use: the configured one if the story uses it, otherwise the bot's own window found by
+ * shape (remembered per chat). An empty setting turns status reading off entirely.
+ */
+function statTagHere() {
+  const set = settings();
+  if (!set.statTag) return '';
+  const chat = (ctx().chat ?? []).filter(m => !m.is_user && !m.is_system).slice(-12).map(m => m.mes);
+  if (chat.some(t => readStatTag(t, set.statTag))) return set.statTag;
+  const s = state();
+  if (s?.statTagAuto && chat.some(t => readStatTag(t, s.statTagAuto))) return s.statTagAuto;
+  const found = detectStatTag(chat);
+  if (found && s && s.statTagAuto !== found) { s.statTagAuto = found; trace('stat', `상태창 자동 감지 · <${found}>`, '설정의 상태창 태그 대신 이 봇의 상태창 태그를 읽어요. 이 채팅에서 기억해요.'); }
+  return found || set.statTag;
+}
+
 function lastStatFields() {
-  const tag = settings().statTag;
+  const tag = statTagHere();
   if (!tag) return null;
   const chat = ctx().chat ?? [];
   // Newest value of each field across recent status windows (some replies omit fields).
@@ -327,10 +343,11 @@ async function processMessage(index) {
   if (s.battle && s.battle.originIndex === index && !s.battle.history.length && s.battle.originHash !== seenKey) s.battle = null;
 
   if (set.statTag && set.statSync !== 'off' && s.player) {
-    const fields = readStatTag(m.mes, set.statTag);
+    const tagNow = statTagHere();
+    const fields = readStatTag(m.mes, tagNow);
     const before = { hp: s.player.hp, sp: s.player.sp, stats: { ...(s.player.stats ?? {}) } };
     syncFromStatus(s, fields, set.statSync);
-    trace('stat', fields ? `<${set.statTag}> 상태창 읽음 · 메시지 #${index}` : `<${set.statTag}> 상태창 없음 · 메시지 #${index}`, fields ? `읽은 값: ${JSON.stringify(fields)}\n전: HP ${before.hp} SP ${before.sp}\n후: HP ${s.player.hp} SP ${s.player.sp}` : '');
+    trace('stat', fields ? `<${tagNow}> 상태창 읽음 · 메시지 #${index}` : `<${tagNow}> 상태창 없음 · 메시지 #${index}`, fields ? `읽은 값: ${JSON.stringify(fields)}\n전: HP ${before.hp} SP ${before.sp}\n후: HP ${s.player.hp} SP ${s.player.sp}` : '');
   }
 
   rollbackChanges(s, index, trace);

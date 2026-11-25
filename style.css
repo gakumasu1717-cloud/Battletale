@@ -1340,3 +1340,8 @@
 #bt-panel .bt-rules-form .bt-row { align-items: flex-end; }
 #bt-panel .bt-rules-form .bt-row > label.bt-f { margin: 0; white-space: nowrap; }
 #bt-panel .bt-rules-form #bt-rf-tiers, #bt-panel .bt-rules-form #bt-rf-chart { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre; overflow-x: auto; }
+
+.pk-order-k { margin-left: auto; padding-left: 6px; font-size: 10px; opacity: .6; white-space: nowrap; }
+.pk-order-live span.now { outline: 1px solid var(--bt-accent, #f0aa3c); border-radius: 4px; background: #f0aa3c22; }
+.pk-order-live span.done { opacity: .45; }
+#bt-panel .pk-log > div { max-height: 220px; overflow-y: auto; }

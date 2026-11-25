@@ -1515,6 +1515,57 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.deepEqual(spec.trimmed, { enemies: 3, allies: 2 });
 });
 
+/* 68 */ await test('전투 메시지: 광역기처럼 줄이 많은 장면도 한 줄도 빠지지 않고, 빠른 연타는 한 번으로', async () => {
+  const N = await import(here + 'narrate.js');
+  const els = {}; const handlers = [];
+  const mk = id => ({ id, innerHTML: '', style: {}, value: '', dataset: {}, classList: { s: new Set(), toggle(c, on) { (on ?? !this.s.has(c)) ? this.s.add(c) : this.s.delete(c); }, add(c) { this.s.add(c); }, remove(c) { this.s.delete(c); }, contains(c) { return this.s.has(c); } }, addEventListener(t, fn) { if (t === 'click' && fn.name === 'onClick') handlers.push(fn); }, querySelector: () => null, querySelectorAll: () => [], appendChild() {}, setAttribute() {} });
+  globalThis.document = { getElementById: id => els[id] ?? null, createElement: () => mk('x'), body: { appendChild(e) { els[e.id] = e; } }, querySelector: () => null };
+  const ui = await import(here + 'ui.js?play');
+  const s = freshParty('aoe'); s.companions = [];
+  s.player.skills = [C.normalizeSkill({ name: '폭풍 참격', kind: 'physical', power: 60, target: 'enemies', acc: 100 }, { maxSp: 999 })];
+  s.player.sp = s.player.maxSp = 999;
+  const foes = ['고블린A', '고블린B', '고블린C', '고블린D', '고블린E'].map(n => ({ name: n, hp: 30, stats: { END: 1, AGI: 1 }, skills: ['찌르기: 물리 10'] }));
+  G.beginBattle(s, { mode: 'party', enemies: foes, allies: [] }, { originIndex: 0, originHash: 'x', settings: { ...SET, playMode: 'panel' } });
+  s.battle.history.push({ turn: 0, events: [] });
+  const api = { state: () => s, settings: () => ({ ...SET, playMode: 'panel', autoPlay: '0' }), busy: () => false, ui: {}, toast: () => {}, trace: () => [], codex: () => [], codexArchived: () => [], rosterOf: e => e.sheet, hasRoster: () => false };
+  ui.mountPanel(api); ui.togglePanel(true);
+  const panel = Object.values(els).find(e => e.id === 'bt-panel');
+  const st = s.battle.st;
+  ui.beginTurn();
+  const r = E.resolveTurn(st, [{ actor: 'player', type: 'skill', skill: '폭풍 참격' }]);
+  const all = N.pkLines(r.events);
+  assert.ok(all.length > 5, `need a long turn to test paging (got ${all.length}: ${all.join(' / ')})`);
+  ui.endTurn(r.events);
+  assert.ok(api.ui.steps.some(x => x.lines.length > 4), 'the turn must contain a step longer than one page');
+  const tap = () => handlers.at(-1)({ target: { closest: () => ({ dataset: { act: 'pk:next' }, tagName: 'DIV' }) }, preventDefault() {}, stopPropagation() {} });
+  const seen = [];
+  for (let guard = 0; guard < 60; guard++) {
+    ui.refreshPanel();
+    const m = /<div class="pk-msg talk"[^>]*>([\s\S]*?)<span class="pk-arrow">/.exec(panel.innerHTML);
+    if (!m) break;
+    seen.push(...[...m[1].matchAll(/<div>([\s\S]*?)<\/div>/g)].map(x => x[1].replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>')));
+    api.ui.lastTap = 0; tap();
+  }
+  const esc = l => l;
+  assert.deepEqual(seen.map(esc), all.filter(l => !/^\s*$/.test(l)), 'every line must be shown, in order');
+  // the live order strip shows who acts this turn
+  // double tap guard: two taps at once advance one page
+  ui.endTurn(r.events); ui.refreshPanel();
+  const before = `${api.ui.stepPos}.${api.ui.linePos}`;
+  api.ui.lastTap = 0; tap(); tap();
+  assert.notEqual(`${api.ui.stepPos}.${api.ui.linePos}`, before);
+  const once = `${api.ui.stepPos}.${api.ui.linePos}`;
+  api.ui.lastTap = 0; ui.endTurn(r.events); tap();
+  assert.equal(`${api.ui.stepPos}.${api.ui.linePos}`, once, 'a double tap must count once');
+});
+
+/* 69 */ await test('상태창 자동 감지: 설정 태그가 아니어도 봇의 상태창 모양을 찾아 읽는다', () => {
+  assert.equal(P.detectStatTag(['<status>\n이름: 카인\n등급: 도미누스\nHP: 900/900\nMP: 300/300\n</status>']), 'status');
+  assert.equal(P.detectStatTag(['<상태창>체력: 80/100 | 기력: 30/50 | 위치: 숲</상태창>']), '상태창');
+  assert.equal(P.detectStatTag(['<think>a: b\nc: d\nHP: 3</think>', '<div>HP: 1 | MP: 2 | 등급: 3</div>', '대화만']), '');
+  assert.equal(P.detectStatTag(['<memo>장소: 숲\n날씨: 맑음\n시간: 밤</memo>']), '', 'needs a health/resource/rank field');
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);
