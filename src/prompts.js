@@ -556,7 +556,7 @@ export function worldPrompt({ mode, player, party, profile, statusWindow, change
 }
 
 /* ====================== Panel-mode prompts ====================== */
-const KEY_EVENTS = new Set(['down', 'parry', 'break', 'charge', 'finisher', 'broken', 'rout', 'yield', 'flee', 'takedown', 'detected', 'transition', 'improv', 'revive', 'enrage', 'lost', 'surprised', 'end', 'scan', 'swap', 'combo', 'protected', 'endure', 'switch']);
+const KEY_EVENTS = new Set(['down', 'parry', 'break', 'charge', 'finisher', 'broken', 'rout', 'yield', 'flee', 'takedown', 'detected', 'transition', 'improv', 'revive', 'enrage', 'lost', 'surprised', 'end', 'scan', 'swap', 'combo', 'protected', 'endure', 'switch', 'passive']);
 const GUIDE_AMOUNT = [
   { upTo: 3, text: 'Show every action in order: the move, the impact, and how everyone reacts.' },
   { upTo: 10, text: 'In each clash, show the one or two actions that decided it in full; keep the exchanges between to a line or two. Give every knockout at least a sentence.' },
@@ -645,4 +645,70 @@ export function panelWaitPrompt(b, profile, opts = {}) {
     '- Do not narrate any attack, damage, detection or outcome. If {{user}} speaks, keep the reply short and in the moment, with the confrontation still unresolved.',
     '</battle_engine>',
   ].join('\n');
+}
+
+/* ====================== Aux model: LLM-coded signature passive ====================== */
+export function passiveMessages({ profile, sheet, concept = '', lore = '', brief = '', instruction = '', prevError = '', prevCode = '' }) {
+  const system = `You design and code ONE balanced, character-defining combat passive in a restricted JavaScript sandbox for a turn-based RPG engine. Output ONLY a single JSON object: {"name": "...", "desc": "...", "code": "..."}. No markdown, no commentary.`;
+  const user = `## Character
+${sheetText(sheet, profile)}
+Elements: ${(sheet.elements ?? []).join(', ') || 'none'} | Threat: ${sheet.threat ?? 'normal'} | Trait: ${sheet.trait ?? 'none'}
+${concept ? `Concept / bio: ${concept}` : ''}
+${sheet.customPassive?.name ? `Current passive: ${sheet.customPassive.name} — ${sheet.customPassive.desc}` : ''}
+
+${brief ? `## World\n${String(brief).slice(0, 600)}\n` : ''}${lore ? `## Relevant lore\n${String(lore).slice(0, 1200)}\n` : ''}${instruction ? `## User request (follow this)\n${instruction}\n` : ''}${prevError ? `## Previous attempt failed — FIX THIS\nError: ${prevError}\nPrevious code:\n${prevCode}\n` : ''}
+## Sandbox API (strict — code is statically security-checked before running)
+Your code runs as the body of a function(ctx, fx, Math). Check ctx.hook and call fx.* to trigger effects.
+
+Hooks (ctx.hook):
+- 'battleStart': entering battle
+- 'turnStart': start of each turn
+- 'beforeAttack': attacker damage calc (ctx.target, ctx.skill, ctx.dmg, ctx.crit, ctx.eff)
+- 'afterAttack': after hitting target (ctx.target, ctx.skill, ctx.dmg, ctx.crit, ctx.eff, ctx.ko)
+- 'beforeHit': defender damage calc (ctx.attacker, ctx.skill, ctx.dmg, ctx.fatal)
+- 'afterHit': after taking damage (ctx.attacker, ctx.skill, ctx.dmg)
+- 'turnEnd': end of turn
+- 'onKill': after knocking out an enemy (ctx.victim)
+- 'onAllyDown': when an ally falls (ctx.fallen)
+
+Read-only ctx:
+- ctx.turn, ctx.allyCount, ctx.foeCount, ctx.isBoss
+- ctx.self / ctx.target / ctx.attacker / ctx.victim / ctx.fallen:
+  { name, hp, maxHp, hpPct (0-100), sp, maxSp, spPct (0-100), row ('front'|'back'), elements, statuses, statusCount, hasDebuff, hasBuff, isBoss }
+- ctx.skill: { name, kind ('physical'|'magic'|'heal'|'buff'|'debuff'|'guard'), element, power, range ('melee'|'ranged'), isBasic, hits, priority }
+- ctx.dmg, ctx.crit, ctx.eff ('super'|'weak'|'resist'|'immune'|null), ctx.ko, ctx.fatal (boolean: incoming hit would KO)
+- ctx.mem: persistent per-battle key-value object (read stacks/flags stored by fx.flag)
+- ctx.hasStatus('self'|'target'|'attacker', statusId) -> boolean
+- ctx.stageOf('self'|'target'|'attacker', stat) -> -6..+6
+- ctx.rng() -> 0..1 seeded, ctx.chance(pct) -> boolean seeded
+
+Effect API (fx.*) — engine enforces balance caps automatically:
+- fx.dmgMul(mul, msg?): multiply damage in beforeAttack/beforeHit (0.65..1.45)
+- fx.dmgFlat(pctMaxHp, msg?): bonus flat damage in beforeAttack (-10..12 % of target maxHp)
+- fx.heal(pctMaxHp, msg?): heal self (1..20 % of maxHp; capped 25%/turn)
+- fx.sp(pctMaxSp, msg?): change self SP (-25..25 % of maxSp)
+- fx.stage('self'|'target'|'foes'|'allies', stat, delta, msg?): stat in pow|mag|def|res|spd|acc|eva|luk, delta -2..+2
+- fx.status('self'|'target', statusId, chancePct, turns?, msg?): statusId MUST be one of burn|poison|bleed|stun|freeze|sleep|blind|silence|confuse|fear|vulnerable|mark|regen|shield|taunt (for speed slow/haste use fx.stage(..., 'spd', -1 or +1))
+- fx.counter(pctMaxHp, msg?): thorns/counter dmg to attacker in afterHit (3..15 % of attacker maxHp)
+- fx.endure(msg?): survive a fatal hit at 1 HP in beforeHit (max 1/battle; any fx.heal called alongside it applies right after surviving)
+- fx.flag(key, value): store number/boolean/short-string in ctx.mem for stacks or once-per-battle flags
+- fx.log(msg): short flavor note
+
+STRICT SECURITY RULES (violation rejects the code):
+- ONLY use if/else, const/let, arithmetic, comparisons, dot property access, ctx.*, fx.*, Math.min/max/floor/ceil/round/abs.
+- NEVER use: while, for, do, function, =>, new, class, this, try/catch, backticks (\`), regex, Math.random, eval, Function, window, document, fetch, Object, or dynamic bracket access obj[key] (only obj.prop or arr[0]).
+- Always guard nullable objects (e.g. if (ctx.skill && ctx.skill.kind === 'physical')).
+- Keep code concise (5-20 lines), thematic to the character, and tactically interesting (1-2 clean synergistic hooks — e.g. stacking mechanic, conditional power, crisis survival, counter-stance, or kill momentum — NOT overpowered).
+
+## Examples
+Example 1 (sword aura stacker):
+{"name":"검기 축적","desc":"물리 공격마다 검기 스택을 1 쌓는다(최대 4). 스택당 물리 피해 +8%, 4스택 도달 시 스피드 상승.","code":"if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {\\n  const s = ctx.mem.stacks || 0;\\n  if (s > 0) fx.dmgMul(1 + s * 0.08, '검기 방출');\\n}\\nif (ctx.hook === 'afterAttack' && ctx.skill && ctx.skill.kind === 'physical') {\\n  const next = Math.min(4, (ctx.mem.stacks || 0) + 1);\\n  fx.flag('stacks', next);\\n  if (next === 4 && !ctx.mem.peaked) { fx.flag('peaked', true); fx.stage('self', 'spd', 1, '검기 완성'); }\\n}"}
+
+Example 2 (phoenix crisis passive):
+{"name":"불사조의 잔불","desc":"전투당 1회 치명타/치명상을 HP 1로 버티고 체력을 18% 회복한다. 근접 피격 시 30% 확률로 화상 반사.","code":"if (ctx.hook === 'beforeHit' && ctx.fatal && !ctx.mem.revived) {\\n  fx.flag('revived', true);\\n  fx.endure('불사조의 가호');\\n  fx.heal(18, '잔불 재생');\\n}\\nif (ctx.hook === 'afterHit' && ctx.attacker && ctx.skill && ctx.skill.range === 'melee') {\\n  fx.status('target', 'burn', 30, 2, '작열의 반사');\\n}"}
+
+## Output
+Return ONE JSON object in Korean for name & desc, valid sandbox JS for code:
+{"name": "짧은 고유 특성명", "desc": "효과 요약 (한국어 1-2문장)", "code": "JS code"}`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }

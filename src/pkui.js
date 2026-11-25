@@ -341,10 +341,16 @@ export function inspectHtml(f, { b, profile, intel = 2, side, intent = '' }) {
   const match = order.map(m => `<div class="pk-mu"><b class="${m > 1 ? 'up' : m === 0 ? 'zero' : 'down'}">×${m === 0 ? '0' : m}</b> ${groups[m].map(t => `<span class="bt-type t-${typeIn(attackTypes.find(x => typeName(x, sys) === t) ?? '', sys)}">${h(t)}</span>`).join('')}</div>`).join('');
   const skills = side !== 'enemy' || intel >= 2 ? f.skills : f.skills.filter(k => f.revealed?.includes(k.name));
   const world = known && f.stats ? Object.entries(f.stats).map(([k, v]) => `<span>${h(k)} <b>${v}</b></span>`).join('') : '';
+  const cp = f.customPassive;
+  const pstateEntries = Object.entries(f.pstate ?? {}).filter(([k]) => !k.startsWith('__'));
+  const cpHtml = cp && cp.enabled && b?.customPassives !== false && (side !== 'enemy' || intel >= 1)
+    ? `<div class="pk-passive"><b>✦ ${h(cp.name)}</b>${cp.desc ? ` <small>${h(cp.desc)}</small>` : ''}${pstateEntries.length ? `<div class="pk-pstate">${pstateEntries.map(([k, v]) => `<span>${h(k)}: <b>${h(String(v))}</b></span>`).join('')}</div>` : ''}</div>`
+    : '';
   return `<div class="pk-inspect"><div class="pk-ins-box">
     <div class="pk-ins-head"><b>${h(f.name)}</b> <small>${h(f.tier ?? '')}</small> ${types.map(t => `<span class="bt-type t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}<button class="pk-ins-x" data-act="pk:inspect-close">✕</button></div>
     <div class="pk-ins-hp">${h(profile.hpLabel)} <b>${hp}</b>${f.maxSp > 0 && (side !== 'enemy' || !f.noSp) ? ` · ${h(profile.spLabel)} <b>${side !== 'enemy' || intel >= 2 ? `${f.sp} / ${f.maxSp}` : `${Math.round(f.sp / Math.max(1, f.maxSp) * 100)}%`}</b>` : ''}${f.row && b?.format !== 'singles' ? ` · ${f.row === 'back' ? '후열' : '전열'}` : ''}</div>
     ${intent ? `<div class="pk-ins-intent">다음 행동: ${h(intent)}</div>` : ''}
+    ${cpHtml}
     ${f.statuses?.length ? `<div class="pk-chips">${f.statuses.map(x => `<span class="pk-st st-${x.id}">${STATUS[x.id]?.ko} ${x.turns}턴</span>`).join('')}</div>` : ''}
     <div class="pk-stats">${rows}</div>
     ${world ? `<div class="pk-world">${world}</div>` : ''}

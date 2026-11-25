@@ -46,6 +46,7 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'combo': return ko ? `  ✦ 연계 발동! ${e.target} 상대로 위력 ×${e.mul}` : `  COMBO: the condition is met against ${e.target}, power ×${e.mul}.`;
     case 'consume': return ko ? `  · ${e.who}의 ${stName(e.status, 'ko')}이(가) 터지며 사라짐` : `  ${e.who}'s ${stName(e.status, 'en')} is consumed by the blow.`;
     case 'endure': return ko ? `  · ${e.who} 간신히 버텨냄!` : `  ${e.who} barely holds on!`;
+    case 'passive': return ko ? `  ✦ ${e.who}의 고유 특성 「${e.name}」 발동!${e.msg ? ` (${e.msg})` : ''}` : `  [Passive] ${e.who}'s signature trait "${e.name}" triggers!${e.msg ? ` (${e.msg})` : ''}`;
     case 'protect': return ko ? `▶ ${e.who}: 방어 자세 ${e.ok ? '— 이번 턴 공격을 모두 막는다' : `실패${showRolls && e.chance != null ? ` (${e.chance}%)` : ''}`}` : `${e.who} ${e.ok ? 'braces to block every attack this turn' : 'tries to brace again, but fails'}.`;
     case 'protected': return ko ? `  · ${e.who} 「${e.skill}」을(를) 완벽히 막아냄` : `  ${e.who} completely blocks "${e.skill}".`;
     case 'breakbonus': return ko ? `  ✦ 충전을 끊은 쪽 전원 기력 +${e.sp}%` : `  Breaking the charge lets ${e.who}'s side catch its breath.`;
@@ -241,6 +242,7 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'hpcost': L(`${j(e.who, '은', '는')} 몸을 깎아 힘을 끌어냈다!`); break;
       case 'combo': L('연계가 터졌다!'); break;
       case 'endure': L(`${j(e.who, '은', '는')} 간신히 버텼다!`); break;
+      case 'passive': L(`✦ ${e.who}의 「${e.name}」 발동!${e.msg ? ` (${e.msg})` : ''}`); break;
       case 'protect': L(e.ok ? `${j(e.who, '은', '는')} 방어 태세를 굳혔다!` : '그러나 실패했다!'); break;
       case 'protected': L(`${j(e.who, '은', '는')} 공격을 막아냈다!`); break;
       case 'breakbonus': L('기세를 탔다! 기력이 돌아온다!'); break;

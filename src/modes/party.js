@@ -90,7 +90,7 @@ export default {
   id: 'party', ko: '파티 턴제', icon: '⚔️',
 
   create({ spec, profile, party, allies, enemies, seed, settings }) {
-    const b = E.createBattle({ party, allies, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, dealMul: settings.dealMul ?? 1, takeMul: settings.takeMul ?? 1 });
+    const b = E.createBattle({ party, allies, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, dealMul: settings.dealMul ?? 1, takeMul: settings.takeMul ?? 1, customPassives: settings.customPassives !== false });
     b.attackName = settings.attackName || '기본 공격';
     return b;
   },

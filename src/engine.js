@@ -8,6 +8,7 @@
 //  - terrain, initiative (ambush) and intel (how much you know) come from the story
 // Physical layer: optional timing grades for the player's attacks and defenses.
 import { STATUS, DERIVED, TRAITS, derive, inferItem, elementId, stageKey, typeIn, typesFor } from './catalog.js';
+import { evalPassive } from './passive.js';
 import { makeRng, clamp, clone, norm, pct, num } from './util.js';
 
 const STAGE_MIN = -4, STAGE_MAX = 4;
@@ -20,7 +21,7 @@ export const GRADE_ATTACK = { perfect: 1.0, good: 1, miss: 0.75 };       // perf
 export const GRADE_DEFENSE = { perfect: 0, good: 0.6, miss: 1.1 };
 
 /* ---------- Battle creation ---------- */
-export function createBattle({ party = [], allies = [], enemies = [], profile, seed, place = '', flee = true, length = 1, title = '', terrain = [], initiative = 'normal', format = 'multi', aiLevel = 'hard', costScale = 1, dealMul = 1, takeMul = 1 }) {
+export function createBattle({ party = [], allies = [], enemies = [], profile, seed, place = '', flee = true, length = 1, title = '', terrain = [], initiative = 'normal', format = 'multi', aiLevel = 'hard', costScale = 1, dealMul = 1, takeMul = 1, customPassives = true }) {
   const fighters = [];
   const add = (sheet, side, persistent) => {
     const f = clone(sheet);
@@ -29,6 +30,7 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
     f.derived = derive(f, profile);
     f.stages = {};
     f.cds = {};
+    f.pstate = {};
     f.guard = false;
     f.down = f.hp <= 0;
     f.out = null;
@@ -90,6 +92,7 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
     fighters,
     intents: {},
     format: format === 'singles' ? 'singles' : 'multi',
+    customPassives: customPassives !== false,
   };
   for (const t of (terrain ?? []).slice(0, 4)) applyTerrain(b, t);
   b.startEvents = [];
@@ -100,14 +103,98 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
 
 export const POKEMON_DAMAGE = 0.68;
 
-/** Traits that fire when a fighter enters the field (battle start, switch-in, send-out). */
+/** Traits & custom passives that fire when a fighter enters the field (battle start, switch-in, send-out). */
 function entryTrait(b, f, ev) {
-  if (f.trait !== 'intimidate') return;
-  for (const o of b.fighters.filter(x => x.side !== f.side && onField(x))) {
-    const before = o.stages.pow ?? 0;
-    o.stages.pow = clamp(before - 1, STAGE_MIN, STAGE_MAX);
-    if (o.stages.pow !== before) ev.push({ t: 'stage', who: o.name, stat: 'pow', delta: -1, trait: 'intimidate', src: f.name });
+  if (f.trait === 'intimidate') {
+    for (const o of b.fighters.filter(x => x.side !== f.side && onField(x))) {
+      const before = o.stages.pow ?? 0;
+      o.stages.pow = clamp(before - 1, STAGE_MIN, STAGE_MAX);
+      if (o.stages.pow !== before) ev.push({ t: 'stage', who: o.name, stat: 'pow', delta: -1, trait: 'intimidate', src: f.name });
+    }
   }
+  const rng = makeRng(`${b.seed}:entry:${b.turn}:${f.id}`);
+  triggerPassive('battleStart', b, f, {}, rng, ev);
+}
+
+/** Run a fighter's LLM-coded custom passive safely and apply its clamped effects. */
+function triggerPassive(hook, b, f, extra, rng, ev) {
+  if (extra?._fromPassive || !f?.customPassive?.enabled || b?.customPassives === false) return null;
+  if (!active(f) && hook !== 'beforeHit' && hook !== 'onAllyDown') return null;
+  const res = evalPassive(hook, b, f, extra, rng);
+  if (!res || res.error || !res.ops) return null;
+  const ops = res.ops;
+
+  const hasDmgMod = (hook === 'beforeAttack' || hook === 'beforeHit') && (Math.abs(ops.dmgMul - 1) >= 0.005 || (hook === 'beforeAttack' && ops.dmgFlatPct !== 0));
+  const willEndure = hook === 'beforeHit' && ops.endure && !!extra?.fatal && !f.pstate?.__endured;
+  const willHeal = ops.healPct > 0 && active(f) && (f._pHealTurn ?? 0) < 25;
+  const willSp = ops.spPct !== 0 && active(f) && f.maxSp > 0 && (f._pSpTurn ?? 0) < 30;
+  const willStage = ops.stages.length > 0 && (f._pStageTurn ?? 0) < 2;
+  const willStatus = ops.statuses.length > 0 && (f._pStatusTurn ?? 0) < 2;
+  const willCounter = hook === 'afterHit' && ops.counterPct > 0 && (f._pCounterTurn ?? 0) < 20 && extra?.attacker && extra.attacker !== f && active(extra.attacker);
+  const willLog = ops.logs.length > 0;
+
+  if (hasDmgMod || willEndure || willHeal || willSp || willStage || willStatus || willCounter || willLog) {
+    ev.push({ t: 'passive', who: f.name, name: f.customPassive.name || '고유 특성', msg: ops.logs.join(' · ') });
+  }
+
+  if (willHeal && !willEndure) {
+    const capLeft = Math.max(0, 25 - (f._pHealTurn ?? 0));
+    const usePct = Math.min(ops.healPct, capLeft);
+    if (usePct > 0) {
+      f._pHealTurn = (f._pHealTurn ?? 0) + usePct;
+      heal(f, Math.max(1, Math.round(f.maxHp * usePct / 100)), ev);
+    }
+  }
+  if (willSp) {
+    const capLeft = Math.max(0, 30 - (f._pSpTurn ?? 0));
+    const useAbs = Math.min(Math.abs(ops.spPct), capLeft);
+    const signed = Math.sign(ops.spPct) * useAbs;
+    if (signed !== 0) {
+      f._pSpTurn = (f._pSpTurn ?? 0) + useAbs;
+      const delta = Math.round(f.maxSp * signed / 100);
+      if (delta !== 0) f.sp = clamp(f.sp + delta, 0, f.maxSp);
+    }
+  }
+  if (willStage) {
+    for (const st of ops.stages) {
+      if ((f._pStageTurn ?? 0) >= 2) break;
+      const list = st.who === 'self' ? [f]
+        : st.who === 'target' ? [extra?.target ?? extra?.attacker].filter(Boolean)
+        : st.who === 'foes' ? foesOf(b, f)
+        : st.who === 'allies' ? alliesOf(b, f) : [];
+      let applied = false;
+      for (const r of list) {
+        if (!active(r)) continue;
+        const before = r.stages[st.stat] ?? 0;
+        r.stages[st.stat] = clamp(before + st.delta, STAGE_MIN, STAGE_MAX);
+        if (r.stages[st.stat] !== before) {
+          ev.push({ t: 'stage', who: r.name, stat: st.stat, delta: r.stages[st.stat] - before });
+          applied = true;
+        }
+      }
+      if (applied) f._pStageTurn = (f._pStageTurn ?? 0) + 1;
+    }
+  }
+  if (willStatus) {
+    for (const st of ops.statuses) {
+      if ((f._pStatusTurn ?? 0) >= 2) break;
+      const r = st.who === 'self' ? f : (extra?.target ?? extra?.attacker);
+      if (active(r)) {
+        f._pStatusTurn = (f._pStatusTurn ?? 0) + 1;
+        if (rng.chance(st.chance / 100)) addStatus(r, { id: st.id, turns: st.turns }, ev, f);
+      }
+    }
+  }
+  if (willCounter) {
+    const capLeft = Math.max(0, 20 - (f._pCounterTurn ?? 0));
+    const usePct = Math.min(ops.counterPct, capLeft);
+    if (usePct > 0) {
+      f._pCounterTurn = (f._pCounterTurn ?? 0) + usePct;
+      const cdmg = Math.max(1, Math.round(extra.attacker.maxHp * usePct / 100));
+      applyDamage(b, f, extra.attacker, cdmg, ev, { label: f.customPassive.name || '반격', _fromPassive: true, rng });
+    }
+  }
+  return { ops, willEndure };
 }
 
 function applyTerrain(b, t) {
@@ -341,6 +428,10 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
   const cmds = clone(commands) ?? [];
   for (const c of cmds) { const f = byId(b, c.actor); if (f && c.defense) f.defense = c.defense; }
 
+  // 0. Start-of-turn custom passives.
+  for (const f of b.fighters) { f._pHealTurn = 0; f._pSpTurn = 0; f._pStageTurn = 0; f._pStatusTurn = 0; f._pCounterTurn = 0; }
+  for (const f of b.fighters.filter(onField)) triggerPassive('turnStart', b, f, {}, rng, ev);
+
   // 1. One action per action-slot. Enemies follow their announced intents.
   const acts = [];
   for (const f of b.fighters.filter(onField)) {
@@ -387,14 +478,14 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
 
   // 4. End of turn upkeep.
   if (b.status === 'active') {
-    for (const f of b.fighters.filter(onField)) upkeep(b, f, ev);
+    for (const f of b.fighters.filter(onField)) upkeep(b, f, ev, rng);
     // Benched fighters catch their breath too.
     for (const f of b.fighters.filter(x => x.bench && !x.down)) f.sp = Math.min(f.maxSp, f.sp + Math.round(f.maxSp * 0.05) + 1);
     checkEnd(b, ev);
   }
   if (b.status === 'active' && b.format === 'singles') replaceFainted(b, ev);
   for (const f of b.fighters) {
-    f.guard = false; delete f.defense; if (f.stunnedThisTurn) delete f.stunnedThisTurn;
+    f.guard = false; delete f.defense; delete f._pHealTurn; delete f._pSpTurn; delete f._pStageTurn; delete f._pStatusTurn; delete f._pCounterTurn; if (f.stunnedThisTurn) delete f.stunnedThisTurn;
     if (!f.protectedNow) f.protectChain = 0;
     delete f.protectedNow; delete f.protect;
   }
@@ -610,21 +701,43 @@ function pivotOut(b, f, ev) {
 function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
 
   for (const t of targets) {
+    if (!active(f)) break;
     switch (skill.kind) {
       case 'physical': case 'magic': {
         let landed = 0, dealt = 0;
         if (t.protect && t !== f) { ev.push({ t: 'protected', who: t.name, attacker: f.name, skill: skill.name }); break; }
         const comboHit = bonusMet(f, t, skill);
         if (comboHit) ev.push({ t: 'combo', who: f.name, target: t.name, skill: skill.name, cond: skill.bonusIf, mul: skill.bonusIf.mul });
-        for (let h = 0; h < skill.hits && active(t); h++) {
+        for (let h = 0; h < skill.hits && active(t) && active(f); h++) {
           const grade = cmd.grades?.[h] ?? cmd.grades?.[0] ?? null;
           if (grade !== 'perfect' && !rng.chance(hitChance(f, t, skill))) { ev.push({ t: 'miss', who: f.name, target: t.name }); continue; }
           const crit = grade === 'perfect' || (grade !== 'miss' && rng.chance(critChance(f, t, skill)));
-          const { eff } = elementMul(t, skill.element, b);
+          const { eff, mul: effMul } = elementMul(t, skill.element, b);
           let dmg = eff === 'immune' ? 0 : rawDamage(b, f, t, skill, { rand: rng.range(0.85, 1), crit, aoe: skill.target === 'enemies' }) * (GRADE_ATTACK[grade] ?? 1);
+          // Custom passive: beforeAttack (attacker) & beforeHit (defender)
+          let passiveEndured = false, endureHealPct = 0;
+          if (dmg > 0) {
+            const pAtk = triggerPassive('beforeAttack', b, f, { target: t, skill, dmg, crit, eff, effMul }, rng, ev);
+            if (pAtk?.ops) {
+              if (pAtk.ops.dmgMul !== 1) dmg *= pAtk.ops.dmgMul;
+              if (pAtk.ops.dmgFlatPct !== 0) dmg += t.maxHp * (pAtk.ops.dmgFlatPct / 100);
+              dmg = Math.max(1, dmg);
+            }
+            const pDef = triggerPassive('beforeHit', b, t, { attacker: f, target: f, skill, dmg, crit, eff, effMul, fatal: dmg >= t.hp }, rng, ev);
+            if (pDef?.ops) {
+              if (pDef.ops.dmgMul !== 1) dmg = Math.max(1, dmg * pDef.ops.dmgMul);
+              if (pDef.willEndure && dmg >= t.hp) {
+                t.pstate ??= {};
+                t.pstate.__endured = true;
+                dmg = Math.max(0, t.hp - 1);
+                passiveEndured = true;
+                endureHealPct = pDef.ops.healPct || 0;
+              }
+            }
+          }
           // Nobody near full health drops to one blow from an opponent of about their own strength
           // (Focus Sash rule). Real power gaps — or minions — still go down at once.
-          const endure = dmg > 0 && t.side !== f.side && t.threat !== 'minion' && t.hp >= t.maxHp * 0.9 && avgDerived(f) < avgDerived(t) * 1.3 && dmg >= t.hp;
+          const endure = !passiveEndured && dmg > 0 && t.side !== f.side && t.threat !== 'minion' && t.hp >= t.maxHp * 0.9 && avgDerived(f) < avgDerived(t) * 1.3 && dmg >= t.hp;
           if (endure) dmg = Math.max(1, t.hp - Math.max(1, Math.round(t.maxHp * 0.1)));
           // The target's own timing against this attacker.
           const dg = t.defense?.[f.id] ?? t.defense?.all ?? null;
@@ -633,19 +746,31 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
             dmg *= GRADE_DEFENSE[dg] ?? 1;
             guarded = { perfect: 'parry', good: 'block', miss: 'flinch' }[dg];
           }
-          const zeroDmg = guarded === 'parry' || eff === 'immune' || (b.takeMul === 0 && f.side === 'enemy' && t.side === 'ally');
+          const zeroDmg = guarded === 'parry' || eff === 'immune' || (b.takeMul === 0 && f.side === 'enemy' && t.side === 'ally') || (passiveEndured && dmg <= 0);
           dmg = zeroDmg ? 0 : Math.max(1, Math.round(dmg));
           if (guarded === 'parry') {
             ev.push({ t: 'parry', who: t.name, attacker: f.name });
             const back = Math.max(1, Math.round(rawDamage(b, t, f, basicAttack(t), { rand: 0.9 }) * 0.6));
-            applyDamage(b, t, f, back, ev, { label: '반격' });
+            applyDamage(b, t, f, back, ev, { label: '반격', rng });
             if (f.charging) breakCharge(f, ev);
             break;
           }
-          applyDamage(b, f, t, dmg, ev, { crit, eff, guarded, grade, element: skill.element });
-          if (endure && active(t)) ev.push({ t: 'endure', who: t.name });
+          applyDamage(b, f, t, dmg, ev, { crit, eff, guarded, grade, element: skill.element, rng });
+          if ((endure || passiveEndured) && active(t)) {
+            ev.push({ t: 'endure', who: t.name });
+            if (passiveEndured && endureHealPct > 0) {
+              const capLeft = Math.max(0, 25 - (t._pHealTurn ?? 0));
+              const usePct = Math.min(endureHealPct, capLeft);
+              if (usePct > 0) {
+                t._pHealTurn = (t._pHealTurn ?? 0) + usePct;
+                heal(t, Math.max(1, Math.round(t.maxHp * usePct / 100)), ev);
+              }
+            }
+          }
           landed++; dealt += dmg;
           if (skill.drain && dmg) heal(f, Math.round(dmg * skill.drain), ev, { drain: true });
+          if (active(f)) triggerPassive('afterAttack', b, f, { target: t, skill, dmg, crit, eff, effMul, ko: !active(t) }, rng, ev);
+          if (dmg > 0 && active(t)) triggerPassive('afterHit', b, t, { attacker: f, target: f, skill, dmg, crit, eff, effMul, ko: false }, rng, ev);
         }
         if (landed && comboHit && skill.bonusIf.consume) {
           const i = skill.bonusIf.status === 'any' ? t.statuses.findIndex(s => !STATUS[s.id]?.good) : t.statuses.findIndex(s => s.id === skill.bonusIf.status);
@@ -734,7 +859,7 @@ function breakReward(b, src, ev) {
   if (total) ev.push({ t: 'breakbonus', side: src.side, who: src.name, sp: 10 });
 }
 
-function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = null, guarded = null, grade = null, element = null } = {}) {
+function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = null, guarded = null, grade = null, element = null, _fromPassive = false, rng = null } = {}) {
   const before = t.hp;
   t.hp = Math.max(0, t.hp - dmg);
   ev.push({ t: 'hit', who: src.name, target: t.name, dmg, crit, eff, from: pct(before, t.maxHp), to: pct(t.hp, t.maxHp), hp: t.hp, maxHp: t.maxHp, label, guarded, grade });
@@ -753,10 +878,17 @@ function applyDamage(b, src, t, dmg, ev, { crit = false, eff = null, label = nul
   if (t.hp <= 0) {
     t.down = true; t.statuses = []; t.stages = {}; t.charging = null;
     ev.push({ t: 'down', who: t.name, side: t.side, ...(t.lines?.ko ? { line: t.lines.ko } : {}) });
+    const pRng = rng ?? makeRng(`${b.seed}:ko:${b.turn}:${t.id}`);
     // Avenger: the first fall on their side fires them up.
-    for (const o of b.fighters.filter(x => x.side === t.side && x.trait === 'avenger' && onField(x) && !x.avenged)) {
-      o.avenged = true; o.stages.pow = clamp((o.stages.pow ?? 0) + 1, STAGE_MIN, STAGE_MAX); o.stages.mag = clamp((o.stages.mag ?? 0) + 1, STAGE_MIN, STAGE_MAX);
-      ev.push({ t: 'stage', who: o.name, stat: 'pow', delta: 1, trait: 'avenger' });
+    for (const o of b.fighters.filter(x => x.side === t.side && onField(x))) {
+      if (o.trait === 'avenger' && !o.avenged) {
+        o.avenged = true; o.stages.pow = clamp((o.stages.pow ?? 0) + 1, STAGE_MIN, STAGE_MAX); o.stages.mag = clamp((o.stages.mag ?? 0) + 1, STAGE_MIN, STAGE_MAX);
+        ev.push({ t: 'stage', who: o.name, stat: 'pow', delta: 1, trait: 'avenger' });
+      }
+      if (!_fromPassive) triggerPassive('onAllyDown', b, o, { fallen: t, _fromPassive: false }, pRng, ev);
+    }
+    if (!_fromPassive && src && src !== t && active(src)) {
+      triggerPassive('onKill', b, src, { victim: t, target: t }, pRng, ev);
     }
   }
   else if (t.threat === 'boss' && !t.enraged && t.hp / t.maxHp <= 0.5) {
@@ -958,14 +1090,14 @@ function morale(b, rng, ev) {
   for (const f of rest) if (rng.chance(0.5)) { f.out = 'fled'; ev.push({ t: 'rout', who: f.name }); }
 }
 
-function upkeep(b, f, ev) {
+function upkeep(b, f, ev, rng) {
   for (const s of [...f.statuses]) {
     const def = STATUS[s.id];
     const bossCut = f.threat === 'boss' ? 0.5 : 1;
     if (def.dot) {
       const dmg = Math.max(1, Math.round(f.maxHp * def.dot * bossCut));
       ev.push({ t: 'dot', who: f.name, status: s.id, dmg });
-      applyDamage(b, f, f, dmg, ev, { label: def.ko });
+      applyDamage(b, f, f, dmg, ev, { label: def.ko, rng });
       if (!active(f)) return;
     }
     if (def.hot) heal(f, Math.round(f.maxHp * def.hot), ev);
@@ -976,6 +1108,7 @@ function upkeep(b, f, ev) {
       ev.push({ t: 'expire', who: f.name, status: s.id });
     }
   }
+  if (active(f)) triggerPassive('turnEnd', b, f, {}, rng, ev);
   for (const k of Object.keys(f.cds)) { f.cds[k] -= 1; if (f.cds[k] <= 0) delete f.cds[k]; }
   f.sp = Math.min(f.maxSp, f.sp + Math.round(f.maxSp * 0.05) + 1);
 }

@@ -7,9 +7,11 @@ import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
   playLocal, setupChat, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
-  claimLoot, restAfterBattle,
+  claimLoot, restAfterBattle, resolveEnabled,
 } from './src/game.js';
-import { sheetMessages, castMessages, stateMessages, briefText } from './src/prompts.js';
+import { sheetMessages, castMessages, stateMessages, briefText, passiveMessages } from './src/prompts.js';
+import { normalizeCustomPassive, testPassive } from './src/passive.js';
+import { extractUsage, countText, countMessages, recordTokenUsage, resetTokenStats, ensureTokenStats, TOKEN_SOURCE_KO } from './src/tokens.js';
 // 타이밍 리듬게임은 보류 중 (요청에 따라 비활성화). 다시 켜려면 아래 import와 modeAct의 타이밍 블록 주석을 해제.
 // import { runTiming } from './src/timing.js';
 import { mountPanel, togglePanel, refreshPanel, refreshTrace, renderCards, settingsHtml, setFab, beginTurn, endTurn, toggleDock, refreshDock } from './src/ui.js';
@@ -17,7 +19,8 @@ import { mountPanel, togglePanel, refreshPanel, refreshTrace, renderCards, setti
 const NAME = 'battletale';
 const PROMPT_KEY = 'BATTLETALE';
 const DEFAULTS = {
-  enabled: true, exclude: '', optIn: false,
+  enabled: true, exclude: '', optIn: false, charEnabled: {}, charLabels: {}, customPassives: true,
+  tokenizerMode: 'auto', geminiTokenKey: '', geminiTokenModel: 'gemini-2.5-flash',
   auxSource: 'main', auxProfile: '', auxUrl: '', auxKey: '', auxModel: '', auxMaxTokens: 10000, auxTemp: 0.4, auxTopP: null, auxReasoning: '', auxJsonMode: false, auxExtra: '', auxHeaders: '', auxProfilePreset: false, auxOverride: false, auxProfileModel: '', auxMaxInput: 16000, castScene: 20, sheetScene: 4, castBatch: 4, difficulty: 'normal', spCostScale: '1.3', auxCommands: true, sceneSize: 3, forgeLore: 'auto',
   startMode: 'hybrid', startTrigger: 'button', suggestStart: true, statTag: 'stat', statSync: 'all', trackChanges: true, loreBooks: '', loreBudget: 14000,
   length: 1, dealMul: 1, takeMul: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
@@ -51,19 +54,36 @@ async function work(fn) {
   try { return await fn(); } finally { busyCount--; refreshPanel(); }
 }
 
-function enabledHere() {
-  const s = settings();
-  if (!s.enabled) return false;
+function currentChar() {
   const c = ctx();
-  if (!c.chatId) return false;
-  const st = state();
-  if (st?.disabled) return false;
-  // Opt-in: new chats stay untouched until the user turns BattleTale on (setup card in the panel); chats already in use count as on.
-  if (s.optIn && !(st?.activated || st?.brief || st?.player || st?.battle)) return false;
-  const names = String(s.exclude ?? '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+  if (c.groupId) {
+    const g = c.groups?.find(x => x.id === c.groupId);
+    return { key: `group:${c.groupId}`, name: g?.name || '그룹 채팅', isGroup: true };
+  }
   const ch = c.characters?.[c.characterId];
-  if (ch && names.includes(String(ch.name).toLowerCase())) return false;
-  return true;
+  if (!ch) return { key: '', name: '', isGroup: false };
+  return { key: ch.avatar || ch.name || '', name: ch.name || ch.avatar || '캐릭터', isGroup: false };
+}
+
+function activationInfo() {
+  const c = ctx();
+  const s = settings();
+  const st = c.chatId ? state() : null;
+  const ch = currentChar();
+  const res = resolveEnabled({ settings: s, state: st, charKey: ch.key, charName: ch.name });
+  return {
+    ...res,
+    hasChat: !!c.chatId,
+    globalEnabled: s.enabled !== false,
+    chatPassives: !!st?.customPassives,
+    globalPassives: s.customPassives !== false,
+    charKey: ch.key, charName: ch.name, isGroup: ch.isGroup,
+  };
+}
+
+function enabledHere() {
+  const info = activationInfo();
+  return info.hasChat && info.enabled;
 }
 
 const effectiveAuxReady = () => settings().auxSource !== 'none' && auxReady(settings());
@@ -122,12 +142,33 @@ function deps() {
     settings,
     auxReady: effectiveAuxReady,
     auxJson: async (messages, opts) => {
-      const label = String(messages?.[0]?.content ?? '').split('\n')[0].slice(0, 70);
+      const label = String(opts?.label ?? String(messages?.[0]?.content ?? '').split('\n')[0]).slice(0, 70);
       const fit = fitInput(messages, settings());
       const size = `[입력 ~${fit.est.toLocaleString()} tok${fit.limit ? ` / 한도 ${fit.limit.toLocaleString()}` : ''}${fit.cut.length ? ` · 줄임: ${fit.cut.join(', ')} (원래 ~${fit.before.toLocaleString()})` : ''}]`;
+      let meta = null;
       try {
-        const r = await auxJson(fit.messages, settings(), opts);
-        trace('aux', `보조모델 응답 · ${label} ${size}`, `${size}\n── 요청 ──\n${fit.messages.map(m => `[${m.role}]\n${m.content}`).join('\n\n')}\n\n── 응답 ──\n${JSON.stringify(r, null, 1)}`);
+        const r = await auxJson(fit.messages, settings(), { ...opts, onMeta: m => { meta = m; } });
+        // Measure exact or Gemma/Gemini tokenized input/output tokens and record per-turn stats.
+        let tokTag = '';
+        try {
+          const set = settings();
+          const apiU = extractUsage(meta?.rawResponse);
+          let inTok, outTok, reasonTok = 0, source;
+          if (apiU) {
+            ({ inTok, outTok, reasonTok, source } = apiU);
+          } else {
+            const [ci, co] = await Promise.all([
+              countMessages(meta?.msgs ?? fit.messages, set),
+              countText(meta?.text ?? JSON.stringify(r), set),
+            ]);
+            inTok = ci.tokens; outTok = co.tokens; source = ci.source;
+          }
+          const st = state();
+          if (st) recordTokenUsage(st, { kind: 'aux', label, inTok, outTok, reasonTok, source, sameTurn: true });
+          const srcKo = TOKEN_SOURCE_KO[source] ?? source;
+          tokTag = ` · in ${inTok.toLocaleString()} / out ${outTok.toLocaleString()}${reasonTok ? ` (추론 ${reasonTok.toLocaleString()})` : ''} tok [${srcKo}]`;
+        } catch { /* never fail aux call on token accounting */ }
+        trace('aux', `보조모델 응답 · ${label} ${size}${tokTag}`, `${size}${tokTag}\n── 요청 ──\n${fit.messages.map(m => `[${m.role}]\n${m.content}`).join('\n\n')}\n\n── 응답 ──\n${JSON.stringify(r, null, 1)}`);
         return r;
       } catch (e) { trace('error', `보조모델 실패 · ${label}`, String(e?.message ?? e)); throw e; }
     },
@@ -170,6 +211,25 @@ function lastUserOf(list) {
   return null;
 }
 
+let pendingMainTurn = null;
+
+async function measureMainInput(chat, injectText, set) {
+  const msgs = (Array.isArray(chat) ? chat : [])
+    .filter(m => m && !m.is_system && typeof m.mes === 'string')
+    .map(m => ({ role: m.is_user ? 'user' : 'assistant', content: m.mes }));
+  const card = characterText();
+  const inputMsgs = [
+    ...(card ? [{ role: 'system', content: card }] : []),
+    ...msgs,
+    ...(injectText ? [{ role: 'system', content: injectText }] : []),
+  ];
+  const [inRes, injRes] = await Promise.all([
+    countMessages(inputMsgs, set),
+    injectText ? countText(injectText, set) : Promise.resolve({ tokens: 0, source: 'est' }),
+  ]);
+  return { inTok: inRes.tokens, injectTok: injRes.tokens, source: inRes.source };
+}
+
 /** Generation interceptor: runs before every prompt build. */
 globalThis.battleTaleInterceptor = async function (chat, contextSize, abort, type) {
   try {
@@ -205,6 +265,13 @@ globalThis.battleTaleInterceptor = async function (chat, contextSize, abort, typ
       text = promptFor(s2, { lastUser, settings: settings(), deps: deps() });
     }
     setPrompt(text);
+    // Measure main-turn input tokens asynchronously in the background (zero latency added to generation).
+    const setSnap = { ...settings() };
+    pendingMainTurn = {
+      type: type || 'normal',
+      ts: Date.now(),
+      promise: measureMainInput(chat, text, setSnap).catch(() => null),
+    };
     trace('inject', `메인 모델에 주입 (${type || 'normal'})${s2.battle?.status === 'active' ? ' · 전투 중' : ''}`, text || '(없음)');
     await saveState();
     afterChange();
@@ -225,6 +292,39 @@ async function processMessage(index) {
   if (m.extra?.battletale?.seen === seenKey) return;
   const set = settings();
   let dirtyChat = false;
+
+  // Record main-turn input & output tokens (API usage if ST stored it, else Gemma/Gemini tokenizer).
+  try {
+    const pend = pendingMainTurn && (Date.now() - pendingMainTurn.ts < 600000) ? pendingMainTurn : null;
+    pendingMainTurn = null;
+    const inInfo = pend ? await pend.promise : null;
+    const apiU = extractUsage(m.extra?.api_usage ?? m.extra);
+    let inTok = inInfo?.inTok ?? 0, outTok = 0, reasonTok = 0, injectTok = inInfo?.injectTok ?? 0, source = inInfo?.source ?? 'est';
+    if (apiU) {
+      inTok = apiU.inTok || inTok;
+      outTok = apiU.outTok;
+      reasonTok = apiU.reasonTok;
+      source = 'api';
+    } else {
+      const outRes = await countText(m.mes ?? '', set);
+      outTok = outRes.tokens;
+      if (!inInfo) {
+        const fallbackIn = await measureMainInput(c.chat.slice(0, index), '', set);
+        inTok = fallbackIn.inTok;
+        source = fallbackIn.source;
+      } else if (source === 'est') {
+        source = outRes.source;
+      }
+    }
+    const entry = recordTokenUsage(s, {
+      kind: 'main',
+      label: `메인 턴 (#${index}${pend?.type && pend.type !== 'normal' ? ` · ${pend.type}` : ''})`,
+      inTok, outTok, reasonTok, injectTok, source,
+    });
+    const srcKo = TOKEN_SOURCE_KO[source] ?? source;
+    trace('tokens', `턴 토큰 · 입력 ${inTok.toLocaleString()} / 출력 ${outTok.toLocaleString()}${reasonTok ? ` / 추론 ${reasonTok.toLocaleString()}` : ''} tok [${srcKo}]`,
+      `메시지 #${index}\n입력: ${inTok.toLocaleString()} tok (BattleTale 주입: ${injectTok.toLocaleString()} tok)\n출력: ${outTok.toLocaleString()} tok${reasonTok ? `\n추론: ${reasonTok.toLocaleString()} tok` : ''}\n방식: ${srcKo}${entry ? `\n채팅 누적: 입력 ${s.tokenStats.total.inTok.toLocaleString()} / 출력 ${s.tokenStats.total.outTok.toLocaleString()} tok` : ''}`);
+  } catch { /* never block message processing on token accounting */ }
 
   // A new swipe replaced the message that opened a battle no one has played yet.
   if (s.battle && s.battle.originIndex === index && !s.battle.history.length && s.battle.originHash !== seenKey) s.battle = null;
@@ -457,6 +557,8 @@ const panelApi = {
   },
   command: putCommand,
   modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
+  tokenStats: () => ensureTokenStats(state()),
+  clearTokenStats: async () => { const s = state(); if (!s) return; resetTokenStats(s); await saveState(); refreshPanel(); toast('이 채팅의 토큰 기록을 초기화했어요.'); },
   // Same encounter again from the pre-battle state (only before the result went to the story).
   retryBattle: async () => {
     const s = state();
@@ -696,6 +798,49 @@ const panelApi = {
   },
   setup: () => runSetup({ ask: false }),
   enabledHere,
+  activationInfo,
+  setChatEnabled: async mode => {
+    const s = state();
+    if (!s) return;
+    const m = mode === 'on' || mode === 'off' ? mode : 'inherit';
+    s.chatEnabled = m;
+    s.disabled = m === 'off';
+    if (m === 'on') s.activated = true;
+    await saveState();
+    if (!enabledHere()) setPrompt('');
+    afterChange();
+    toast(m === 'on' ? '이 채팅에서 BattleTale을 켰어요.' : m === 'off' ? '이 채팅에서 BattleTale을 껐어요.' : '이 채팅은 캐릭터/전역 설정을 따르도록 되돌렸어요.');
+  },
+  setCharEnabled: async (mode, key = null, label = null) => {
+    const ch = currentChar();
+    const k = key || ch.key;
+    const name = label || ch.name || k;
+    if (!k) return toast('현재 캐릭터 정보를 찾지 못했어요.', 'warning');
+    const set = settings();
+    set.charEnabled = { ...(set.charEnabled ?? {}) };
+    set.charLabels = { ...(set.charLabels ?? {}) };
+    const m = mode === 'on' || mode === 'off' ? mode : 'inherit';
+    if (m === 'inherit') {
+      delete set.charEnabled[k];
+      delete set.charLabels[k];
+    } else {
+      set.charEnabled[k] = m;
+      set.charLabels[k] = name;
+    }
+    saveSettings();
+    if (!enabledHere()) setPrompt('');
+    afterChange();
+    toast(m === 'on' ? `「${name}」 캐릭터에서 BattleTale을 항상 켜기로 설정했어요.` : m === 'off' ? `「${name}」 캐릭터에서 BattleTale을 끄기로 설정했어요.` : `「${name}」 캐릭터는 전역 기본값을 따르도록 되돌렸어요.`);
+  },
+  setChatPassives: async on => {
+    const s = state();
+    if (!s) return;
+    s.customPassives = !!on;
+    if (s.battle?.st) s.battle.st.customPassives = !!(s.customPassives && settings().customPassives !== false);
+    await saveState();
+    afterChange();
+    toast(s.customPassives ? '이 채팅에서 주요 캐릭터 고유 부가효과 스크립트를 켰어요.' : '이 채팅에서 고유 부가효과 스크립트를 껐어요.');
+  },
   brief: () => state()?.brief ?? null,
   genRules: () => work(async () => {
     const s = state();
@@ -712,6 +857,123 @@ const panelApi = {
     await saveState(); afterChange();
   },
   addSkill: async text => { const s = state(); if (!s.player) return toast('먼저 시트를 만들어 주세요.', 'warning'); const sk = normalizeSkill(text, { maxSp: s.player.maxSp }); if (sk) s.player.skills.push(sk); await saveState(); afterChange(); },
+  genPassive: (target, instruction = '') => work(async () => {
+    if (!effectiveAuxReady()) return toast('먼저 보조모델을 연결해 주세요.', 'warning');
+    const s = state();
+    if (!s) return;
+    const p = profileOf(s);
+    const isPlayer = target === 'player';
+    const entry = isPlayer ? null : deps().codex.list().find(e => e.id === target);
+    const sheet = isPlayer ? s.player : (entry ? rosterSheet(s, entry) : null);
+    if (!sheet) return toast('먼저 캐릭터 시트를 만들어 주세요.', 'warning');
+    const concept = isPlayer ? (s.playerConcept || personaInfo().text || '') : (entry.concept || entry.sheet?.desc || '');
+    const lore = (await matchLore(settings(), [sheet.name, ...(sheet.aliases ?? []), concept].join('\n')).catch(() => ({ text: '' }))).text;
+    const brief = briefText(s.brief);
+
+    let prevError = '', prevCode = '', finalCp = null, lastRes = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const msgs = passiveMessages({ profile: p, sheet, concept, lore, brief, instruction, prevError, prevCode });
+      let raw;
+      try {
+        raw = await deps().auxJson(msgs, { maxTokens: 2000, label: `고유 부가효과 (${sheet.name}${attempt ? ' · 재시도' : ''})` });
+      } catch (e) {
+        return toast(`고유 부가효과 생성 실패: ${e.message}`, 'error');
+      }
+      if (!raw || typeof raw !== 'object') { prevError = 'JSON 객체가 비어 있어요.'; continue; }
+      const cp = normalizeCustomPassive(raw);
+      const res = testPassive(cp);
+      lastRes = res;
+      if (cp && res.ok) { finalCp = { ...cp, enabled: true, valid: true }; break; }
+      prevError = res.error || cp?.error || '검증 실패';
+      prevCode = String(raw.code ?? '');
+    }
+    if (!finalCp) {
+      return toast(`고유 부가효과 보안·실행 검증 실패: ${lastRes?.error || prevError || '알 수 없는 오류'}`, 'error');
+    }
+    if (isPlayer) {
+      s.player.customPassive = finalCp;
+    } else {
+      entry.sheet.customPassive = clone(finalCp);
+      deps().codex.put(entry);
+      if (s.roster?.[entry.id]) s.roster[entry.id].customPassive = clone(finalCp);
+      const comp = (s.companions ?? []).find(c => c.codexId === entry.id);
+      if (comp) comp.customPassive = clone(finalCp);
+    }
+    await saveState();
+    afterChange();
+    const hooks = lastRes?.triggeredHooks?.length ? ` · 훅 ${lastRes.triggeredHooks.length}개 확인` : '';
+    toast(`✦ 「${finalCp.name}」 고유 부가효과 적용 완료! (보안·드라이런 통과${hooks})`, 'success');
+  }),
+  savePassive: async (target, raw) => {
+    const s = state();
+    if (!s) return { ok: false, error: '채팅 없음' };
+    const cp = normalizeCustomPassive(raw);
+    const res = testPassive(cp);
+    if (!cp || !res.ok) {
+      const err = res.error || cp?.error || '코드 검증 실패';
+      toast(`보안·실행 검증 실패: ${err}`, 'error');
+      return { ok: false, error: err };
+    }
+    const clean = { ...cp, enabled: raw.enabled !== false, valid: true };
+    if (target === 'player') {
+      if (!s.player) return { ok: false, error: '플레이어 시트 없음' };
+      s.player.customPassive = clean;
+    } else {
+      const entry = deps().codex.list().find(e => e.id === target);
+      if (!entry) return { ok: false, error: '도감 항목 없음' };
+      entry.sheet.customPassive = clone(clean);
+      deps().codex.put(entry);
+      if (s.roster?.[entry.id]) s.roster[entry.id].customPassive = clone(clean);
+      const comp = (s.companions ?? []).find(c => c.codexId === entry.id);
+      if (comp) comp.customPassive = clone(clean);
+    }
+    await saveState();
+    afterChange();
+    toast(`🔒 「${clean.name}」 안전 검증 통과 · 저장 완료!`, 'success');
+    return { ok: true, res };
+  },
+  togglePassive: async target => {
+    const s = state();
+    if (!s) return;
+    const isPlayer = target === 'player';
+    const entry = isPlayer ? null : deps().codex.list().find(e => e.id === target);
+    const cp = isPlayer ? s.player?.customPassive : entry?.sheet?.customPassive;
+    if (!cp) return;
+    if (!cp.enabled) {
+      const res = testPassive(cp);
+      if (!res.ok) return toast(`보안 검증 실패로 켤 수 없어요: ${res.error}`, 'error');
+      cp.valid = true;
+      delete cp.error;
+    }
+    cp.enabled = !cp.enabled;
+    if (!isPlayer) {
+      deps().codex.put(entry);
+      if (s.roster?.[entry.id]?.customPassive) s.roster[entry.id].customPassive.enabled = cp.enabled;
+      const comp = (s.companions ?? []).find(c => c.codexId === entry.id);
+      if (comp?.customPassive) comp.customPassive.enabled = cp.enabled;
+    }
+    await saveState();
+    afterChange();
+  },
+  deletePassive: async target => {
+    const s = state();
+    if (!s) return;
+    if (target === 'player') {
+      if (s.player) s.player.customPassive = null;
+    } else {
+      const entry = deps().codex.list().find(e => e.id === target);
+      if (entry) {
+        entry.sheet.customPassive = null;
+        deps().codex.put(entry);
+        if (s.roster?.[entry.id]) s.roster[entry.id].customPassive = null;
+        const comp = (s.companions ?? []).find(c => c.codexId === entry.id);
+        if (comp) comp.customPassive = null;
+      }
+    }
+    await saveState();
+    afterChange();
+    toast('고유 부가효과를 삭제했어요.');
+  },
   edit: async (fn, { quiet = false } = {}) => { const s = state(); if (!s) return; fn(s); await saveState(); if (!quiet) afterChange(); else renderAll(); },
   resetChat: async () => { const m = ctx().chatMetadata; delete m.battletale; stateOf(m); await saveState(); afterChange(); },
 };
@@ -863,6 +1125,7 @@ async function runSetup({ ask = true } = {}) {
     if (!await askYesNo(html, s.brief ? '다시 만들기' : on ? '만들기' : '활성화', '취소')) return;
   }
   s.disabled = false;
+  s.chatEnabled = 'on';
   s.activated = true;
   if (!settings().enabled) setSetting('enabled', true);
   await saveState(); afterChange();

@@ -57,7 +57,7 @@ export function fitInput(messages, settings) {
   return { messages: msgs, est: total(), before, limit, cut: [...cut] };
 }
 
-export async function callAux(messages, settings, { maxTokens } = {}) {
+export async function callAux(messages, settings, { maxTokens, onMeta } = {}) {
   // The user's limit wins (reasoning models need room); the per-call value is only a fallback.
   const tokens = Number(settings.auxMaxTokens) > 0 ? Number(settings.auxMaxTokens) : (maxTokens ?? 10000);
   const c = ctx();
@@ -70,7 +70,9 @@ export async function callAux(messages, settings, { maxTokens } = {}) {
     const withPreset = !!settings.auxProfilePreset;
     const override = { ...(settings.auxOverride ? sampling(settings) : {}), ...(String(settings.auxProfileModel ?? '').trim() ? { model: String(settings.auxProfileModel).trim() } : {}) };
     const res = await svc.sendRequest(settings.auxProfile, msgs, tokens, { stream: false, extractData: true, includePreset: withPreset, includeInstruct: withPreset }, override);
-    return typeof res === 'string' ? res : res?.content ?? res?.choices?.[0]?.message?.content ?? '';
+    const text = typeof res === 'string' ? res : res?.content ?? res?.choices?.[0]?.message?.content ?? '';
+    onMeta?.({ msgs, text, rawResponse: typeof res === 'object' ? res : null });
+    return text;
   }
 
   if (settings.auxSource === 'openai') {
@@ -82,18 +84,23 @@ export async function callAux(messages, settings, { maxTokens } = {}) {
     if (!r.ok) throw new Error(`보조모델 API 오류 ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const j = await r.json();
     const msg = j?.choices?.[0]?.message;
-    return msg?.content ?? j?.choices?.[0]?.text ?? '';
+    const text = msg?.content ?? j?.choices?.[0]?.text ?? '';
+    onMeta?.({ msgs, text, rawResponse: j });
+    return text;
   }
 
   // Main API, quiet raw generation.
   const system = msgs.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
   const prompt = msgs.filter(m => m.role !== 'system').map(m => m.content).join('\n\n');
+  let text;
   try {
-    return await c.generateRaw({ prompt, systemPrompt: system, responseLength: tokens, trimNames: false });
+    text = await c.generateRaw({ prompt, systemPrompt: system, responseLength: tokens, trimNames: false });
   } catch (e) {
     // Older signature: generateRaw(prompt, api, instructOverride, quietToLoud, systemPrompt, responseLength)
-    return await c.generateRaw(prompt, null, false, false, system, tokens);
+    text = await c.generateRaw(prompt, null, false, false, system, tokens);
   }
+  onMeta?.({ msgs, text, rawResponse: null });
+  return text;
 }
 
 function sampling(settings) {

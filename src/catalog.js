@@ -801,8 +801,21 @@ export function normalizeSheet(raw, profile, { side = 'enemy', seed = '' } = {})
     shape: r.shape ? String(r.shape) : '', gender: r.gender ? String(r.gender) : '', portrait: safePortrait(r.portrait),
     actions: clamp(Math.round(num(r.actions, threat === 'boss' ? 1 : 1)), 1, 3),
     trait: traitId(r.trait ?? r.role_passive ?? r.passiveTag),
+    customPassive: safeCustomPassive(r.customPassive),
     lines: safeLines(r.lines),
   };
+}
+
+function safeCustomPassive(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const code = String(raw.code ?? '').trim().slice(0, 1500);
+  const name = String(raw.name ?? '').trim().slice(0, 28);
+  const desc = String(raw.desc ?? '').trim().slice(0, 140);
+  if (!code && !name) return null;
+  const out = { name: name || '고유 특성', desc, code, enabled: raw.enabled !== false };
+  if (raw.valid != null) out.valid = !!raw.valid;
+  if (raw.error) out.error = String(raw.error).slice(0, 140);
+  return out;
 }
 
 function safeLines(raw) {

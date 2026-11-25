@@ -8,6 +8,7 @@ import { THREAT_LABEL } from './engine.js';
 import { msgKey, profileOf, MODES, modeOf, allowedModes } from './game.js';
 import { keyMoments } from './prompts.js';
 import { dangerScore } from './parse.js';
+import { TOKEN_SOURCE_KO } from './tokens.js';
 
 const KIND_KO = { physical: '물리', magic: '마법', heal: '회복', buff: '강화', debuff: '약화', guard: '방어', revive: '부활', cleanse: '정화' };
 const TARGET_KO = { enemy: '적 1', enemies: '적 전체', ally: '아군 1', allies: '아군 전체', self: '자신' };
@@ -184,9 +185,11 @@ export function refreshPanel() {
   const keep = p.querySelector('.sd-body')?.scrollTop ?? 0;
   p.classList.toggle('bt-compact', !!api.ui.compact && tab === 'battle');
   const set = api.settings();
+  const actInfo = api.activationInfo?.() ?? { enabled: true, reason: 'default-on', chatMode: 'inherit', charMode: 'inherit', globalEnabled: true, charKey: '', charName: '' };
   const deal = Number(set.dealMul ?? 1), take = Number(set.takeMul ?? 1);
   const cheatOn = Math.abs(deal - 1) >= 0.01 || Math.abs(take - 1) >= 0.01;
-  p.innerHTML = `<div class="bt-head"><b>BattleTale</b><div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear ${cheatOn ? 'on' : ''}" data-act="settings-open" title="설정 · 룰 · 점검${cheatOn ? ` (피해 배율 ${deal}×/${take}× 적용 중)` : ''}">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
+  const offPill = !actInfo.enabled ? '<button class="bt-off-pill" data-act="settings-open" title="현재 비활성화됨 · 눌러서 활성화 설정 열기">OFF</button>' : '';
+  p.innerHTML = `<div class="bt-head"><b>BattleTale</b>${offPill}<div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear ${cheatOn ? 'on' : ''}" data-act="settings-open" title="설정 · 룰 · 점검${cheatOn ? ` (피해 배율 ${deal}×/${take}× 적용 중)` : ''}">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
   const sd = p.querySelector('.sd-body'); if (sd) sd.scrollTop = keep;
   animateBars(p);
   // Popups and HP slides play once per turn, not on every redraw.
@@ -236,6 +239,7 @@ const SETTINGS = [
     { key: 'difficulty', basic: true, type: 'select', label: '난이도', options: [['easy', '쉬움 — 공정한 전투, 기습 없음, AI 가끔 실수'], ['normal', '기본 — 유저 편향 없음, 기습·지형에 대비'], ['hard', '어려움 — 강한 적·연계, 전술 없으면 돌파 불가'], ['nightmare', '악몽 — 약점 저격·기습·불리한 지형, AI 최상']], hint: '적 구성(보조모델)과 적 AI, 기습·지형 확률이 같이 바뀌어요' },
     { key: 'spCostScale', type: 'select', label: '기력 소모 배율', options: [['1', '×1.0 (가볍게)'], ['1.3', '×1.3 (기본)'], ['1.6', '×1.6 (빡빡하게)'], ['2', '×2.0 (매 턴 신중하게)']], hint: '기술 비용에 곱해져요. 잡몹은 기력 없이 싸우고, 엘리트·보스·도감 캐릭터만 기력을 써요.' },
     { key: 'showThreat', type: 'check', label: '위협도 표시' },
+    { key: 'customPassives', type: 'check', label: '주요 캐릭터 고유 부가효과 스크립트 허용', hint: '보조모델이 코딩하고 보안 검증을 통과한 패시브를 채팅에서 켰을 때 실행해요. 코딩 능력이 충분한 중·상급 보조모델 권장' },
     { key: 'autoPlay', type: 'select', label: '전투 메시지 자동 넘김', options: [['0', '끔 (탭해서 넘김)'], ['900', '빠르게'], ['1300', '보통 (기본)'], ['1900', '느리게']], hint: '탭하면 언제든 바로 다음으로' },
     { key: 'showFab', type: 'check', label: '화면에 떠 있는 패널 버튼도 쓰기', hint: '기본은 채팅창 옆 확장 메뉴에서 열어요' },
     { key: 'optIn', type: 'check', label: '새 채팅은 켜기 전까지 쉬기', hint: '켜면 처음 여는 채팅엔 아무것도 주입하지 않아요. 이미 시트·전투·기초 설정이 있는 채팅은 그대로 켜져 있어요.' },
@@ -286,6 +290,11 @@ const SETTINGS = [
     { key: 'attackName', type: 'text', label: '기본 공격 이름' },
     { key: 'depth', type: 'number', label: '프롬프트 주입 깊이', min: 0, max: 20, step: 1 },
   ]],
+  ['토큰 기록 (Gemma · Gemini)', [
+    { key: 'tokenizerMode', type: 'select', label: '토크나이저 방식', options: [['auto', '자동 (API 실측 → Gemma 내장)'], ['gemma', 'Gemma (SillyTavern 내장)'], ['gemini', 'Gemini 원격 countTokens API'], ['st', 'SillyTavern 현재 토크나이저'], ['est', '오프라인 추정 (요청 없음)']], hint: '응답에 usage가 있으면 1순위로 실측값을 쓰고, 없을 때 선택한 토크나이저로 이번 턴 입출력 토큰을 기록해요' },
+    { key: 'geminiTokenKey', type: 'password', label: 'Gemini countTokens API 키 (선택)', ph: 'AIza... (원격 countTokens 사용 시)', show: s => s.tokenizerMode === 'gemini' || s.tokenizerMode === 'auto', hint: '비워두면 SillyTavern 백엔드의 Gemma 토크나이저를 써요' },
+    { key: 'geminiTokenModel', type: 'text', label: 'countTokens 모델명', ph: 'gemini-2.5-flash', show: s => s.tokenizerMode === 'gemini' || !!s.geminiTokenKey },
+  ]],
 ];
 const DEFAULT_OPEN = {};
 const BASIC_ORDER = ['enabled', 'playMode', 'difficulty', 'ruleSet', 'auxSource', 'auxProfile', 'auxProfileModel', 'auxUrl', 'auxKey', 'auxModel', undefined];
@@ -315,6 +324,39 @@ function fieldHtml(f, set) {
   return `<label class="sd-row"><span>${h(f.label)}</span>${input}${hint}</label>`;
 }
 
+const ACT_REASON_KO = {
+  'global-off': '전역 설정에서 꺼짐',
+  'chat-off': '이 채팅에서 끔',
+  'chat-on': '이 채팅에서 켬',
+  'char-off': '이 캐릭터에서 끔',
+  'char-on': '이 캐릭터에서 켬',
+  'optin-wait': '새 채팅 대기 중 (옵트인)',
+  'optin-active': '이 채팅 활성화됨',
+  'default-on': '기본값 (켜짐)',
+};
+
+function activationCard({ showList = false } = {}) {
+  const info = api.activationInfo?.();
+  if (!info) return '';
+  const seg = (act, cur) => [['inherit', '기본'], ['on', '켜기'], ['off', '끄기']].map(([v, l]) =>
+    `<button class="bt-seg-b ${cur === v ? 'on' : ''} ${v === 'on' ? 'is-on' : v === 'off' ? 'is-off' : ''}" data-act="${act}" data-v="${v}">${l}</button>`).join('');
+  const set = api.settings();
+  const entries = showList ? Object.entries(set.charEnabled ?? {}).filter(([, m]) => m === 'on' || m === 'off') : [];
+  const labels = set.charLabels ?? {};
+  const listHtml = entries.length
+    ? `<details class="bt-act-list"><summary class="sd-hint">캐릭터별 개별 설정 (${entries.length})</summary>${entries.map(([k, m]) =>
+      `<div class="bt-act-item"><span>${h(labels[k] || k)}</span><span class="bt-row"><span class="bt-act-tag ${m === 'on' ? 'on' : 'off'}">${m === 'on' ? '항상 켬' : '끔'}</span><button class="bt-mini" data-act="char-clear" data-v="${h(k)}">기본으로</button></span></div>`).join('')}</details>`
+    : '';
+  return `<div class="bt-section bt-act-card ${info.enabled ? 'is-on' : 'is-off'}">
+    <div class="bt-act-head"><span><b>활성화 범위</b> <small class="sd-hint">채팅 설정 &gt; 캐릭터 설정 &gt; 전역</small></span><span class="bt-act-badge ${info.enabled ? 'on' : 'off'}">${info.enabled ? '● 켜짐' : '○ 꺼짐'} · ${h(ACT_REASON_KO[info.reason] ?? info.reason)}</span></div>
+    ${!info.globalEnabled ? `<div class="bt-note">전역 BattleTale이 꺼져 있어요. <button class="bt-mini" data-act="global-on">전역 켜기</button></div>` : ''}
+    ${info.hasChat ? `<div class="bt-act-row"><span>이 채팅</span><div class="bt-seg">${seg('chat-mode', info.chatMode)}</div></div>` : ''}
+    ${info.charKey ? `<div class="bt-act-row"><span>${info.isGroup ? '이 그룹' : '이 캐릭터'} <small>(${h(info.charName)})</small></span><div class="bt-seg">${seg('char-mode', info.charMode)}</div></div>` : ''}
+    ${info.hasChat ? `<div class="bt-act-row"><span>고유 부가효과 스크립트 <small>(이 채팅 전용 · 기본 꺼짐)</small></span><div class="bt-seg"><button class="bt-seg-b ${!info.chatPassives ? 'on is-off' : ''}" data-act="chat-passives" data-v="0">끄기</button><button class="bt-seg-b ${info.chatPassives ? 'on is-on' : ''}" data-act="chat-passives" data-v="1">켜기</button></div></div>` : ''}
+    ${listHtml}
+  </div>`;
+}
+
 /** Settings drawer: ⚙ settings (essentials + collapsed advanced) | 📜 this chat's rules | 🔍 pipeline trace. */
 function drawerHtml(s) {
   const set = api.settings();
@@ -328,7 +370,7 @@ function drawerHtml(s) {
     const all = SETTINGS.flatMap(([, fields]) => fields);
     const basic = all.filter(f => f.basic).sort((a, b) => BASIC_ORDER.indexOf(a.key) - BASIC_ORDER.indexOf(b.key));
     const adv = SETTINGS.map(([g, fields]) => [g, fields.filter(f => !f.basic)]).filter(([, f]) => f.length);
-    body = `<div class="sd-basic">${basic.map(f => fieldHtml(f, set)).join('')}</div>
+    body = `${activationCard({ showList: true })}<div class="sd-basic">${basic.map(f => fieldHtml(f, set)).join('')}</div>
       <details class="sd-adv" data-group="__adv" ${api.ui.sdOpen.__adv ? 'open' : ''}><summary>고급 설정</summary>
         ${adv.map(([g, fields]) => `<details class="sd-group" data-group="${h(g)}" ${api.ui.sdOpen[g] ? 'open' : ''}><summary>${g}</summary>${fields.map(f => fieldHtml(f, set)).join('')}</details>`).join('')}
       </details>`;
@@ -339,8 +381,37 @@ function drawerHtml(s) {
 
 export function refreshTrace() { if (api?.ui?.settingsOpen && api.ui.sdPage === 'trace') refreshPanel(); }
 
-const TRACE_ICON = { inject: '📤', detect: '🔎', start: '⚔️', setup: '🧭', aux: '🤖', change: '📝', stat: '📊', balance: '⚖️', error: '❗' };
-const TRACE_KO = { inject: '주입', detect: '감지', start: '구성', setup: '기초', aux: '보조', change: '변수', stat: '상태창', balance: '밸런스', error: '오류' };
+const TRACE_ICON = { inject: '📤', detect: '🔎', start: '⚔️', setup: '🧭', aux: '🤖', tokens: '🧮', change: '📝', stat: '📊', balance: '⚖️', error: '❗' };
+const TRACE_KO = { inject: '주입', detect: '감지', start: '구성', setup: '기초', aux: '보조', tokens: '토큰', change: '변수', stat: '상태창', balance: '밸런스', error: '오류' };
+function tokenSummaryHtml() {
+  const ts = api.tokenStats?.();
+  if (!ts) return '';
+  const lt = ts.lastTurn;
+  const tot = ts.total ?? { inTok: 0, outTok: 0, reasonTok: 0, injectTok: 0, mainTurns: 0, auxCalls: 0 };
+  const n = x => (Number(x) || 0).toLocaleString();
+  const srcBadge = src => `<span class="tk-src s-${h(src || 'est')}">${h(TOKEN_SOURCE_KO[src] ?? src ?? '추정')}</span>`;
+  const lastHtml = lt
+    ? `<div class="tk-grid">
+        <div class="tk-cell"><small>이번 턴 입력</small><b>${n(lt.inTok)}</b></div>
+        <div class="tk-cell"><small>이번 턴 출력</small><b>${n(lt.outTok)}</b></div>
+        <div class="tk-cell"><small>${lt.reasonTok ? '추론' : '주입'}</small><b>${n(lt.reasonTok || lt.injectTok)}</b></div>
+        <div class="tk-cell"><small>방식</small><div>${srcBadge(lt.source)}</div></div>
+      </div>
+      <div class="sd-hint">메인 ${n(lt.mainIn)}/${n(lt.mainOut)} · BattleTale 주입 ${n(lt.injectTok)} · 보조 ${lt.auxCalls}회 (${n(lt.auxIn)}/${n(lt.auxOut)})</div>`
+    : '<div class="sd-hint">아직 이번 채팅에서 기록된 턴 토큰이 없어요. 메시지를 보내거나 보조모델을 호출하면 기록돼요.</div>';
+  const rows = (ts.log ?? []).slice(-15).reverse();
+  const logHtml = rows.length
+    ? `<details class="tk-log"><summary class="sd-hint">최근 입출력 내역 (${rows.length}건)</summary><div class="tk-rows">${rows.map(r =>
+      `<div class="tk-row"><span class="tk-kind k-${h(r.kind)}">${r.kind === 'main' ? '메인' : '보조'}</span><span class="tk-lbl" title="${h(r.label)}">${h(r.label)}</span><span class="tk-num">in ${n(r.inTok)} · out ${n(r.outTok)}${r.reasonTok ? ` (+${n(r.reasonTok)})` : ''}</span>${srcBadge(r.source)}</div>`).join('')}</div></details>`
+    : '';
+  return `<div class="bt-section tk-card">
+    <div class="bt-act-head"><b>🧮 턴별 입출력 토큰</b><button class="bt-mini" data-act="tokens-clear">기록 초기화</button></div>
+    ${lastHtml}
+    <div class="tk-total"><span>채팅 누적 (${tot.mainTurns}턴 · 보조 ${tot.auxCalls}회)</span><b>입력 ${n(tot.inTok)} · 출력 ${n(tot.outTok)}${tot.reasonTok ? ` · 추론 ${n(tot.reasonTok)}` : ''}</b></div>
+    ${logHtml}
+  </div>`;
+}
+
 function traceTab(s) {
   const list = api.trace?.() ?? [];
   const set = api.settings();
@@ -351,10 +422,10 @@ function traceTab(s) {
     ['② 전투 구성', api.settings().auxSource === 'main' ? '보조 = 메인 연결 (generateRaw)' : '별도 보조모델', list.some(x => x.kind === 'start')],
     ['③ 매 턴 변수', `${set.trackChanges ? '<bt-change> 안내 켬' : '<bt-change> 꺼짐'} · 상태창 <${set.statTag || '없음'}> ${set.statSync}`, list.some(x => x.kind === 'change' || (x.kind === 'stat' && x.title.includes('읽음')))],
   ];
-  return `<div class="bt-section"><div class="bt-sub">파이프라인 점검</div>
+  return `${tokenSummaryHtml()}<div class="bt-section"><div class="bt-sub">파이프라인 점검</div>
     ${steps.map(([a, b, ok]) => `<div class="tr-step ${ok ? 'ok' : ''}"><b>${a}</b><span>${h(b)}</span><i>${ok ? '✔ 동작 확인' : '… 아직 기록 없음'}</i></div>`).join('')}
     <div class="sd-hint">주입·감지·보조모델 응답 최근 40개 (새로고침하면 지워짐)</div></div>
-  <div class="tr-filter">${['', 'inject', 'detect', 'start', 'setup', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_ICON[k]} ${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
+  <div class="tr-filter">${['', 'tokens', 'inject', 'detect', 'start', 'setup', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_ICON[k]} ${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
   ${shown.length ? shown.map(x => `<details class="tr-item k-${x.kind}"><summary>${TRACE_ICON[x.kind] ?? '•'} <b>${h(x.title)}</b> <small>${new Date(x.t).toLocaleTimeString()}</small></summary>${x.detail ? `<pre>${h(x.detail)}</pre>` : '<div class="bt-note">(내용 없음)</div>'}</details>`).join('') : '<div class="bt-empty">아직 기록이 없어요. 채팅을 한 번 보내보세요.</div>'}`;
 }
 
@@ -563,7 +634,10 @@ function battleTab(s) {
   const p = profileOf(s);
   const b = s.battle;
   const busy = api.busy();
-  if (s.disabled) return '<div class="bt-empty">이 채팅에서는 꺼져 있어요. 설정 → 룰에서 다시 켤 수 있어요.</div>';
+  const actInfo = api.activationInfo?.();
+  if (actInfo && !actInfo.enabled) {
+    return `${activationCard()}<div class="bt-empty">현재 이 채팅에서는 BattleTale이 꺼져 있어요.<br><small>프롬프트 주입과 전투 감지가 동작하지 않아요. 위 버튼으로 이 채팅이나 캐릭터만 바로 켤 수 있어요.</small></div>`;
+  }
   const pBanner = personaBanner(busy);
   if (api.ui.preview && (!b || b.status !== 'active')) return `${pBanner}${previewCard(s, api.ui.preview, busy)}`;
   const panelMode = api.settings().playMode !== 'chat';
@@ -825,10 +899,12 @@ function profileCard(sh, p, { target, sub = '', btns = '', current = true }) {
   const altChip = altTypes.length ? `<span class="pc-alttype" title="${altSys === 'pokemon' ? '포켓몬 속성 (상단 버튼으로 전환 가능)' : '세계관 속성 (상단 버튼으로 전환 가능)'}">${altSys === 'pokemon' ? '포켓몬' : '세계관'}: ${altTypes.map(t => h(typeName(t, altSys))).join('·')}</span>` : '';
   const pic = sh.portrait?.src ? `<img src="${h(sh.portrait.src)}" class="${sh.portrait.pixel ? 'px' : ''}" alt="" referrerpolicy="no-referrer">` : `<span class="pc-ph">${h((sh.name ?? '?').slice(0, 1))}</span>`;
   const trait = sh.trait && TRAITS[sh.trait] ? `<span class="pc-trait" title="전투 역할 특성: ${h(TRAITS[sh.trait].desc)}">특성:${h(TRAITS[sh.trait].ko)}</span>` : '';
+  const cp = sh.customPassive;
+  const cpChip = cp ? `<span class="pc-cp ${cp.enabled ? 'on' : 'off'}" title="${h(cp.desc || cp.name)}">✦ ${h(cp.name)}</span>` : '';
   const open = api.ui.picOpen === target;
   return `<div class="bt-section pc-card">
     <div class="pc-head"><button class="pc-pic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 바꾸기">${pic}</button>
-      <div class="pc-id"><div class="pc-name"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(t => `<span class="pk-tdot t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}${altChip}${trait}</div>${sub ? `<div class="pc-sub">${sub}</div>` : ''}</div>
+      <div class="pc-id"><div class="pc-name"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(t => `<span class="pk-tdot t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}${altChip}${trait}${cpChip}</div>${sub ? `<div class="pc-sub">${sub}</div>` : ''}</div>
       ${btns}</div>
     ${open ? portraitControls(target, sh.portrait) : ''}
     ${bar(current ? sh.hp : sh.maxHp, sh.maxHp, 'hp', p.hpLabel)}${sh.maxSp ? bar(current ? sh.sp : sh.maxSp, sh.maxSp, 'sp', p.spLabel) : ''}
@@ -854,6 +930,61 @@ function skillView(skills, p, scope = 'view') {
       <div class="pc-sl1"><i class="sk-dot"></i><b>${h(k.name)}</b><span class="pc-pow">${h(pow)}</span><em>${k.cost ? `${k.cost}` : '무료'}</em><span class="pc-caret">${open ? '▾' : '▸'}</span></div>
       ${!open && c.lines.length ? `<div class="pc-sl2">${c.lines.slice(0, 3).map(l => `<span>${h(l)}</span>`).join('')}${c.lines.length > 3 ? `<span>+${c.lines.length - 3}</span>` : ''}</div>` : ''}${detail}</div>`;
   }).join('');
+}
+
+/** Per-character LLM-coded signature passive box (view / AI generate / sandboxed code edit). */
+function passiveBox(sh, target, { mode = 'view', busy = false } = {}) {
+  const cp = sh?.customPassive;
+  const info = api.activationInfo?.();
+  const chatOn = !!info?.chatPassives;
+  const globalOff = api.settings().customPassives === false;
+  const idPrefix = target === 'player' ? 'bt-cp-p' : 'bt-cp-c';
+  const chatBar = `<div class="bt-cp-chatbar ${chatOn && !globalOff ? 'on' : 'off'}">
+    <span>이 채팅에서 고유 부가효과 실행: <b>${globalOff ? '전역 꺼짐' : chatOn ? 'ON' : 'OFF'}</b></span>
+    ${globalOff ? `<button class="bt-mini" data-act="chat-passives-global-on">전역 허용</button>`
+      : `<button class="bt-mini" data-act="chat-passives" data-v="${chatOn ? '0' : '1'}">${chatOn ? '이 채팅 끄기' : '이 채팅 켜기'}</button>`}
+  </div>`;
+  if (mode === 'edit') {
+    return `<div class="bt-section pc-form bt-cp-box">
+      <div class="bt-sub">✦ 고유 부가효과 코드 편집 ${tip('보안 검사(외부 접근·eval·무한루프·동적 대괄호 차단)와 드라이런 테스트를 통과해야 저장돼요. 이 채팅에서 ON으로 켠 경우에만 전투에 적용돼요.')}</div>
+      ${chatBar}
+      <div class="bt-row"><input type="text" class="text_pole" id="${idPrefix}-name" placeholder="고유 특성 이름 (예: 검기 축적)" value="${h(cp?.name ?? '')}"></div>
+      <input type="text" class="text_pole" id="${idPrefix}-desc" placeholder="효과 설명 (1-2문장)" value="${h(cp?.desc ?? '')}">
+      <textarea class="text_pole bt-json bt-cp-code" id="${idPrefix}-code" rows="6" placeholder="if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {\n  fx.dmgMul(1.15, '검기 강화');\n}">${h(cp?.code ?? '')}</textarea>
+      <div class="bt-row bt-wrap">
+        <button class="menu_button bt-send" data-act="passive-save" data-v="${h(target)}" data-p="${idPrefix}">🔒 보안 검증 후 저장</button>
+        ${cp ? `<button class="menu_button" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '캐릭터 효과 끄기' : '캐릭터 효과 켜기'}</button><button class="menu_button bt-danger" data-act="passive-del" data-v="${h(target)}">삭제</button>` : ''}
+      </div></div>`;
+  }
+  if (mode === 'ai') {
+    return `<div class="bt-section pc-form bt-cp-box">
+      <div class="bt-sub">✦ AI 고유 부가효과 코딩 ${tip('캐릭터의 콘셉트·로어·스킬을 보고 보조모델이 전용 패시브 JS 코드를 작성해요. 정적 보안 검증과 드라이런 테스트를 통과한 코드만 적용되며 실패 시 자동 수정해요.')}</div>
+      ${chatBar}
+      <div class="bt-note">💡 코딩 정확도와 창의성을 위해 보조모델은 코딩 능력이 충분한 <b>중·상급 모델</b>을 권장해요.</div>
+      <textarea class="text_pole" id="${idPrefix}-instr" rows="2" placeholder="(선택) 원하는 부가효과 방향 · 예) 근접 공격마다 검기 스택 쌓고 4스택에 속도 증가 / 치명상 시 1회 버티기"></textarea>
+      <div class="bt-row bt-wrap">
+        <button class="menu_button bt-send" data-act="passive-gen" data-v="${h(target)}" data-p="${idPrefix}" ${busy ? 'disabled' : ''}>✨ ${cp ? '고유 부가효과 다시 코딩' : 'AI로 고유 부가효과 생성'}</button>
+        ${cp ? `<button class="menu_button" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '끄기' : '켜기'}</button>` : ''}
+      </div></div>`;
+  }
+  // view mode
+  if (!cp) {
+    return `<div class="bt-section bt-cp-empty">
+      <div><span>✦ <b>고유 부가효과</b> <small class="sd-hint">이 채팅 ${chatOn && !globalOff ? 'ON' : 'OFF (켜야 적용)'}</small></span></div>
+      <span class="bt-row"><button class="bt-mini" data-act="chat-passives" data-v="${chatOn ? '0' : '1'}">${chatOn ? '채팅 끄기' : '채팅 켜기'}</button><button class="bt-mini bt-cp-btn" data-act="passive-gen" data-v="${h(target)}" ${busy ? 'disabled' : ''}>✨ AI로 만들기</button></span>
+    </div>`;
+  }
+  const activeNow = cp.enabled && chatOn && !globalOff && cp.valid !== false;
+  const badge = !cp.valid && cp.error ? `<span class="bt-cp-badge bad" title="${h(cp.error)}">⚠ 검증 실패</span>`
+    : globalOff ? '<span class="bt-cp-badge off">전역 꺼짐</span>'
+    : !chatOn ? '<span class="bt-cp-badge off">이 채팅 꺼짐</span>'
+    : cp.enabled ? '<span class="bt-cp-badge ok">🔒 검증됨 · 활성</span>'
+    : '<span class="bt-cp-badge off">캐릭터 꺼짐</span>';
+  return `<div class="bt-section bt-cp-box ${activeNow ? 'on' : 'off'}">
+    <div class="bt-cp-head"><span><b>✦ ${h(cp.name)}</b> ${badge}</span><span class="bt-row">${!chatOn && !globalOff ? `<button class="bt-mini bt-cp-btn" data-act="chat-passives" data-v="1">이 채팅 켜기</button>` : ''}<button class="bt-mini" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '끄기' : '켜기'}</button><button class="bt-mini" data-act="passive-gen" data-v="${h(target)}" ${busy ? 'disabled' : ''} title="AI로 새로 코딩">✨ 리롤</button></span></div>
+    ${cp.desc ? `<div class="bt-note">${h(cp.desc)}</div>` : ''}
+    ${cp.code ? `<details class="bt-cp-det"><summary class="sd-hint">실행 코드 보기</summary><pre class="bt-pre bt-cp-pre">${h(cp.code)}</pre></details>` : ''}
+  </div>`;
 }
 
 function sheetTab(s) {
@@ -886,7 +1017,7 @@ function sheetTab(s) {
       <div class="bt-row"><label>${h(p.spLabel)}<input type="number" data-act="num" data-v="sp" value="${me.sp}">/<input type="number" data-act="num" data-v="maxSp" value="${me.maxSp}"></label></div>
       <div class="bt-stats">${p.stats.map(x => `<label class="bt-stat">${h(x.label || x.key)}<input type="number" data-act="stat" data-v="${h(x.key)}" value="${me.stats[x.key] ?? 0}"></label>`).join('')}</div>
       <button class="menu_button" data-act="edit-json" data-v="player" style="margin-top:6px">JSON</button></div>`;
-  return `${personaBanner(busy)}${card}${editForm}${mode === 'ai' ? aiForm : ''}
+  return `${personaBanner(busy)}${card}${editForm}${mode === 'ai' ? aiForm : ''}${passiveBox(me, 'player', { mode, busy })}
     <div class="bt-section"><div class="bt-sub">기술 <small class="sd-hint">클릭하면 상세 보기</small></div>${mode === 'edit' ? skillRows(me.skills, p, { del: true }) : skillView(me.skills, p, 'player')}</div>
     <div class="bt-section"><div class="bt-sub">함께 다니는 인물 ${tip('따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고 장면에 있는 도감 인물을 아군·적으로 넣어요. 여기 있는 사람은 「요즘 같이 다님」으로 참고만 해요.')}</div>${comps ? `<div class="pc-chips">${comps}</div>` : '<div class="bt-empty">없음</div>'}</div>
     <div class="bt-section"><div class="bt-sub">가방</div>${bag ? (mode === 'edit' ? bag : `<div class="pc-chips">${bag}</div>`) : '<div class="bt-empty">비어 있음</div>'}
@@ -935,8 +1066,8 @@ function rulesTab(s) {
       <button class="menu_button" data-act="edit-json" data-v="rules">JSON</button>
       <button class="menu_button" data-act="reset-rules">기본값</button>
     </div>
+    ${activationCard()}
     <div class="bt-section">
-      <label class="checkbox_label"><input type="checkbox" data-act="chat-off" ${s.disabled ? 'checked' : ''}> 이 채팅에서 BattleTale 끄기</label>
       <button class="menu_button bt-danger" data-act="reset-chat">이 채팅의 전투 데이터 초기화</button>
     </div>`;
 }
@@ -999,7 +1130,7 @@ function codexEditor(s, p, id, list) {
         ${grown ? `<button class="menu_button" data-act="codex-promote" data-v="${h(entry.id)}">성장 → 기본판</button><button class="menu_button" data-act="codex-reset" data-v="${h(entry.id)}">성장 초기화</button>` : ''}
         <button class="menu_button bt-danger" data-act="codex-del" data-v="${h(entry.id)}">삭제</button></div>
       <details><summary class="sd-hint">JSON 직접 수정</summary><textarea id="bt-cx-json" class="text_pole bt-json">${h(JSON.stringify(entry.sheet, null, 1))}</textarea><button class="menu_button" data-act="codex-json" data-v="${h(entry.id)}">저장</button></details></div>`;
-  return `${back}${card}${editForm}${aiForm}
+  return `${back}${card}${editForm}${aiForm}${passiveBox(sh, entry.id, { mode, busy })}
     <div class="bt-section"><div class="bt-sub">기술 <small class="sd-hint">클릭하면 상세 보기</small></div>${skillView(sh.skills, p, `cx:${entry.id}`)}</div>
     ${sh.desc && mode === 'view' ? `<div class="bt-section"><div class="sd-hint">${h(sh.desc)}</div></div>` : ''}`;
 }
@@ -1092,6 +1223,26 @@ function onClick(e) {
   if (act.startsWith('m:') && el.tagName !== 'SELECT') { skipTalk(); api.ui.page = 'main'; return api.modeAct(act, v); }
   switch (act) {
     case 'close': return togglePanel(false);
+    case 'chat-mode': return api.setChatEnabled?.(v);
+    case 'char-mode': return api.setCharEnabled?.(v);
+    case 'char-clear': return api.setCharEnabled?.('inherit', v);
+    case 'chat-passives': return api.setChatPassives?.(v === '1');
+    case 'chat-passives-global-on': return api.setSetting('customPassives', true);
+    case 'global-on': return api.setSetting('enabled', true);
+    case 'passive-gen': {
+      const pfx = el.dataset.p;
+      const instr = pfx ? (document.getElementById(`${pfx}-instr`)?.value?.trim() ?? '') : '';
+      return api.genPassive?.(v, instr);
+    }
+    case 'passive-save': {
+      const pfx = el.dataset.p;
+      const name = document.getElementById(`${pfx}-name`)?.value?.trim() ?? '';
+      const desc = document.getElementById(`${pfx}-desc`)?.value?.trim() ?? '';
+      const code = document.getElementById(`${pfx}-code`)?.value ?? '';
+      return api.savePassive?.(v, { name, desc, code, enabled: true });
+    }
+    case 'passive-toggle': return api.togglePassive?.(v);
+    case 'passive-del': if (confirm('이 캐릭터의 고유 부가효과를 삭제할까요?')) return api.deletePassive?.(v); return;
     case 'sk-detail': api.ui.skOpen = api.ui.skOpen === v ? null : v; return refreshPanel();
     case 'cheat-set': return api.setSetting(el.dataset.k, Number(v));
     case 'cheat-reset': api.setSetting('dealMul', 1); return api.setSetting('takeMul', 1);
@@ -1125,6 +1276,7 @@ function onClick(e) {
     case 'aux-models': return api.auxModels?.();
     case 'trace-filter': api.ui.traceFilter = v; return refreshPanel();
     case 'trace-clear': return api.clearTrace?.();
+    case 'tokens-clear': return api.clearTokenStats?.();
     case 'tab': tab = v; editing = null; return refreshPanel();
     case 'start': return api.start(val('bt-hint'), val('bt-mode-pick') || null);
     case 'send-result': return api.sendResult(val('bt-result-comment'));

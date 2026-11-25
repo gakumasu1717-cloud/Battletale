@@ -53,11 +53,41 @@ export function stateOf(meta) {
   s.timing ??= {};
   s.lastResult ??= '';
   s.disabled ??= false;
+  s.chatEnabled ??= s.disabled ? 'off' : 'inherit'; // 'inherit' | 'on' | 'off'
+  s.customPassives ??= false; // opt-in per chat: only runs in this chat when explicitly enabled
   s.roster ??= {};
   s.brief ??= null;        // world brief from the one-time setup
   s.activated ??= false;   // the user turned BattleTale on for this chat (wand menu)
   if (s.battle && !s.battle.st) s.battle = null;   // v1 battle format → drop
   return s;
+}
+
+/**
+ * Resolve whether BattleTale is active for the current chat + character.
+ * Precedence: global off → per-chat override → per-character override → opt-in default → default on.
+ */
+export function resolveEnabled({ settings = {}, state = null, charKey = '', charName = '' } = {}) {
+  const chatMode = state?.chatEnabled === 'on' || state?.chatEnabled === 'off'
+    ? state.chatEnabled
+    : (state?.disabled ? 'off' : 'inherit');
+  const charMap = settings?.charEnabled && typeof settings.charEnabled === 'object' ? settings.charEnabled : {};
+  const charMapVal = charKey ? charMap[charKey] : null;
+  const excludeList = String(settings?.exclude ?? '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+  const excludedByName = !!(charName && excludeList.includes(String(charName).toLowerCase()));
+  const charMode = charMapVal === 'on' || charMapVal === 'off'
+    ? charMapVal
+    : (excludedByName ? 'off' : 'inherit');
+
+  if (settings?.enabled === false) return { enabled: false, reason: 'global-off', chatMode, charMode };
+  if (chatMode === 'off') return { enabled: false, reason: 'chat-off', chatMode, charMode };
+  if (chatMode === 'on') return { enabled: true, reason: 'chat-on', chatMode, charMode };
+  if (charMode === 'off') return { enabled: false, reason: 'char-off', chatMode, charMode };
+  if (charMode === 'on') return { enabled: true, reason: 'char-on', chatMode, charMode };
+  if (settings?.optIn) {
+    const active = !!(state?.activated || state?.brief || state?.player || state?.battle);
+    return { enabled: active, reason: active ? 'optin-active' : 'optin-wait', chatMode, charMode };
+  }
+  return { enabled: true, reason: 'default-on', chatMode, charMode };
 }
 
 export const profileOf = s => (s.profile ? s.profile : normalizeProfile(DEFAULT_PROFILE));
@@ -557,7 +587,8 @@ function buildState(s, spec, mode, { seed, settings }) {
   if (mode === 'duel') party.push(...allies);
   const fit = fitThreat(enemies, [...party, ...(mode === 'party' ? allies : [])], profile, settings, spec);
   if (fit) spec.threatFit = fit;
-  let st = M.create({ spec, profile, party, allies: mode === 'party' ? allies : [], enemies, seed, settings });
+  const effSettings = { ...settings, customPassives: !!(s.customPassives && settings.customPassives !== false) };
+  let st = M.create({ spec, profile, party, allies: mode === 'party' ? allies : [], enemies, seed, settings: effSettings });
   let opening = null;
   const op = M.opening?.(st);
   if (op) { st = op.st; opening = op.events; }
