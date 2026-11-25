@@ -23,7 +23,7 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
       if (e.guarded === 'block') return ko ? `  · ${e.target} 막아냄! ${e.dmg} 피해만 (${e.from}%→${e.to}%)` : `  ${e.target} blocks in time and takes only ${e.dmg} damage (HP ${e.from}% → ${e.to}%).`;
       if (e.guarded === 'flinch') return ko ? `  · ${e.target} 대응 실패, ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.target} mistimes the defense and takes ${e.dmg} damage (HP ${e.from}% → ${e.to}%).`;
       if (e.note === 'counter') return ko ? `  ↺ ${e.who}의 반격! ${e.target}에게 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.who} COUNTERS: ${e.dmg} damage to ${e.target} (HP ${e.from}% → ${e.to}%).`;
-      if (e.note === 'finisher') return ko ? `  ☠ 결정타! ${e.target}에게 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  FINISHING BLOW on ${e.target}: ${e.dmg} damage (HP ${e.from}% → ${e.to}%).`;
+      if (e.note === 'finisher') return ko ? `  결정타! ${e.target}에게 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  FINISHING BLOW on ${e.target}: ${e.dmg} damage (HP ${e.from}% → ${e.to}%).`;
       if (e.note === 'chip') return ko ? `  · 막혔지만 ${e.target}에게 ${e.dmg} 피해가 스밈` : `  Blocked, but ${e.dmg} damage seeps through to ${e.target}.`;
       if (e.label === '반격') return ko ? `  ↺ ${e.who}의 반격! ${e.target}에게 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.who} counters: ${e.dmg} damage to ${e.target} (HP ${e.from}% → ${e.to}%).`;
       if (e.label) return ko ? `  · ${e.target} ${e.label}(으)로 ${e.dmg} 피해 (${e.from}%→${e.to}%)` : `  ${e.target} takes ${e.dmg} damage from ${({ 혼란: 'confusion', 반동: 'recoil', 역효과: 'a backfire' })[e.label] ?? e.label} (HP ${e.from}%→${e.to}%).`;
@@ -50,10 +50,10 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'protect': return ko ? `▶ ${e.who}: 방어 자세 ${e.ok ? '— 이번 턴 공격을 모두 막는다' : `실패${showRolls && e.chance != null ? ` (${e.chance}%)` : ''}`}` : `${e.who} ${e.ok ? 'braces to block every attack this turn' : 'tries to brace again, but fails'}.`;
     case 'protected': return ko ? `  · ${e.who} 「${e.skill}」을(를) 완벽히 막아냄` : `  ${e.who} completely blocks "${e.skill}".`;
     case 'breakbonus': return ko ? `  ✦ 충전을 끊은 쪽 전원 기력 +${e.sp}%` : `  Breaking the charge lets ${e.who}'s side catch its breath.`;
-    case 'down': return ko ? `  ✖ ${e.who} 쓰러짐!` : `  ${e.who} is DOWN (knocked out / defeated).`;
+    case 'down': return ko ? `  ${e.who} 쓰러짐!` : `  ${e.who} is DOWN (knocked out / defeated).`;
     case 'wake': return ko ? `  · ${e.who} 잠에서 깸` : `  ${e.who} wakes up.`;
     case 'thaw': return ko ? `  · ${e.who} ${e.byFire ? '화염에 빙결이 녹아 풀림' : '빙결이 풀림'}` : `  ${e.who} thaws out${e.byFire ? ' from the fire' : ''}.`;
-    case 'enrage': return ko ? `  ⚡ ${e.who} 격노! (공격 ▲)` : `  ${e.who} becomes ENRAGED (attack up).`;
+    case 'enrage': return ko ? `  ${e.who} 격노! (공격 ▲)` : `  ${e.who} becomes ENRAGED (attack up).`;
     case 'skip': return ko ? `▷ ${e.who}: ${stName(e.status, 'ko')}(으)로 행동 불가` : `${e.who} cannot act (${stName(e.status, 'en')}).`;
     case 'confused': return ko ? `▷ ${e.who}: 혼란 상태로 자신을 공격` : `${e.who} is confused and hurts themself.`;
     case 'defend': return ko ? `▶ ${e.who}: 방어 태세${e.sp ? ` (SP +${e.sp})` : ''}${e.auto ? ' (명령 없음)' : ''}` : `${e.who} takes a defensive stance${e.auto ? ' (no order given)' : ''}.`;
@@ -67,27 +67,27 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
     case 'noitem': return ko ? `▶ ${e.who}: 「${e.item}」 ${e.unusable ? '전투 중 사용할 수 없음' : '가지고 있지 않음'}` : `${e.who} reaches for "${e.item}" but ${e.unusable ? 'it is useless in combat' : "doesn't have it"}.`;
     case 'improv': {
       if (ko) {
-        const roll = showRolls ? ` 🎲${e.roll}/${e.chance}%` : '';
+        const roll = showRolls ? ` ${e.roll}/${e.chance}%` : '';
         return `▶ ${e.who}: 즉흥 행동 — ${e.desc || '?'} [${DIFF_KO[e.difficulty]}]${roll} → ${e.blocked ? '불가능(규칙상)' : IMPROV_KO[e.result]}`;
       }
       return `${e.who} attempts a free action: "${e.desc}" (difficulty ${e.difficulty}) → ${e.blocked ? 'IMPOSSIBLE (not allowed in this situation)' : e.result.toUpperCase()}.`;
     }
-    case 'yield': return ko ? `  ✋ ${e.who} 전의 상실 — 항복/이탈` : `  ${e.who} YIELDS and stops fighting.`;
+    case 'yield': return ko ? `  ${e.who} 전의 상실 — 항복/이탈` : `  ${e.who} YIELDS and stops fighting.`;
     case 'revive': return ko ? `  ✚ ${e.who} 부활 (HP ${e.hp}%)` : `  ${e.who} is revived (HP ${e.hp}%).`;
     case 'cleanse': return ko ? `  · ${e.who} 상태이상 해제` : `  ${e.who}'s ailments are cleansed.`;
     case 'dot': return null;
     case 'expire': return ko ? `  · ${e.who}: ${stName(e.status, 'ko')} 해제` : `  ${e.who}'s ${stName(e.status, 'en')} wears off.`;
     case 'surprised': return ko ? `▷ ${e.who}: 기습당해 대응하지 못함` : `${e.who} is caught off guard and cannot act.`;
     case 'staggered': return ko ? `▷ ${e.who}: 비틀거리며 행동 불가` : `${e.who} is staggered and cannot act.`;
-    case 'charge': return ko ? `⚡ ${e.who}: 「${e.skill}」 충전 시작! (다음 턴 발동)` : `${e.who} begins charging "${e.skill}" (it will fire next turn unless broken).`;
-    case 'break': return ko ? `  💥 ${e.who}의 「${e.skill}」 충전이 끊김! 비틀거림` : `  ${e.who}'s charge of "${e.skill}" is BROKEN; they stagger.`;
+    case 'charge': return ko ? `${e.who}: 「${e.skill}」 충전 시작! (다음 턴 발동)` : `${e.who} begins charging "${e.skill}" (it will fire next turn unless broken).`;
+    case 'break': return ko ? `  ${e.who}의 「${e.skill}」 충전이 끊김! 비틀거림` : `  ${e.who}'s charge of "${e.skill}" is BROKEN; they stagger.`;
     case 'parry': return ko ? `  ✦ ${e.who} 완벽한 패링! ${e.attacker}의 공격을 튕겨냄` : `  ${e.who} PARRIES ${e.attacker}'s attack perfectly.`;
     case 'blocked':
       if (e.why) return ko ? `  · ${{ stones: '던질 돌이 없다', sp: '숨이 차서 달릴 수 없다', reach: '손이 닿지 않는다' }[e.why] ?? '할 수 없다'}` : `  Can't do that (${e.why}).`;
       return ko ? `  ! ${e.target}은(는) 후열이라 근접 공격이 닿지 않음 → 앞줄 공격` : `  ${e.target} is behind the front line; ${e.who}'s melee attack hits the front instead.`;
     case 'swap': return ko ? `▶ ${e.who}: ${e.with ? `${e.with}와(과) 자리 교대` : e.row === 'back' ? '후열로 이동' : '전열로 이동'}` : `${e.who} ${e.with ? `swaps places with ${e.with}` : `moves to the ${e.row} row`}.`;
     case 'scan': return ko ? `▶ ${e.who}: ${e.target} 관찰 — ${e.ok ? `정보 획득 (${['없음', '관찰', '분석 완료'][e.to]})` : '파악 실패'}` : `${e.who} studies ${e.target}: ${e.ok ? 'learns its strengths and weaknesses' : 'fails to read it'}.`;
-    case 'rout': return ko ? `  🏳 ${e.who} 대장이 쓰러지자 도망침` : `  With their leader down, ${e.who} breaks and flees.`;
+    case 'rout': return ko ? `  ${e.who} 대장이 쓰러지자 도망침` : `  With their leader down, ${e.who} breaks and flees.`;
     case 'stances': {
       const K = { strike: '빠른 공격', heavy: '강공', guard: '방어', evade: '회피', feint: '페인트', finisher: '결정타', open: '무방비' };
       const N = { strike: 'quick strike', heavy: 'heavy attack', guard: 'guard', evade: 'evade', feint: 'feint', finisher: 'finisher', open: 'no defense' };
@@ -99,7 +99,7 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
       const EN = { trade: 'they trade blows', faster: 'the faster one lands first', interrupt: 'the heavy attack is interrupted', parry: 'a perfect parry', blocked: 'the strike is blocked', dodged: 'dodged cleanly', caught: 'the dodge fails', 'feint-punished': 'the feint is punished', 'free-hit': 'a free hit on an open target', 'power-clash': 'power meets power', overpower: 'one overpowers the other', 'guard-held': 'the guard holds', 'guard-break': 'the guard is smashed', whiff: 'the heavy swing whiffs, leaving an opening', 'feint-crushed': 'the feint is crushed', standoff: 'a tense standoff', nothing: 'both probe without contact', baited: 'the feint lands; the defender is thrown off balance', rattled: 'the feint rattles them', finisher: 'a finishing blow' };
       return ko ? `  ⚔ ${KO[e.kind] ?? e.kind}` : `  Result: ${EN[e.kind] ?? e.kind}.`;
     }
-    case 'broken': return ko ? `  💢 ${e.who}의 체간 붕괴!` : `  ${e.who}'s POSTURE BREAKS — wide open for a finishing blow.`;
+    case 'broken': return ko ? `  ${e.who}의 체간 붕괴!` : `  ${e.who}'s POSTURE BREAKS — wide open for a finishing blow.`;
     case 'armor': return ko ? `  ${e.who}: 강인한 몸으로 버티며 밀어붙임` : `  ${e.who} shrugs it off and pushes through.`;
     case 'finisher': return null;
     case 'sact': {
@@ -107,20 +107,20 @@ export function eventLine(e, { lang = 'ko', showRolls = true, hp = true } = {}) 
       if (ko) return `▶ ${e.who}: ${A[e.action] ?? e.action}${e.desc ? ` 「${e.desc}」` : ''}${e.target ? ` → ${e.target}` : ''}${e.grade ? ` [${e.grade}]` : ''}`;
       return `${e.who}: ${e.action}${e.desc ? ` ("${e.desc}")` : ''}${e.target ? ` targeting ${e.target}` : ''}.`;
     }
-    case 'overexert': return ko ? `  ⚠ ${e.who} 과로! 「${e.skill}」에 HP ${e.dmg}를 쏟아부음 (다음 턴 탈진)` : `  ${e.who} overexerts for "${e.skill}", paying ${e.dmg} HP and losing the next turn.`;
+    case 'overexert': return ko ? `  ${e.who} 과로! 「${e.skill}」에 HP ${e.dmg}를 쏟아부음 (다음 턴 탈진)` : `  ${e.who} overexerts for "${e.skill}", paying ${e.dmg} HP and losing the next turn.`;
     case 'rest': return ko ? `▶ ${e.who}: 휴식 (기력 +${e.sp})` : `▶ ${e.who} rests (+${e.sp}).`;
     case 'glance': return ko ? `  · ${e.who}의 시야 끝에 걸렸지만 눈치채지 못함 (운)` : `  ${e.who} glances this way but doesn't register anything.`;
     case 'calm': return ko ? `  · ${e.who}: 별일 아니라며 원래 자리로` : `  ${e.who} shrugs it off and returns to their post.`;
     case 'observe': return ko ? '  · 경비들의 움직임을 파악함 (3턴)' : '  The guards\' patterns are now known for a few turns.';
     case 'distract': return ko ? `  · ${e.target}의 주의가 다른 곳으로 쏠림` : `  ${e.target} is distracted and turns away.`;
-    case 'takedown': return ko ? `  ${e.ok ? '✔' : '✘'} ${e.target} 제압 ${e.ok ? '성공 — 소리 없이 쓰러뜨림' : '실패 — 상대가 알아챔!'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Takedown on ${e.target}: ${e.ok ? 'SUCCESS, silently subdued' : 'FAILED, they notice'}.`;
+    case 'takedown': return ko ? `  ${e.ok ? '' : ''} ${e.target} 제압 ${e.ok ? '성공 — 소리 없이 쓰러뜨림' : '실패 — 상대가 알아챔!'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Takedown on ${e.target}: ${e.ok ? 'SUCCESS, silently subdued' : 'FAILED, they notice'}.`;
     case 'alert': return ko ? `  · 경계도 ${e.from}→${e.to} · 진행도 ${e.progress}` : `  Alert ${e.from} → ${e.to}/100; progress ${e.progress}/100.`;
-    case 'spotted': return ko ? `  👀 ${e.who}의 시야에 걸렸다!` : `  ${e.who} catches a glimpse of {{user}}!`;
-    case 'suspicious': return ko ? `  ⚠ ${e.who ? `${e.who}: ${e.why === 'body' ? '쓰러진 동료 발견!' : '소리를 듣고 다가옴'}` : '경비들이 수상함을 느끼기 시작함'}` : `  ${e.who ? `${e.who} ${e.why === 'body' ? 'finds a subdued comrade!' : 'hears something and comes to check'}` : 'The guards grow suspicious.'}`;
-    case 'detected': return ko ? `  🚨 ${e.why === 'caught' ? '붙잡혔다!' : e.why === 'fight' ? '전투 돌입!' : '발각됐다!'} → 전투 시작${e.initiative === 'enemy' ? ' (적 선공)' : e.initiative === 'player' ? ' (내가 선공)' : ''}` : `  ${e.why === 'caught' ? 'CAUGHT!' : e.why === 'fight' ? 'The player chooses to fight!' : 'DISCOVERED!'} A battle begins${e.initiative === 'enemy' ? ' with the enemy striking first' : e.initiative === 'player' ? ' with the player striking first' : ''}.`;
-    case 'obstacle': return ko ? `  ${e.ok ? '✔ 지형을 타고 넘어 거리를 벌림' : '✘ 장애물에 걸려 지체'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Uses the terrain: ${e.ok ? 'SUCCESS, gains ground and slows the pursuers' : 'FAILS and loses time'}.`;
-    case 'hidefail': return ko ? '  ✘ 너무 가까워서 숨을 수 없음' : '  Too close to hide.';
-    case 'hideroll': return ko ? `  ${e.ok ? '✔ 숨는 데 성공' : '✘ 숨을 곳을 들킴'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Tries to hide: ${e.ok ? 'SUCCESS' : 'FAILED'}.`;
+    case 'spotted': return ko ? `  ${e.who}의 시야에 걸렸다!` : `  ${e.who} catches a glimpse of {{user}}!`;
+    case 'suspicious': return ko ? `  ${e.who ? `${e.who}: ${e.why === 'body' ? '쓰러진 동료 발견!' : '소리를 듣고 다가옴'}` : '경비들이 수상함을 느끼기 시작함'}` : `  ${e.who ? `${e.who} ${e.why === 'body' ? 'finds a subdued comrade!' : 'hears something and comes to check'}` : 'The guards grow suspicious.'}`;
+    case 'detected': return ko ? `  ${e.why === 'caught' ? '붙잡혔다!' : e.why === 'fight' ? '전투 돌입!' : '발각됐다!'} → 전투 시작${e.initiative === 'enemy' ? ' (적 선공)' : e.initiative === 'player' ? ' (내가 선공)' : ''}` : `  ${e.why === 'caught' ? 'CAUGHT!' : e.why === 'fight' ? 'The player chooses to fight!' : 'DISCOVERED!'} A battle begins${e.initiative === 'enemy' ? ' with the enemy striking first' : e.initiative === 'player' ? ' with the player striking first' : ''}.`;
+    case 'obstacle': return ko ? `  ${e.ok ? '지형을 타고 넘어 거리를 벌림' : '장애물에 걸려 지체'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Uses the terrain: ${e.ok ? 'SUCCESS, gains ground and slows the pursuers' : 'FAILS and loses time'}.`;
+    case 'hidefail': return ko ? '  너무 가까워서 숨을 수 없음' : '  Too close to hide.';
+    case 'hideroll': return ko ? `  ${e.ok ? '숨는 데 성공' : '숨을 곳을 들킴'}${showRolls ? ` (${e.chance}%)` : ''}` : `  Tries to hide: ${e.ok ? 'SUCCESS' : 'FAILED'}.`;
     case 'lost': return ko ? '  ★ 추격자를 따돌렸다!' : '  The pursuers lose the trail.';
     case 'winded': return ko ? `  · ${e.who} 숨이 차서 속도가 떨어짐` : `  ${e.who} is winded and slows down.`;
     case 'distance': return ko ? `  · 거리 ${e.from}→${e.to}` : `  Distance ${e.from} → ${e.to}/100.`;
@@ -226,7 +226,7 @@ export function pkLines(events, { showRolls = true } = {}) {
       case 'cleanse': L(`${e.who}의 상태이상이 깨끗이 나았다!`); break;
       case 'fallback': L(`${e.skill ? `${e.skill}${hasBatchim(e.skill) ? '은' : '는'}` : '그 기술은'} 지금 쓸 수 없다!`); break;
       case 'blocked': L(e.why ? ({ stones: '던질 돌이 없다!', sp: '숨이 차서 달릴 수 없다!', reach: '손이 닿지 않는다!' }[e.why] ?? '할 수 없었다.') : `앞을 막는 적 때문에 ${e.target}에게 닿지 않는다!`); break;
-      case 'improv': L(`${e.who}의 ${e.desc || '임기응변'}!`, `${e.blocked ? '그건 불가능하다!' : { crit: '대성공!', success: '성공했다!', fail: '실패했다…', fumble: '대실패! 역효과가 났다!' }[e.result]}${showRolls && e.roll ? ` (🎲${e.roll} / ${e.chance}%)` : ''}`); break;
+      case 'improv': L(`${e.who}의 ${e.desc || '임기응변'}!`, `${e.blocked ? '그건 불가능하다!' : { crit: '대성공!', success: '성공했다!', fail: '실패했다…', fumble: '대실패! 역효과가 났다!' }[e.result]}${showRolls && e.roll ? ` (${e.roll} / ${e.chance}%)` : ''}`); break;
       case 'yield': L(`${j(e.who, '은', '는')} 싸울 의지를 잃었다!`); break;
       case 'stances': L(`${e.me}의 ${e.an ?? STANCE[e.a]}!`, `${e.foe}의 ${e.bn ?? STANCE[e.b]}!`); break;
       case 'clash': if (CLASH[e.kind]) L(CLASH[e.kind]); break;

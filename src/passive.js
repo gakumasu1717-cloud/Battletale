@@ -1,7 +1,9 @@
 // Safe sandboxed runtime for LLM-coded per-character custom passives.
 // Defense-in-depth:
-//   1. Strict JS tokenizer + static security validator (no globals, no dynamic brackets, no loops/functions/eval)
-//   2. Strict-mode Function compilation with shadowed globals + frozen safe Math (no Math.random)
+//   1. Strict JS tokenizer + ALLOWLIST validator: only ctx / fx / Math / own variables and a fixed list of property
+//      names; no dynamic brackets, no loops/functions, assignment only to own variables
+//   2. Strict-mode Function compilation with shadowed globals + frozen safe Math (no Math.random); the code's own
+//      names are parameters too, so nothing it writes can resolve to a page global
 //   3. Read-only snapshot context (cannot mutate battle objects directly)
 //   4. Bounded, engine-clamped effect collector (fx.*) with per-turn & per-battle caps
 //   5. Deterministic seeded RNG + dry-run self-test across all hooks
@@ -39,32 +41,6 @@ const SHADOW_NAMES = [
   'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'queueMicrotask',
   'process', 'global', 'require', 'module', 'exports', 'Buffer',
 ];
-
-const BANNED_KEYWORDS = new Set([
-  'while', 'for', 'do', 'function', 'class', 'extends', 'super', 'new', 'this',
-  'with', 'delete', 'try', 'catch', 'finally', 'throw', 'async', 'await', 'yield',
-  'import', 'export', 'debugger', 'void', 'in', 'instanceof', 'var',
-]);
-
-const BANNED_IDENTIFIERS = new Set([
-  ...SHADOW_NAMES,
-  'eval',
-  'AsyncFunction', 'GeneratorFunction', 'constructor', 'prototype', '__proto__',
-  '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__',
-  'Intl', 'Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError',
-  'WeakMap', 'WeakSet', 'Map', 'Set', 'ArrayBuffer', 'SharedArrayBuffer', 'DataView',
-  'Uint8Array', 'Int32Array', 'Float64Array', 'Atomics', 'WebAssembly', 'JSON',
-  'escape', 'unescape', 'encodeURI', 'decodeURI', 'encodeURIComponent', 'decodeURIComponent',
-  'atob', 'btoa', 'opener', 'screen', 'caches', 'cookie', 'SharedWorker', 'ServiceWorker',
-  'importScripts', 'crypto', 'performance', 'open', 'close', 'print', 'postMessage',
-  'setImmediate', 'requestAnimationFrame', '$', 'arguments', 'callee', 'caller',
-  'random', // Force ctx.rng() / ctx.chance() for determinism
-  'repeat', 'padStart', 'padEnd', 'fill', // Prevent memory-bomb allocations
-  'bind', 'call', 'apply', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf',
-  'propertyIsEnumerable', 'toLocaleString', 'compile', 'exec', 'fromCharCode', 'fromCodePoint',
-  'assign', 'defineProperty', 'defineProperties', 'getOwnPropertyDescriptor',
-  'getOwnPropertyNames', 'getPrototypeOf', 'setPrototypeOf', 'create', 'keys', 'values', 'entries',
-]);
 
 // Minimal JS tokenizer for strict security validation (zero dependencies).
 function tokenize(code) {
@@ -158,11 +134,39 @@ function tokenize(code) {
   return { tokens };
 }
 
-/**
- * Static security & syntax check for LLM-generated passive code.
- * Returns { ok: true } or { ok: false, error: string }.
- */
-export function validatePassiveCode(code) {
+/* ---------- Allowlist (everything not listed here is rejected) ---------- */
+// Blocklists cannot work in a browser: every element id is a global (`chat.innerHTML = …`), every library the host
+// page loads is a global (`localforage.clear()`), and `?.[` reaches `constructor`. So a name must be KNOWN to be safe.
+const KEYWORDS = new Set(['if', 'else', 'const', 'let', 'return', 'typeof']);
+const LITERALS = new Set(['true', 'false', 'null', 'undefined', 'NaN', 'Infinity']);
+const SAFE_GLOBALS = ['Number', 'String', 'Boolean'];
+const ROOTS = new Set(['ctx', 'fx', 'Math', ...SAFE_GLOBALS]);
+const SAFE_PROPS = new Set([
+  // ctx
+  'hook', 'turn', 'isBoss', 'allyCount', 'foeCount', 'self', 'target', 'attacker', 'victim', 'fallen', 'skill',
+  'dmg', 'crit', 'eff', 'effMul', 'ko', 'fatal', 'hit', 'firstHit', 'mem', 'hasStatus', 'stageOf', 'rng', 'chance',
+  // fighter snapshot
+  'name', 'hp', 'maxHp', 'hpPct', 'sp', 'maxSp', 'spPct', 'row', 'tier', 'elements', 'statuses', 'statusCount',
+  'hasDebuff', 'hasBuff', 'down',
+  // skill snapshot
+  'kind', 'element', 'power', 'range', 'isBasic', 'hits', 'priority',
+  // fx
+  'dmgMul', 'dmgFlat', 'heal', 'stage', 'status', 'counter', 'endure', 'flag', 'log',
+  // Math
+  'min', 'max', 'floor', 'ceil', 'round', 'abs', 'pow', 'sqrt', 'sign', 'trunc',
+  // read-only string / array helpers
+  'length', 'includes', 'indexOf', 'startsWith', 'endsWith', 'toLowerCase', 'toUpperCase', 'trim', 'slice', 'at',
+]);
+const NEVER_NAMES = new Set(['constructor', 'prototype', '__proto__', 'eval', 'arguments', 'callee', 'caller']);
+const KNOWN_BAD_SYNTAX = new Set([
+  'while', 'for', 'do', 'function', 'class', 'extends', 'super', 'new', 'this', 'with', 'delete', 'try', 'catch',
+  'finally', 'throw', 'async', 'await', 'yield', 'import', 'export', 'debugger', 'void', 'in', 'instanceof', 'var', 'switch', 'case',
+]);
+const MEM_KEY = /^[a-zA-Z_][a-zA-Z0-9_]{0,20}$/;
+const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=']);
+
+/** Tokenize + allowlist check. Returns { ok, error?, locals? } — locals are the names the code declares. */
+function analyze(code) {
   if (typeof code !== 'string') return { ok: false, error: '코드가 문자열이 아니에요.' };
   const trimmed = code.trim();
   if (!trimmed) return { ok: false, error: '코드가 비어 있어요.' };
@@ -174,61 +178,110 @@ export function validatePassiveCode(code) {
   if (lex.error) return { ok: false, error: lex.error };
   const toks = lex.tokens;
   if (!toks.length) return { ok: false, error: '실행할 코드가 없어요.' };
-
+  const fail = error => ({ ok: false, error });
   const exprEnd = tok => tok && (tok.type === 'id' || tok.type === 'num' || tok.type === 'str' || tok.v === ')' || tok.v === ']');
+  const isDot = tok => tok?.type === 'punc' && (tok.v === '.' || tok.v === '?.');
 
+  // Pass 1: names declared with const/let.
+  const locals = new Set();
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
-    const prev = toks[i - 1];
-    const next = toks[i + 1];
-    if (t.type === 'id') {
-      if (BANNED_KEYWORDS.has(t.v)) {
-        return { ok: false, error: `보안·안정성상 '${t.v}' 문법은 사용할 수 없어요.` };
-      }
-      if (BANNED_IDENTIFIERS.has(t.v)) {
-        // Allow `ctx.self` / `ctx?.self` (our own frozen fighter snapshot), while keeping global `self` banned.
-        const isCtxSelf = t.v === 'self' && (prev?.v === '.' || prev?.v === '?.') && toks[i - 2]?.type === 'id' && toks[i - 2]?.v === 'ctx';
-        if (!isCtxSelf) {
-          return { ok: false, error: `보안상 '${t.v}' 식별자는 사용할 수 없어요.` };
-        }
-      }
+    if (t.type !== 'id' || (t.v !== 'const' && t.v !== 'let') || isDot(toks[i - 1])) continue;
+    const name = toks[i + 1];
+    if (name?.type !== 'id') return fail('보안상 구조 분해 선언은 사용할 수 없어요. const 이름 = 값 형태만 쓰세요.');
+    if (KEYWORDS.has(name.v) || LITERALS.has(name.v) || ROOTS.has(name.v) || NEVER_NAMES.has(name.v) || KNOWN_BAD_SYNTAX.has(name.v) || name.v.length > 24) {
+      return fail(`'${name.v}'은(는) 변수 이름으로 쓸 수 없어요.`);
     }
-    // Block object literals & object destructuring (e.g. `const { 'constructor': F } = ctx.rng` or `({ ['con'+'structor']: F } = ...)`).
-    // Braces `{` are ONLY allowed as block statements (start of code, or after `)`, `else`, `;`, `{`, `}`).
-    if (t.type === 'punc' && t.v === '{') {
-      const isBlock = !prev || prev.v === ')' || prev.v === ';' || prev.v === '{' || prev.v === '}' || (prev.type === 'id' && prev.v === 'else');
-      if (!isBlock) {
-        return { ok: false, error: '보안상 객체 리터럴 및 구조 분해({ ... })는 사용할 수 없어요. 점 표기(ctx.prop)만 쓰세요.' };
-      }
-    }
-    // Block array destructuring (`const [a] = ...` / `let [a] = ...`)
-    if (t.type === 'punc' && t.v === '[' && prev?.type === 'id' && (prev.v === 'const' || prev.v === 'let')) {
-      return { ok: false, error: '보안상 배열 구조 분해(const [...])는 사용할 수 없어요.' };
-    }
-    // Block string-keyed property syntax (`'constructor': ...`)
-    if (t.type === 'str' && next?.type === 'punc' && next.v === ':') {
-      return { ok: false, error: '보안상 문자열 키 문법은 사용할 수 없어요.' };
-    }
-    // Block dynamic computed member access: expr[...] only allowed with a single small integer index expr[0]
-    if (t.type === 'punc' && t.v === '[') {
-      if (exprEnd(prev)) {
-        const inner = toks[i + 1];
-        const close = toks[i + 2];
-        if (!(inner?.type === 'num' && /^\d+$/.test(inner.v) && close?.type === 'punc' && close.v === ']')) {
-          return { ok: false, error: '보안상 동적 속성 접근(obj[expr])은 허용되지 않아요. 점 표기(obj.prop)나 숫자 인덱스([0])만 쓰세요.' };
-        }
-      }
-    }
+    locals.add(name.v);
   }
 
-  // Syntax verification via sandboxed Function compilation
-  try {
-    // eslint-disable-next-line no-new-func
-    new Function('ctx', 'fx', 'Math', ...SHADOW_NAMES, `"use strict";\n${trimmed}`);
-  } catch (e) {
-    return { ok: false, error: `문법 오류: ${e.message}` };
+  // Pass 2: every token must be something we know.
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i], prev = toks[i - 1], next = toks[i + 1];
+    if (t.type === 'id') {
+      if (NEVER_NAMES.has(t.v)) return fail(`보안상 '${t.v}' 식별자는 사용할 수 없어요.`);
+      if (isDot(prev)) {
+        // Property name: known API field, or a key read straight off ctx.mem.
+        const isMemKey = toks[i - 2]?.v === 'mem' && isDot(toks[i - 3]) && toks[i - 4]?.v === 'ctx' && !isDot(toks[i - 5]);
+        if (isMemKey ? !(MEM_KEY.test(t.v) && !t.v.startsWith('__')) : !SAFE_PROPS.has(t.v)) {
+          return fail(`'.${t.v}'은(는) 허용된 속성이 아니에요. 안내된 ctx.* / fx.* / Math.* 만 쓰세요 (저장값은 ctx.mem.키 로 바로 읽기).`);
+        }
+        continue;
+      }
+      if (KNOWN_BAD_SYNTAX.has(t.v)) return fail(`보안·안정성상 '${t.v}' 문법은 사용할 수 없어요.`);
+      if (KEYWORDS.has(t.v) || LITERALS.has(t.v) || ROOTS.has(t.v) || locals.has(t.v)) continue;
+      return fail(`'${t.v}'은(는) 쓸 수 없는 이름이에요. ctx, fx, Math와 const/let으로 직접 선언한 변수만 쓸 수 있어요.`);
+    }
+    if (t.type !== 'punc') {
+      // Block string-keyed property syntax (`'constructor': ...`)
+      if (t.type === 'str' && next?.type === 'punc' && next.v === ':' && !(prev?.v === '?')) {
+        // `cond ? 'a' : 'b'` is fine; a string directly followed by ':' anywhere else is an object key.
+        let depth = 0, ternary = false;
+        for (let k = i - 1; k >= 0 && !ternary; k--) {
+          const v = toks[k].type === 'punc' ? toks[k].v : '';
+          if (v === ')' || v === ']') depth++;
+          else if (v === '(' || v === '[') { if (depth === 0) break; depth--; }
+          else if (v === ';' || v === '{' || v === '}') break;
+          else if (v === '?' && depth === 0) ternary = true;
+        }
+        if (!ternary) return fail('보안상 문자열 키 문법은 사용할 수 없어요.');
+      }
+      continue;
+    }
+    if ((t.v === '.' || t.v === '?.') && next?.type !== 'id') {
+      return fail('보안상 점(.) 뒤에는 속성 이름만 올 수 있어요 (?.[ ] 나 ?.( ) 금지).');
+    }
+    // Braces are ONLY block statements (no object literals / destructuring).
+    if (t.v === '{') {
+      const isBlock = !prev || prev.v === ')' || prev.v === ';' || prev.v === '{' || prev.v === '}' || (prev.type === 'id' && prev.v === 'else');
+      if (!isBlock) return fail('보안상 객체 리터럴 및 구조 분해({ ... })는 사용할 수 없어요. 점 표기(ctx.prop)만 쓰세요.');
+    }
+    // obj[...] only with one small integer literal; a bare [ ... ] is an array literal.
+    if (t.v === '[' && exprEnd(prev)) {
+      if (prev.type === 'id' && (prev.v === 'const' || prev.v === 'let')) return fail('보안상 배열 구조 분해(const [...])는 사용할 수 없어요.');
+      const inner = toks[i + 1], close = toks[i + 2];
+      if (!(inner?.type === 'num' && /^\d{1,2}$/.test(inner.v) && close?.type === 'punc' && close.v === ']')) {
+        return fail('보안상 동적 속성 접근(obj[expr])은 허용되지 않아요. 점 표기(obj.prop)나 숫자 인덱스([0])만 쓰세요.');
+      }
+    }
+    // Assignment only to a plain local variable — never to a property of anything.
+    if (ASSIGN_OPS.has(t.v)) {
+      if (!(prev?.type === 'id' && locals.has(prev.v) && !isDot(toks[i - 2]))) {
+        return fail('값 대입은 const/let으로 선언한 변수에만 할 수 있어요 (ctx·fx 속성은 읽기 전용).');
+      }
+    }
+    if (t.v === '++' || t.v === '--') return fail("'++' / '--' 대신 x += 1 형태를 쓰세요.");
   }
-  return { ok: true };
+
+  // Syntax check, compiled exactly the way it will run.
+  try {
+    build(trimmed, [...locals]);
+  } catch (e) {
+    return fail(`문법 오류: ${e.message}`);
+  }
+  return { ok: true, locals: [...locals] };
+}
+
+/**
+ * Static security & syntax check for LLM-generated passive code.
+ * Returns { ok: true } or { ok: false, error: string }.
+ */
+export function validatePassiveCode(code) {
+  const r = analyze(code);
+  return r.ok ? { ok: true } : { ok: false, error: r.error };
+}
+
+const SAFE_GLOBAL_VALUES = [x => Number(x), x => String(x).slice(0, 200), x => Boolean(x)].map(Object.freeze);
+const FIXED_PARAMS = ['ctx', 'fx', 'Math', ...SAFE_GLOBALS, ...SHADOW_NAMES];
+
+/**
+ * The code's own variable names are also parameters, and the code runs one block deeper: a name used outside the
+ * block that declared it resolves to an (undefined) parameter, never to a page global of the same name.
+ */
+function build(code, locals) {
+  const extra = locals.filter(n => !FIXED_PARAMS.includes(n));
+  // eslint-disable-next-line no-new-func
+  return new Function(...FIXED_PARAMS, ...extra, `"use strict";\n{\n${code}\n}`);
 }
 
 const COMPILE_CACHE = new Map();
@@ -237,11 +290,11 @@ const SHADOW_VALUES = SHADOW_NAMES.map(() => undefined);
 export function compilePassive(code) {
   const key = String(code ?? '').trim();
   if (COMPILE_CACHE.has(key)) return COMPILE_CACHE.get(key);
-  const v = validatePassiveCode(key);
+  const v = analyze(key);
   if (!v.ok) return { fn: null, error: v.error };
   try {
-    // eslint-disable-next-line no-new-func
-    const fn = new Function('ctx', 'fx', 'Math', ...SHADOW_NAMES, `"use strict";\n${key}`);
+    const raw = build(key, v.locals);
+    const fn = (ctx, fx) => raw(ctx, fx, SAFE_MATH, ...SAFE_GLOBAL_VALUES, ...SHADOW_VALUES);
     const entry = { fn, error: null };
     if (COMPILE_CACHE.size > 64) COMPILE_CACHE.clear();
     COMPILE_CACHE.set(key, entry);
@@ -323,7 +376,7 @@ function buildContext(hook, b, f, extra = {}, rng) {
   const fallenSnap = summarizeFighter(extra.fallen ?? null);
   const rawMem = Object.create(null);
   for (const [k, v] of Object.entries(f?.pstate ?? {})) {
-    if (!k.startsWith('__')) rawMem[k] = v;
+    if (!k.startsWith('__') && (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean')) rawMem[k] = v;
   }
   const byWho = who => who === 'self' ? f : who === 'attacker' ? extra.attacker : targetRaw;
   return nullObj({
@@ -344,9 +397,11 @@ function buildContext(hook, b, f, extra = {}, rng) {
     effMul: Number(extra.effMul ?? 1),
     ko: !!extra.ko,
     fatal: !!extra.fatal,
+    hit: Math.max(0, Math.trunc(Number(extra.hit ?? 0)) || 0),
+    firstHit: !(Number(extra.hit) > 0),
     mem: Object.freeze(rawMem),
-    hasStatus: (who, id) => !!(byWho(who)?.statuses ?? []).some(x => x.id === id),
-    stageOf: (who, stat) => Number(byWho(who)?.stages?.[stat] ?? 0),
+    hasStatus: (who, id) => typeof id === 'string' && !!(byWho(who)?.statuses ?? []).some(x => x.id === id),
+    stageOf: (who, stat) => (VALID_STATS.has(stat) ? Number(byWho(who)?.stages?.[stat] ?? 0) || 0 : 0),
     rng: () => (rng ? rng.next() : 0.5),
     chance: pct => (rng ? rng.chance(clamp(Number(pct) || 0, 0, 100) / 100) : false),
   });
@@ -367,7 +422,9 @@ function createCollector() {
     called: false,
   };
   const addLog = msg => {
-    const s = String(msg ?? '').trim().slice(0, 48);
+    // Shown in the battle log AND quoted to the story model: plain short text only (no tags, no line breaks).
+    if (typeof msg !== 'string' || msg.length > 400) return;
+    const s = msg.replace(/[<>\[\]{}\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48);
     if (s && ops.logs.length < 3 && !ops.logs.includes(s)) ops.logs.push(s);
   };
   const fx = nullObj({
@@ -412,7 +469,7 @@ function createCollector() {
     status(who, statusId, chancePct = 100, turns = 2, msg) {
       if (ops.statuses.length >= 1) return;
       const w = who === 'self' || who === 'target' ? who : null;
-      if (!w || !STATUS[statusId]) return;
+      if (!w || typeof statusId !== 'string' || !Object.hasOwn(STATUS, statusId)) return;
       const maxCh = HARD_CC.has(statusId) ? 25
         : SOFT_CC.has(statusId) ? 40
         : SELF_BUFF_STATUS.has(statusId) ? 100
@@ -442,7 +499,8 @@ function createCollector() {
         if (!Number.isFinite(value)) return;
         value = clamp(Math.round(value * 100) / 100, -999, 999);
       } else if (typeof value === 'string') {
-        value = value.slice(0, 24);
+        if (value.length > 400) return;
+        value = value.replace(/[<>\r\n]/g, ' ').slice(0, 24);
       } else if (typeof value !== 'boolean') {
         return;
       }
@@ -471,7 +529,7 @@ export function evalPassive(hook, b, f, extra = {}, rng) {
   const ctx = buildContext(hook, b, f, extra, rng);
   const { fx, ops } = createCollector();
   try {
-    compiled.fn(ctx, fx, SAFE_MATH, ...SHADOW_VALUES);
+    compiled.fn(ctx, fx);
   } catch (e) {
     return { error: e.message || String(e), ops: null };
   }

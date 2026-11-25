@@ -23,7 +23,7 @@ export function mountPanel(callbacks) {
   const fab = document.createElement('div');
   fab.id = 'bt-fab';
   fab.title = 'BattleTale';
-  fab.innerHTML = '⚔️<span class="bt-badge"></span>';
+  fab.innerHTML = '<i class="fa-solid fa-dice-d20"></i><span class="bt-badge"></span>';
   fab.addEventListener('click', () => togglePanel());
   fab.style.display = 'none'; // off by default; the wand menu is the main entry (setting: 떠 있는 버튼)
   document.body.appendChild(fab);
@@ -121,13 +121,13 @@ export function refreshDock() {
   const d = document.getElementById('bt-dock');
   if (!d || d.classList.contains('bt-hidden') || !api) return;
   const s = api.state();
-  if (!s) { d.innerHTML = '<div class="bd-head"><b>📋 상태</b><button data-dock="close">✕</button></div><div class="bd-body bt-note">채팅을 열면 보여요.</div>'; return; }
+  if (!s) { d.innerHTML = '<div class="bd-head"><b>상태</b><button data-dock="close">✕</button></div><div class="bd-body bt-note">채팅을 열면 보여요.</div>'; return; }
   const p = profileOf(s);
   const b = s.battle?.status === 'active' ? s.battle : null;
   const live = b ? (b.st.fighters ?? b.st.b?.fighters ?? []) : [];
   const cur = f => live.find(x => x.name === f.name) ?? f;
   const bar = (v, m, cls) => `<div class="bd-bar ${cls}"><div style="width:${Math.max(0, Math.min(100, Math.round((v / Math.max(1, m)) * 100)))}%"></div><span>${v}/${m}</span></div>`;
-  const pic = f => (f.portrait?.src ? `<img class="bd-pic ${f.portrait.pixel ? 'px' : ''}" src="${h(f.portrait.src)}" alt="" referrerpolicy="no-referrer">` : `<div class="bd-pic">${({ M: '🧑', F: '👩' })[f.gender] ?? '🧑'}</div>`);
+  const pic = f => (f.portrait?.src ? `<img class="bd-pic ${f.portrait.pixel ? 'px' : ''}" src="${h(f.portrait.src)}" alt="" referrerpolicy="no-referrer">` : `<div class="bd-pic bd-ph">${h(String(f.name ?? '?').slice(0, 1))}</div>`);
   const types = f => typesFor(f, p.typeSystem).map(t => `<span class="pk-tdot t-${typeIn(t, p.typeSystem)}">${h(typeName(t, p.typeSystem))}</span>`).join('');
   const who = (f0, main) => { const f = cur(f0); return `<div class="bd-who ${main ? 'main' : ''} ${f.hp <= 0 ? 'down' : ''}">${pic(f0)}<div class="bd-info"><div><b>${h(f.name)}</b> <small>${h(f.tier ?? '')}</small> ${types(f0)}</div>
     ${bar(f.hp, f.maxHp, 'hp')}${f.maxSp ? bar(f.sp, f.maxSp, 'sp') : ''}${f.statuses?.length ? `<div class="bd-st">${f.statuses.map(x => `<span class="pk-st st-${x.id}">${STATUS[x.id]?.ko ?? x.id}</span>`).join('')}</div>` : ''}</div></div>`; };
@@ -136,10 +136,10 @@ export function refreshDock() {
   const bag = s.inventory.filter(i => i.count > 0).map(i => `<li>${h(i.name)} <b>×${i.count}</b> <small>${h(ITEM_KIND_KO[(i.spec ?? inferItem(i.name))?.kind] ?? '')}</small></li>`).join('');
   const foes = b ? live.filter(f => f.side === 'enemy').map(f => `<li class="${f.hp <= 0 ? 'down' : ''}">${h(f.name)} <small>${(f.intel ?? 1) >= 1 ? `${Math.round((f.hp / Math.max(1, f.maxHp)) * 100)}%` : '?'}</small></li>`).join('') : '';
   const last = s.archive?.[0];
-  d.innerHTML = `<div class="bd-head"><b>📋 상태</b>${b ? `<span class="bd-live">⚔️ ${b.st.turn}턴</span>` : ''}<button data-dock="panel" title="전투 패널">⚔️</button><button data-dock="close">✕</button></div>
+  d.innerHTML = `<div class="bd-head"><b>상태</b>${b ? `<span class="bd-live">${b.st.turn}턴</span>` : ''}<button data-dock="panel" title="전투 패널">패널</button><button data-dock="close">✕</button></div>
     <div class="bd-body">${me}${comps ? `<div class="bd-sub">동료</div>${comps}` : ''}
       ${b ? `<div class="bd-sub">전투 중 · ${h(b.title || '')}</div><ul class="bd-list">${foes}</ul>` : last ? `<div class="bd-sub">최근 전투</div><div class="bt-note">${h(last.title)} — <b>${h(last.result)}</b> (${last.turns}턴)</div>` : ''}
-      <div class="bd-sub">🎒 가방</div>${bag ? `<ul class="bd-list">${bag}</ul>` : '<div class="bt-note">비어 있어요</div>'}</div>`;
+      <div class="bd-sub">가방</div>${bag ? `<ul class="bd-list">${bag}</ul>` : '<div class="bt-note">비어 있어요</div>'}</div>`;
 }
 
 /** Entries in SillyTavern's wand (extensions) menu next to the chat box. */
@@ -157,8 +157,8 @@ export function mountWand() {
     el.addEventListener('click', fn);
     menu.appendChild(el);
   };
-  item('bt-wand-panel', '⚔', 'BattleTale 전투 패널', () => togglePanel());
-  item('bt-wand-dock', '≡', 'BattleTale 상태창', () => toggleDock());
+  item('bt-wand-panel', '<i class="fa-solid fa-dice-d20"></i>', 'BattleTale 전투 패널', () => togglePanel());
+  item('bt-wand-dock', '<i class="fa-solid fa-table-list"></i>', 'BattleTale 상태창', () => toggleDock());
 }
 
 function cheatBarHtml() {
@@ -189,7 +189,7 @@ export function refreshPanel() {
   const deal = Number(set.dealMul ?? 1), take = Number(set.takeMul ?? 1);
   const cheatOn = Math.abs(deal - 1) >= 0.01 || Math.abs(take - 1) >= 0.01;
   const offPill = !actInfo.enabled ? '<button class="bt-off-pill" data-act="settings-open" title="현재 비활성화됨 · 눌러서 활성화 설정 열기">OFF</button>' : '';
-  p.innerHTML = `<div class="bt-head"><b>BattleTale</b>${offPill}<div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '⤢' : '⤡'}</button><button class="bt-x bt-gear ${cheatOn ? 'on' : ''}" data-act="settings-open" title="설정 · 룰 · 점검${cheatOn ? ` (피해 배율 ${deal}×/${take}× 적용 중)` : ''}">⚙</button><button class="bt-x" data-act="close">✕</button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
+  p.innerHTML = `<div class="bt-head"><b>BattleTale</b>${offPill}<div class="bt-tabs">${tabs}</div><button class="bt-x bt-fold" data-act="compact" title="${api.ui.compact ? '전체 화면' : '접기 (채팅 보면서)'}">${api.ui.compact ? '<i class="fa-solid fa-up-right-and-down-left-from-center"></i>' : '<i class="fa-solid fa-down-left-and-up-right-to-center"></i>'}</button><button class="bt-x bt-gear ${cheatOn ? 'on' : ''}" data-act="settings-open" title="설정 · 룰 · 점검${cheatOn ? ` (피해 배율 ${deal}×/${take}× 적용 중)` : ''}"><i class="fa-solid fa-gear"></i></button><button class="bt-x" data-act="close" title="닫기"><i class="fa-solid fa-xmark"></i></button></div><div class="bt-body">${body}</div>${api.ui.settingsOpen ? drawerHtml(s) : ''}`;
   const sd = p.querySelector('.sd-body'); if (sd) sd.scrollTop = keep;
   animateBars(p);
   // Popups and HP slides play once per turn, not on every redraw.
@@ -257,7 +257,7 @@ const SETTINGS = [
     { key: 'auxTemp', type: 'number', label: '온도 (temperature)', min: 0, max: 2, step: 0.05, show: s => s.auxSource === 'openai' || (s.auxSource === 'profile' && s.auxOverride) },
     { key: 'auxTopP', type: 'number', label: 'Top P (비우면 기본값)', min: 0, max: 1, step: 0.05, show: s => s.auxSource === 'openai' || (s.auxSource === 'profile' && s.auxOverride) },
     { key: 'auxMaxTokens', type: 'number', label: '최대 응답 토큰 (권장 10000 — 추론 모델은 더)', min: 1000, max: 64000, step: 500, show: s => s.auxSource !== 'none' },
-    { key: 'auxMaxInput', type: 'number', label: '최대 입력 토큰 (0 = 제한 없음)', min: 0, max: 200000, step: 1000, hint: '넘치면 대화 기록 → 로어북 → 카드·페르소나 순으로 줄여요. 룰·출력 형식은 안 잘려요. 실제 투입량은 위 🔍 점검에서 확인', show: s => s.auxSource !== 'none' },
+    { key: 'auxMaxInput', type: 'number', label: '최대 입력 토큰 (0 = 제한 없음)', min: 0, max: 200000, step: 1000, hint: '넘치면 대화 기록 → 로어북 → 카드·페르소나 순으로 줄여요. 룰·출력 형식은 안 잘려요. 실제 투입량은 점검 탭에서 확인', show: s => s.auxSource !== 'none' },
     { key: 'auxReasoning', type: 'select', label: '추론 강도 (지원 모델만)', options: [['', '보내지 않음'], ['low', 'low'], ['medium', 'medium'], ['high', 'high']], show: s => s.auxSource === 'openai' },
     { key: 'auxJsonMode', type: 'check', label: 'JSON 모드 강제 (response_format)', hint: '지원 안 하는 API면 끄세요', show: s => s.auxSource === 'openai' },
     { key: 'auxExtra', type: 'textarea', label: '추가 요청 본문 (JSON)', ph: '{"provider": {"order": ["Google"]}}', show: s => s.auxSource === 'openai' },
@@ -317,7 +317,7 @@ function fieldHtml(f, set) {
   else if (f.type === 'profile') {
     const profiles = api.profiles?.() ?? [];
     input = profiles.length ? `<select class="text_pole" data-set="auxProfile"><option value="">— 선택 —</option>${profiles.map(p => `<option value="${h(p.id)}" ${p.id === v ? 'selected' : ''}>${h(p.name)}${p.model ? ` · ${h(p.model)}` : ''}</option>`).join('')}</select>${(() => { const cur = profiles.find(p => p.id === v); return cur ? `<small class="sd-hint">API: ${h(cur.api ?? '?')} · 프로필 모델: ${h(cur.model || '(없음)')}${set.auxProfileModel ? ` → <b>${h(set.auxProfileModel)}</b>로 요청` : ''}</small>` : ''; })()}`
-      : '<div class="sd-hint">연결 프로필이 없어요. 실리태번 상단 🔌 Connection Profile에서 먼저 만들어주세요.</div>';
+      : '<div class="sd-hint">연결 프로필이 없어요. 실리태번 상단 Connection Profile에서 먼저 만들어주세요.</div>';
   } else if (f.type === 'model') input = `<input class="text_pole" data-set="auxModel" list="sd_models" value="${h(v ?? '')}" placeholder="${h(f.ph ?? '')}"><datalist id="sd_models">${(api.ui.auxModels ?? []).map(m => `<option value="${h(m)}">`).join('')}</datalist>`;
   else if (f.type === 'textarea') input = `<textarea class="text_pole" rows="2" data-set="${f.key}" data-kind="json" placeholder="${h(f.ph ?? '')}">${h(v ?? '')}</textarea>`;
   else input = `<input class="text_pole" type="${f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}" data-set="${f.key}" ${f.type === 'number' ? `data-kind="num" min="${f.min}" max="${f.max}" step="${f.step}"` : ''} value="${h(v ?? '')}" placeholder="${h(f.ph ?? '')}">`;
@@ -357,7 +357,7 @@ function activationCard({ showList = false } = {}) {
   </div>`;
 }
 
-/** Settings drawer: ⚙ settings (essentials + collapsed advanced) | 📜 this chat's rules | 🔍 pipeline trace. */
+/** Settings drawer: ⚙ settings (essentials + collapsed advanced) | this chat's rules | pipeline trace. */
 function drawerHtml(s) {
   const set = api.settings();
   api.ui.sdOpen ??= { ...DEFAULT_OPEN };
@@ -381,7 +381,6 @@ function drawerHtml(s) {
 
 export function refreshTrace() { if (api?.ui?.settingsOpen && api.ui.sdPage === 'trace') refreshPanel(); }
 
-const TRACE_ICON = { inject: '📤', detect: '🔎', start: '⚔️', setup: '🧭', aux: '🤖', tokens: '🧮', change: '📝', stat: '📊', balance: '⚖️', error: '❗' };
 const TRACE_KO = { inject: '주입', detect: '감지', start: '구성', setup: '기초', aux: '보조', tokens: '토큰', change: '변수', stat: '상태창', balance: '밸런스', error: '오류' };
 function tokenSummaryHtml() {
   const ts = api.tokenStats?.();
@@ -405,7 +404,7 @@ function tokenSummaryHtml() {
       `<div class="tk-row"><span class="tk-kind k-${h(r.kind)}">${r.kind === 'main' ? '메인' : '보조'}</span><span class="tk-lbl" title="${h(r.label)}">${h(r.label)}</span><span class="tk-num">in ${n(r.inTok)} · out ${n(r.outTok)}${r.reasonTok ? ` (+${n(r.reasonTok)})` : ''}</span>${srcBadge(r.source)}</div>`).join('')}</div></details>`
     : '';
   return `<div class="bt-section tk-card">
-    <div class="bt-act-head"><b>🧮 턴별 입출력 토큰</b><button class="bt-mini" data-act="tokens-clear">기록 초기화</button></div>
+    <div class="bt-act-head"><b>턴별 입출력 토큰</b><button class="bt-mini" data-act="tokens-clear">기록 초기화</button></div>
     ${lastHtml}
     <div class="tk-total"><span>채팅 누적 (${tot.mainTurns}턴 · 보조 ${tot.auxCalls}회)</span><b>입력 ${n(tot.inTok)} · 출력 ${n(tot.outTok)}${tot.reasonTok ? ` · 추론 ${n(tot.reasonTok)}` : ''}</b></div>
     ${logHtml}
@@ -423,10 +422,10 @@ function traceTab(s) {
     ['③ 매 턴 변수', `${set.trackChanges ? '<bt-change> 안내 켬' : '<bt-change> 꺼짐'} · 상태창 <${set.statTag || '없음'}> ${set.statSync}`, list.some(x => x.kind === 'change' || (x.kind === 'stat' && x.title.includes('읽음')))],
   ];
   return `${tokenSummaryHtml()}<div class="bt-section"><div class="bt-sub">파이프라인 점검</div>
-    ${steps.map(([a, b, ok]) => `<div class="tr-step ${ok ? 'ok' : ''}"><b>${a}</b><span>${h(b)}</span><i>${ok ? '✔ 동작 확인' : '… 아직 기록 없음'}</i></div>`).join('')}
+    ${steps.map(([a, b, ok]) => `<div class="tr-step ${ok ? 'ok' : ''}"><b>${a}</b><span>${h(b)}</span><i>${ok ? '동작 확인' : '… 아직 기록 없음'}</i></div>`).join('')}
     <div class="sd-hint">주입·감지·보조모델 응답 최근 40개 (새로고침하면 지워짐)</div></div>
-  <div class="tr-filter">${['', 'tokens', 'inject', 'detect', 'start', 'setup', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_ICON[k]} ${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
-  ${shown.length ? shown.map(x => `<details class="tr-item k-${x.kind}"><summary>${TRACE_ICON[x.kind] ?? '•'} <b>${h(x.title)}</b> <small>${new Date(x.t).toLocaleTimeString()}</small></summary>${x.detail ? `<pre>${h(x.detail)}</pre>` : '<div class="bt-note">(내용 없음)</div>'}</details>`).join('') : '<div class="bt-empty">아직 기록이 없어요. 채팅을 한 번 보내보세요.</div>'}`;
+  <div class="tr-filter">${['', 'tokens', 'inject', 'detect', 'start', 'setup', 'aux', 'change', 'stat', 'balance', 'error'].map(k => `<button class="${filt === k ? 'on' : ''}" data-act="trace-filter" data-v="${k}">${k ? `${TRACE_KO[k]}` : '전체'}</button>`).join('')}<button data-act="trace-clear">지우기</button></div>
+  ${shown.length ? shown.map(x => `<details class="tr-item k-${x.kind}"><summary><span class="tr-kind">${TRACE_KO[x.kind] ?? '기타'}</span> <b>${h(x.title)}</b> <small>${new Date(x.t).toLocaleTimeString()}</small></summary>${x.detail ? `<pre>${h(x.detail)}</pre>` : '<div class="bt-note">(내용 없음)</div>'}</details>`).join('') : '<div class="bt-empty">아직 기록이 없어요. 채팅을 한 번 보내보세요.</div>'}`;
 }
 
 /* ---------- turn bookkeeping for the game screen ---------- */
@@ -625,8 +624,8 @@ function setupCard(s, busy) {
   return `<div class="bt-section bt-setup-card">
     <div class="bt-sub">${on ? '이 채팅의 기초 설정을 만들까요?' : '이 채팅에서 BattleTale을 활성화할까요?'}</div>
     <div class="bt-note">로어북 · 캐릭터 디스크립션 · 페르소나 · 최근 대화를 가볍게 읽고 <b>속성·상성표 · 등급/강함 체계 · 전투 방식</b>을 짧게 정리해 둬요. 이후 시트·전투 구성·상시 프롬프트가 이 요약을 같이 써서 더 가볍고 일관돼요.</div>
-    <div class="bt-row"><button class="menu_button" data-act="setup" ${busy ? 'disabled' : ''}>${busy ? '읽는 중…' : on ? '기초 설정 만들기' : '활성화하고 기초 설정 만들기'}</button><button class="menu_button" data-act="setup-later" ${busy ? 'disabled' : ''}>나중에</button></div>
-    <div class="sd-hint">나중에 ⚙ → 룰에서도 만들 수 있어요.</div>
+    <div class="bt-row"><button class="menu_button bt-send" data-act="setup" ${busy ? 'disabled' : ''}>${busy ? '읽는 중…' : on ? '기초 설정 만들기' : '활성화하고 기초 설정 만들기'}</button><button class="menu_button" data-act="setup-later" ${busy ? 'disabled' : ''}>나중에</button></div>
+    <div class="sd-hint">나중에 설정 → 룰에서도 만들 수 있어요.</div>
   </div>`;
 }
 
@@ -661,7 +660,7 @@ function battleTab(s) {
   const V = M.view(b.st, p, ctx);
   const terr = b.st.terrain ?? [];
   const STG_KO = { pow: '공격', mag: '특공', def: '방어', res: '특방', spd: '스피드', acc: '명중', eva: '회피', luk: '운' };
-  const terrChip = terr.filter(t => Object.keys(t.stages ?? {}).length).map(t => `<span class="pk-terr" title="${h(t.desc)}">🌫 ${h(t.desc.split(/[,.·]/)[0].slice(0, 10) || '지형')} ${Object.entries(t.stages).map(([k, v]) => `${STG_KO[k] ?? k}${v > 0 ? '▲' : '▼'}`).join('')}${t.side !== 'all' ? (t.side === 'ally' ? '(아군)' : '(적)') : ''}</span>`).join('');
+  const terrChip = terr.filter(t => Object.keys(t.stages ?? {}).length).map(t => `<span class="pk-terr" title="${h(t.desc)}">${h(t.desc.split(/[,.·]/)[0].slice(0, 10) || '지형')} ${Object.entries(t.stages).map(([k, v]) => `${STG_KO[k] ?? k}${v > 0 ? '▲' : '▼'}`).join('')}${t.side !== 'all' ? (t.side === 'ally' ? '(아군)' : '(적)') : ''}</span>`).join('');
   if (!b.history.length && ui.openingShown !== b.id) { ui.openingShown = b.id; ui.msg = [...(V.intro ?? []), ...(b.opening?.length ? pkLines(b.opening) : [])]; ui.msgPos = 0; ui.steps = null; ui.page = 'main'; }
   const msg = ui.msg ?? [];
   const pos = ui.msgPos ?? 0;
@@ -684,7 +683,7 @@ function battleTab(s) {
       if (stepSnap.charging && F.noteCls === 'charge') {
         const ch = stepSnap.charging[F.name];
         if (!ch) { F.note = ''; F.noteCls = ''; }
-        else F.note = `⚡ ${ch}의 힘을 모으고 있다!`;
+        else F.note = `${ch}의 힘을 모으고 있다!`;
       }
     }
   }
@@ -700,9 +699,9 @@ function battleTab(s) {
     ${threat ? `<span class="bt-chip threat-${b.threat.level}">${threat}</span>` : ''}${b.spec?.difficulty && b.spec.difficulty !== 'normal' ? `<span class="bt-chip diff-${b.spec.difficulty}">${{ easy: '쉬움', hard: '어려움', nightmare: '악몽' }[b.spec.difficulty]}</span>` : ''}<button class="pk-more" data-act="stop" title="중단">중단</button></div>
     ${terrChip || modeSel ? `<div class="pk-head2">${terrChip}${modeSel}</div>` : ''}`;
   const box = stepping
-    ? `<div class="pk-msg talk" data-act="pk:next">${ui.steps[ui.stepPos].lines.slice(0, 4).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span><span class="pk-stepn">${ui.stepPos + 1}/${ui.steps.length}</span>${ui.steps.length - ui.stepPos > 1 ? '<button class="pk-skip" data-act="pk:skip">⏭</button>' : ''}</div>`
+    ? `<div class="pk-msg talk" data-act="pk:next">${ui.steps[ui.stepPos].lines.slice(0, 4).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span><span class="pk-stepn">${ui.stepPos + 1}/${ui.steps.length}</span>${ui.steps.length - ui.stepPos > 1 ? '<button class="pk-skip" data-act="pk:skip" title="건너뛰기">건너뛰기</button>' : ''}</div>`
     : talking
-    ? `<div class="pk-msg talk" data-act="pk:next">${msg.slice(pos, pos + 2).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span>${msg.length - pos > 2 ? '<button class="pk-skip" data-act="pk:skip">⏭</button>' : ''}</div>`
+    ? `<div class="pk-msg talk" data-act="pk:next">${msg.slice(pos, pos + 2).map(l => `<div>${h(l)}</div>`).join('')}<span class="pk-arrow">▼</span>${msg.length - pos > 2 ? '<button class="pk-skip" data-act="pk:skip" title="건너뛰기">건너뛰기</button>' : ''}</div>`
     : `<div class="pk-msg idle">${h(V.idle ?? '')}</div>`;
   let menu = '';
   const forced = M.forced?.(b.st);
@@ -763,9 +762,9 @@ function miniStatus(V, b, p) {
   const one = F => `<span class="${F.down ? 'down' : ''}">${h(F.name.length > 6 ? `${F.name.slice(0, 5)}…` : F.name)} <b>${F.down ? '✕' : F.showNums ? `${F.hp}/${F.maxHp}` : `${pctOf(F)}%`}</b></span>`;
   if (V.custom) {
     const st = b.st;
-    return `<div class="pk-mini"><div>👁 경계 <b>${Math.round(st.alert ?? 0)}</b>/100 · ${st.turn}턴 · 🚩까지 <b>${Math.abs(st.p.x - st.goalAt.x) + Math.abs(st.p.y - st.goalAt.y)}</b>칸 <small>(⤢ 누르면 맵)</small></div></div>`;
+    return `<div class="pk-mini"><div>경계 <b>${Math.round(st.alert ?? 0)}</b>/100 · ${st.turn}턴 · 목표까지 <b>${Math.abs(st.p.x - st.goalAt.x) + Math.abs(st.p.y - st.goalAt.y)}</b>칸 <small>(펼치면 맵)</small></div></div>`;
   }
-  return `<div class="pk-mini"><div>🗡 ${(V.foes ?? []).map(one).join(' ')}</div><div>🛡 ${(V.allies ?? []).map(one).join(' ')}</div></div>`;
+  return `<div class="pk-mini"><div><span class="pk-mini-l">적</span> ${(V.foes ?? []).map(one).join(' ')}</div><div><span class="pk-mini-l">아군</span> ${(V.allies ?? []).map(one).join(' ')}</div></div>`;
 }
 
 /** Speed order without scrolling: short names, wraps to a second line when crowded. */
@@ -900,7 +899,7 @@ function profileCard(sh, p, { target, sub = '', btns = '', current = true }) {
   const pic = sh.portrait?.src ? `<img src="${h(sh.portrait.src)}" class="${sh.portrait.pixel ? 'px' : ''}" alt="" referrerpolicy="no-referrer">` : `<span class="pc-ph">${h((sh.name ?? '?').slice(0, 1))}</span>`;
   const trait = sh.trait && TRAITS[sh.trait] ? `<span class="pc-trait" title="전투 역할 특성: ${h(TRAITS[sh.trait].desc)}">특성:${h(TRAITS[sh.trait].ko)}</span>` : '';
   const cp = sh.customPassive;
-  const cpChip = cp ? `<span class="pc-cp ${cp.enabled ? 'on' : 'off'}" title="${h(cp.desc || cp.name)}">✦ ${h(cp.name)}</span>` : '';
+  const cpChip = cp ? `<span class="pc-cp ${cp.enabled ? 'on' : 'off'}" title="${h(cp.desc || cp.name)}">${h(cp.name)}</span>` : '';
   const open = api.ui.picOpen === target;
   return `<div class="bt-section pc-card">
     <div class="pc-head"><button class="pc-pic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 바꾸기">${pic}</button>
@@ -946,43 +945,45 @@ function passiveBox(sh, target, { mode = 'view', busy = false } = {}) {
   </div>`;
   if (mode === 'edit') {
     return `<div class="bt-section pc-form bt-cp-box">
-      <div class="bt-sub">✦ 고유 부가효과 코드 편집 ${tip('보안 검사(외부 접근·eval·무한루프·동적 대괄호 차단)와 드라이런 테스트를 통과해야 저장돼요. 이 채팅에서 ON으로 켠 경우에만 전투에 적용돼요.')}</div>
+      <div class="bt-sub">고유 부가효과 코드 편집 ${tip('보안 검사(외부 접근·eval·무한루프·동적 대괄호 차단)와 드라이런 테스트를 통과해야 저장돼요. 이 채팅에서 ON으로 켠 경우에만 전투에 적용돼요.')}</div>
       ${chatBar}
       <div class="bt-row"><input type="text" class="text_pole" id="${idPrefix}-name" placeholder="고유 특성 이름 (예: 검기 축적)" value="${h(cp?.name ?? '')}"></div>
       <input type="text" class="text_pole" id="${idPrefix}-desc" placeholder="효과 설명 (1-2문장)" value="${h(cp?.desc ?? '')}">
       <textarea class="text_pole bt-json bt-cp-code" id="${idPrefix}-code" rows="6" placeholder="if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {\n  fx.dmgMul(1.15, '검기 강화');\n}">${h(cp?.code ?? '')}</textarea>
       <div class="bt-row bt-wrap">
-        <button class="menu_button bt-send" data-act="passive-save" data-v="${h(target)}" data-p="${idPrefix}">🔒 보안 검증 후 저장</button>
+        <button class="menu_button bt-send" data-act="passive-save" data-v="${h(target)}" data-p="${idPrefix}">보안 검증 후 저장</button>
         ${cp ? `<button class="menu_button" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '캐릭터 효과 끄기' : '캐릭터 효과 켜기'}</button><button class="menu_button bt-danger" data-act="passive-del" data-v="${h(target)}">삭제</button>` : ''}
       </div></div>`;
   }
   if (mode === 'ai') {
     return `<div class="bt-section pc-form bt-cp-box">
-      <div class="bt-sub">✦ AI 고유 부가효과 코딩 ${tip('캐릭터의 콘셉트·로어·스킬을 보고 보조모델이 전용 패시브 JS 코드를 작성해요. 정적 보안 검증과 드라이런 테스트를 통과한 코드만 적용되며 실패 시 자동 수정해요.')}</div>
+      <div class="bt-sub">AI 고유 부가효과 코딩 ${tip('캐릭터의 콘셉트·로어·스킬을 보고 보조모델이 전용 패시브 JS 코드를 작성해요. 정적 보안 검증과 드라이런 테스트를 통과한 코드만 적용되며 실패 시 자동 수정해요.')}</div>
       ${chatBar}
-      <div class="bt-note">💡 코딩 정확도와 창의성을 위해 보조모델은 코딩 능력이 충분한 <b>중·상급 모델</b>을 권장해요.</div>
+      <div class="bt-note">코딩 정확도와 창의성을 위해 보조모델은 코딩 능력이 충분한 <b>중·상급 모델</b>을 권장해요.</div>
       <textarea class="text_pole" id="${idPrefix}-instr" rows="2" placeholder="(선택) 원하는 부가효과 방향 · 예) 근접 공격마다 검기 스택 쌓고 4스택에 속도 증가 / 치명상 시 1회 버티기"></textarea>
       <div class="bt-row bt-wrap">
-        <button class="menu_button bt-send" data-act="passive-gen" data-v="${h(target)}" data-p="${idPrefix}" ${busy ? 'disabled' : ''}>✨ ${cp ? '고유 부가효과 다시 코딩' : 'AI로 고유 부가효과 생성'}</button>
+        <button class="menu_button bt-send" data-act="passive-gen" data-v="${h(target)}" data-p="${idPrefix}" ${busy ? 'disabled' : ''}>${cp ? '고유 부가효과 다시 코딩' : 'AI로 고유 부가효과 생성'}</button>
         ${cp ? `<button class="menu_button" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '끄기' : '켜기'}</button>` : ''}
       </div></div>`;
   }
   // view mode
   if (!cp) {
     return `<div class="bt-section bt-cp-empty">
-      <div><span>✦ <b>고유 부가효과</b> <small class="sd-hint">이 채팅 ${chatOn && !globalOff ? 'ON' : 'OFF (켜야 적용)'}</small></span></div>
-      <span class="bt-row"><button class="bt-mini" data-act="chat-passives" data-v="${chatOn ? '0' : '1'}">${chatOn ? '채팅 끄기' : '채팅 켜기'}</button><button class="bt-mini bt-cp-btn" data-act="passive-gen" data-v="${h(target)}" ${busy ? 'disabled' : ''}>✨ AI로 만들기</button></span>
+      <div><span><b>고유 부가효과</b> <small class="sd-hint">이 채팅 ${chatOn && !globalOff ? 'ON' : 'OFF (켜야 적용)'}</small></span></div>
+      <span class="bt-row"><button class="bt-mini" data-act="chat-passives" data-v="${chatOn ? '0' : '1'}">${chatOn ? '채팅 끄기' : '채팅 켜기'}</button><button class="bt-mini bt-cp-btn" data-act="passive-gen" data-v="${h(target)}" ${busy ? 'disabled' : ''}>AI로 만들기</button></span>
     </div>`;
   }
   const activeNow = cp.enabled && chatOn && !globalOff && cp.valid !== false;
-  const badge = !cp.valid && cp.error ? `<span class="bt-cp-badge bad" title="${h(cp.error)}">⚠ 검증 실패</span>`
+  const badge = !cp.valid && cp.error ? `<span class="bt-cp-badge bad" title="${h(cp.error)}">검증 실패</span>`
     : globalOff ? '<span class="bt-cp-badge off">전역 꺼짐</span>'
     : !chatOn ? '<span class="bt-cp-badge off">이 채팅 꺼짐</span>'
-    : cp.enabled ? '<span class="bt-cp-badge ok">🔒 검증됨 · 활성</span>'
+    : cp.lastError ? `<span class="bt-cp-badge bad" title="${h(cp.lastError.msg)}">실행 오류</span>`
+    : cp.enabled ? '<span class="bt-cp-badge ok">검증됨 · 활성</span>'
     : '<span class="bt-cp-badge off">캐릭터 꺼짐</span>';
   return `<div class="bt-section bt-cp-box ${activeNow ? 'on' : 'off'}">
-    <div class="bt-cp-head"><span><b>✦ ${h(cp.name)}</b> ${badge}</span><span class="bt-row">${!chatOn && !globalOff ? `<button class="bt-mini bt-cp-btn" data-act="chat-passives" data-v="1">이 채팅 켜기</button>` : ''}<button class="bt-mini" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '끄기' : '켜기'}</button><button class="bt-mini" data-act="passive-gen" data-v="${h(target)}" ${busy ? 'disabled' : ''} title="AI로 새로 코딩">✨ 리롤</button></span></div>
+    <div class="bt-cp-head"><span><b>${h(cp.name)}</b> ${badge}</span><span class="bt-row">${!chatOn && !globalOff ? `<button class="bt-mini bt-cp-btn" data-act="chat-passives" data-v="1">이 채팅 켜기</button>` : ''}<button class="bt-mini" data-act="passive-toggle" data-v="${h(target)}">${cp.enabled ? '끄기' : '켜기'}</button><button class="bt-mini" data-act="passive-gen" data-v="${h(target)}" ${busy ? 'disabled' : ''} title="AI로 새로 코딩">리롤</button></span></div>
     ${cp.desc ? `<div class="bt-note">${h(cp.desc)}</div>` : ''}
+    ${cp.lastError ? `<div class="bt-cp-err">전투 중 <b>${h(cp.lastError.hook)}</b>에서 오류가 나서 그 부분을 건너뛰었어요: <code>${h(cp.lastError.msg)}</code><br>리롤하면 오류 내용을 고려해 다시 코딩해요. 끄고 켜면 표시가 지워져요.</div>` : ''}
     ${cp.code ? `<details class="bt-cp-det"><summary class="sd-hint">실행 코드 보기</summary><pre class="bt-pre bt-cp-pre">${h(cp.code)}</pre></details>` : ''}
   </div>`;
 }
@@ -1042,7 +1043,7 @@ function rulesTab(s) {
         ${bf.storyteller ? `<details class="bt-note"><summary>메인 모델에 상시로 주는 메모</summary><pre class="bt-pre">${h(bf.storyteller)}</pre></details>` : ''}
         <div class="sd-hint">만든 시각: ${new Date(s.brief.at).toLocaleString()}</div>`
         : '<div class="bt-note">아직 없어요. 만들어 두면 시트 등급·속성 판단이 정확해지고 상시 프롬프트가 가벼워져요.</div>'}
-      <div class="bt-row"><button class="menu_button" data-act="setup" ${busy ? 'disabled' : ''}>${bf ? '기초 설정 다시 만들기' : '기초 설정 만들기'}</button></div></div>`;
+      <div class="bt-row"><button class="menu_button bt-send" data-act="setup" ${busy ? 'disabled' : ''}>${bf ? '기초 설정 다시 만들기' : '기초 설정 만들기'}</button></div></div>`;
   return `${briefBox}<div class="bt-section">
       <div class="bt-fname">${h(p.name)} ${s.profile ? '' : '<small>(기본값)</small>'}</div>
       <div class="bt-note">스탯: ${p.stats.map(x => h(x.label && x.label !== x.key ? `${x.key}(${x.label})` : x.key)).join(', ')} · 체력 ${h(p.hpLabel)} · 자원 ${h(p.spLabel)}</div>
@@ -1083,7 +1084,7 @@ function codexTab(s) {
   // Newly registered first, so a fresh batch can be reviewed (reroll / delete) at a glance.
   const ordered = [...list.filter(e => fresh.has(e.id)), ...list.filter(e => !fresh.has(e.id))];
   return `<div class="bt-section">
-      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-scan" ${busy ? 'disabled' : ''}>${list.length ? '주요 인물 더 찾아서 등록' : '세계관에서 주요 인물 찾아서 등록'}</button><button class="menu_button" data-act="codex-new">＋ 직접 등록</button>
+      <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="cast-scan" ${busy ? 'disabled' : ''}>${list.length ? '주요 인물 더 찾아서 등록' : '세계관에서 주요 인물 찾아서 등록'}</button><button class="menu_button" data-act="codex-new">직접 등록</button><button class="menu_button" data-act="codex-import" title="내보낸 JSON 파일에서 캐릭터를 불러와요">불러오기</button>${list.length ? '<button class="menu_button" data-act="codex-export" data-v="" title="도감 전체를 JSON 파일로 저장해요">전체 내보내기</button>' : ''}
       ${tip(`보조모델이 페르소나·캐릭터 카드·로어북 인물 항목·최근 대화 ${api.settings().castScene ?? 20}개를 읽고 한 번에 ${api.settings().castBatch ?? 4}명까지 찾아 시트까지 바로 등록해요. 한 번 등록한 캐릭터는 이름만 나와도 이 스킬셋 그대로 등장하고, 성장은 채팅별로 기록돼요.`)}</div></div>
     ${freshPlayer}
     <div class="bt-section">${ordered.length ? ordered.map(e => {
@@ -1091,8 +1092,30 @@ function codexTab(s) {
       const grown = api.hasRoster(e);
       const isNew = fresh.has(e.id);
       return `<div class="bt-skillrow cx-row ${isNew ? 'cx-new' : ''}"><div class="bt-click cx-main" data-act="codex-open" data-v="${h(e.id)}">${isNew ? '<span class="cx-badge">NEW</span> ' : ''}<b>${h(e.name)}</b>${e.role ? ` <span class="cx-role">${ROLE[e.role] ?? h(e.role)}</span>` : ''} <small>[${h(sh.tier || '?')}] ${typesFor(sh, p.typeSystem).map(x => h(typeName(x, p.typeSystem))).join('/')} · 스킬 ${sh.skills.length}${e.locked ? ' · 잠금' : ''}${grown ? ' · 성장' : ''}${s.companions.some(c => c.codexId === e.id) ? ' · 동행' : ''}</small>${isNew && e.why ? `<div class="bt-note">${h(e.why)}</div>` : ''}</div>
-        <span class="cx-quick"><button class="menu_button" data-act="codex-reroll" data-v="${h(e.id)}" title="설명으로 다시 생성 (등급도 다시 판단)" ${busy || e.locked ? 'disabled' : ''}>리롤</button><button class="menu_button" data-act="codex-quickdel" data-v="${h(e.id)}" title="도감에서 삭제">✕</button></span></div>`;
-    }).join('') : '<div class="bt-empty">아직 등록된 캐릭터가 없어요.</div>'}</div>`;
+        <span class="cx-quick"><button class="menu_button" data-act="codex-reroll" data-v="${h(e.id)}" title="설명으로 다시 생성 (등급도 다시 판단)" ${busy || e.locked ? 'disabled' : ''}>리롤</button><button class="menu_button" data-act="codex-archive" data-v="${h(e.id)}" data-on="1" title="보관함으로 옮기기 (전투·프롬프트에서 빠지고, 언제든 되돌릴 수 있어요)">보관</button></span></div>`;
+    }).join('') : '<div class="bt-empty">아직 등록된 캐릭터가 없어요.</div>'}</div>${archiveList(p)}`;
+}
+
+/** Characters put away: out of fights and prompts, restorable at any time. */
+function archiveList(p) {
+  const gone = api.codexArchived?.() ?? [];
+  if (!gone.length) return '';
+  return `<details class="bt-section cx-archive" ${api.ui.cxArchiveOpen ? 'open' : ''}><summary data-act="cx-archive-toggle">보관함 <span class="cx-count">${gone.length}</span></summary>
+    <div class="sd-hint">보관한 캐릭터는 전투와 프롬프트에 나오지 않아요.</div>
+    ${gone.map(e => `<div class="bt-skillrow cx-row cx-off"><div class="cx-main"><b>${h(e.name)}</b> <small>[${h(e.sheet?.tier || '?')}] 스킬 ${(e.sheet?.skills ?? []).length}</small></div>
+      <span class="cx-quick"><button class="menu_button" data-act="codex-archive" data-v="${h(e.id)}" data-on="0">되돌리기</button><button class="menu_button" data-act="codex-export" data-v="${h(e.id)}">내보내기</button><button class="menu_button bt-danger" data-act="codex-purge" data-v="${h(e.id)}" title="완전히 삭제 (되돌릴 수 없음)">삭제</button></span></div>`).join('')}</details>`;
+}
+
+/** Earlier builds of one character (kept automatically whenever the sheet is replaced). */
+function versionList(entry, p) {
+  const vs = entry.versions ?? [];
+  if (!vs.length) return '';
+  const when = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  return `<details class="bt-section cx-versions"><summary>이전 버전 <span class="cx-count">${vs.length}</span></summary>
+    <div class="sd-hint">리롤·수정·불러오기로 시트가 바뀔 때마다 직전 버전을 최대 5개까지 남겨요. 되돌리면 지금 버전이 이 목록으로 들어가요.</div>
+    ${vs.map((v, i) => `<div class="bt-skillrow cx-row"><div class="cx-main"><b>${h(when(v.at))}</b> <small>[${h(v.sheet?.tier || '?')}] HP ${h(v.sheet?.maxHp ?? '?')}${v.sheet?.customPassive?.name ? ` · ${h(v.sheet.customPassive.name)}` : ''}</small>
+      <div class="bt-note">${(v.sheet?.skills ?? []).map(k => h(k.name)).join(', ') || '스킬 없음'}</div></div>
+      <span class="cx-quick"><button class="menu_button" data-act="codex-ver" data-v="${h(entry.id)}" data-i="${i}">이 버전으로</button></span></div>`).join('')}</details>`;
 }
 
 function codexEditor(s, p, id, list) {
@@ -1128,11 +1151,11 @@ function codexEditor(s, p, id, list) {
       <div class="bt-row bt-wrap"><button class="menu_button bt-send" data-act="codex-save" data-v="${h(entry.id)}">저장 (AI 없이)</button></div>
       <div class="bt-row bt-wrap pc-manage"><button class="menu_button" data-act="codex-lock" data-v="${h(entry.id)}" data-on="${entry.locked ? '0' : '1'}">${entry.locked ? '잠금 해제' : '잠금 (스토리 변경 차단)'}</button>
         ${grown ? `<button class="menu_button" data-act="codex-promote" data-v="${h(entry.id)}">성장 → 기본판</button><button class="menu_button" data-act="codex-reset" data-v="${h(entry.id)}">성장 초기화</button>` : ''}
-        <button class="menu_button bt-danger" data-act="codex-del" data-v="${h(entry.id)}">삭제</button></div>
+        <button class="menu_button" data-act="codex-export" data-v="${h(entry.id)}">내보내기</button><button class="menu_button" data-act="codex-archive" data-v="${h(entry.id)}" data-on="1" data-back="1">보관</button></div>
       <details><summary class="sd-hint">JSON 직접 수정</summary><textarea id="bt-cx-json" class="text_pole bt-json">${h(JSON.stringify(entry.sheet, null, 1))}</textarea><button class="menu_button" data-act="codex-json" data-v="${h(entry.id)}">저장</button></details></div>`;
   return `${back}${card}${editForm}${aiForm}${passiveBox(sh, entry.id, { mode, busy })}
     <div class="bt-section"><div class="bt-sub">기술 <small class="sd-hint">클릭하면 상세 보기</small></div>${skillView(sh.skills, p, `cx:${entry.id}`)}</div>
-    ${sh.desc && mode === 'view' ? `<div class="bt-section"><div class="sd-hint">${h(sh.desc)}</div></div>` : ''}`;
+    ${sh.desc && mode === 'view' ? `<div class="bt-section"><div class="sd-hint">${h(sh.desc)}</div></div>` : ''}${versionList(entry, p)}`;
 }
 
 /** Save the codex form as typed (no AI): name, rank, look, aliases, description. */
@@ -1302,6 +1325,17 @@ function onClick(e) {
     }
     case 'codex-del': if (confirm('도감에서 삭제할까요?')) { editing = null; api.deleteCodex(v); } return;
     case 'codex-sync': return api.syncCodex(v);
+    case 'cx-archive-toggle': api.ui.cxArchiveOpen = !api.ui.cxArchiveOpen; return;
+    case 'codex-archive': if (el.dataset.back) editing = null; return api.archiveCodex?.(v, el.dataset.on === '1');
+    case 'codex-purge': if (confirm('보관함에서 완전히 삭제할까요? 되돌릴 수 없어요.')) return api.deleteCodex(v); return;
+    case 'codex-ver': if (confirm('이 버전으로 되돌릴까요? 지금 버전은 이전 버전 목록에 남고, 이 채팅의 성장 기록은 지워져요.')) return api.restoreCodexVersion?.(v, Number(el.dataset.i)); return;
+    case 'codex-export': return api.exportCodex?.(v || null);
+    case 'codex-import': {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = '.json,application/json';
+      inp.addEventListener('change', async () => { const f = inp.files?.[0]; if (f) api.importCodex?.(await f.text()); });
+      return inp.click();
+    }
     case 'codex-lock': return api.lockCodex(v, el.dataset.on === '1');
     case 'preview-go': return api.confirmPreview();
     case 'preview-cancel': return api.cancelPreview();
@@ -1401,7 +1435,7 @@ export function renderCards(s, chat, settings) {
     root.dataset.btGo = '1';
     root.addEventListener('click', e => {
       const go = e.target.closest?.('[data-btgo]');
-      if (go) { e.stopPropagation(); go.disabled = true; go.textContent = '⏳ 전투 준비 중…'; api?.startFrom?.(Number(go.dataset.btgo), go.dataset.soft === '1'); return; }
+      if (go) { e.stopPropagation(); go.disabled = true; go.textContent = '전투 준비 중…'; api?.startFrom?.(Number(go.dataset.btgo), go.dataset.soft === '1'); return; }
       const x = e.target.closest?.('[data-btgo-x]');
       if (x) { dismissed.add(Number(x.dataset.btgoX)); x.closest('.bt-card')?.remove(); }
     });
@@ -1418,17 +1452,17 @@ export function renderCards(s, chat, settings) {
       const lines = eventLines(c.events, { lang: 'ko', showRolls: settings.showRolls });
       if (!lines.length) continue;
       const end = c.events.find(e => e.t === 'end');
-      text.insertAdjacentHTML('afterend', `<details class="bt-card" ${settings.cardsOpen ? 'open' : ''}><summary>🎲 ${c.turn}턴 판정${end ? ` — ${h(lines.at(-1).replace('★ ', ''))}` : ''}${c.via === 'aux' ? ' <small>(보조모델 해석)</small>' : ''}</summary><pre>${h(lines.slice(1).join('\n'))}</pre></details>`);
+      text.insertAdjacentHTML('afterend', `<details class="bt-card" ${settings.cardsOpen ? 'open' : ''}><summary>${c.turn}턴 판정${end ? ` — ${h(lines.at(-1).replace('★ ', ''))}` : ''}${c.via === 'aux' ? ' <small>(보조모델 해석)</small>' : ''}</summary><pre>${h(lines.slice(1).join('\n'))}</pre></details>`);
     } else if (!starts.has(i) && !(s.battle?.status === 'active') && m.extra?.battletale?.pending && !m.extra?.battletale?.origin?.length) {
-      text.insertAdjacentHTML('afterend', `<div class="bt-card bt-go"><button class="menu_button bt-go-btn" data-btgo="${i}">⚔️ 전투 시작</button><small>${h(m.extra.battletale.pending.hint || '메인 모델이 전투 신호를 보냈어요')}</small></div>`);
+      text.insertAdjacentHTML('afterend', `<div class="bt-card bt-go"><button class="menu_button bt-go-btn" data-btgo="${i}">전투 시작</button><small>${h(m.extra.battletale.pending.hint || '메인 모델이 전투 신호를 보냈어요')}</small></div>`);
     } else if (!starts.has(i) && settings.suggestStart && !(s.battle?.status === 'active') && i === lastAi && !m.extra?.battletale?.origin?.length && !dismissed.has(i) && dangerScore(m.mes) >= 2) {
-      text.insertAdjacentHTML('afterend', `<div class="bt-card bt-go soft"><button class="menu_button bt-go-btn" data-btgo="${i}" data-soft="1">⚔️ 여기서 전투 시작?</button><small>위험한 장면 같아요 (신호 없음)</small><button class="bt-go-x" data-btgo-x="${i}" title="숨기기">✕</button></div>`);
+      text.insertAdjacentHTML('afterend', `<div class="bt-card bt-go soft"><button class="menu_button bt-go-btn" data-btgo="${i}" data-soft="1">여기서 전투 시작?</button><small>위험한 장면 같아요 (신호 없음)</small><button class="bt-go-x" data-btgo-x="${i}" title="숨기기">✕</button></div>`);
     } else if (starts.has(i)) {
       const b = starts.get(i);
       const M = modeOf(b.mode);
       const foes = M.enemiesOf(b.st).map(f => `${f.name}${f.tier ? `[${f.tier}]` : ''}${f.threat !== 'normal' ? ` ${THREAT_KO[f.threat]}` : ''}`).join(', ');
       const threat = THREAT_LABEL[b.threat?.level];
-      text.insertAdjacentHTML('afterend', `<div class="bt-card bt-start">${M.icon} <b>${h(M.ko)} 개시</b> — ${h(foes)} <small>(${threat ? `위협도 ${threat}` : ''}${b.status !== 'active' ? ' · 종료' : ''})</small></div>`);
+      text.insertAdjacentHTML('afterend', `<div class="bt-card bt-start"><b>${h(M.ko)} 개시</b> — ${h(foes)} <small>(${threat ? `위협도 ${threat}` : ''}${b.status !== 'active' ? ' · 종료' : ''})</small></div>`);
     }
   }
 }
@@ -1436,10 +1470,10 @@ export function renderCards(s, chat, settings) {
 /* ---------------- Settings drawer ---------------- */
 export function settingsHtml() {
   return `<div class="battletale-settings"><div class="inline-drawer">
-  <div class="inline-drawer-toggle inline-drawer-header"><b>⚔️ BattleTale — 턴제 전투 엔진</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+  <div class="inline-drawer-toggle inline-drawer-header"><b>BattleTale — 턴제 전투 엔진</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
   <div class="inline-drawer-content">
     <label class="checkbox_label"><input type="checkbox" id="bt_enabled"> 사용 (모든 채팅·모든 봇)</label>
-    <div class="bt-note">보조모델(연결 프로필·커스텀 모델)과 나머지 설정은 BattleTale 패널의 ⚙ 버튼에서 바꿔요.</div>
-    <button class="menu_button" id="bt_open_settings">⚙️ BattleTale 설정 열기</button>
+    <div class="bt-note">보조모델(연결 프로필·커스텀 모델)과 나머지 설정은 BattleTale 패널의 톱니 버튼에서 바꿔요.</div>
+    <button class="menu_button" id="bt_open_settings">BattleTale 설정 열기</button>
   </div></div></div>`;
 }

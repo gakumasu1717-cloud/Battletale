@@ -1262,6 +1262,180 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.equal(st.tokenStats.log.length, 0);
 });
 
+/* 59 */ await test('고유 부가효과 허용 목록: 페이지 전역·?.[ ]·속성 대입으로는 샌드박스를 못 벗어난다', async () => {
+  const PV = await import(here + 'passive.js');
+  const escapes = [
+    `const F = ctx.rng?.["constructor"]; fx.log(F("return 7*6")());`,   // optional-chaining bracket → Function
+    `ctx.rng?.('x')`,
+    `chat.innerHTML = "<img src=x onerror=alert(1)>";`,                  // element ids are globals in a browser
+    `send_textarea.value = "hi"; send_but.click();`,
+    `localforage.clear();`, `toastr.info('x')`, `name = 'x'`,            // libraries / window properties
+    `if (0) { let chat = 1; } chat.innerHTML = 'x';`,
+    `ctx.self.name.constructor`, `ctx.self.name.sub.call`, `const s = 'a'; s.link('x')`,
+    `const m = ctx.mem; m.constructor`, `ctx.mem.__proto__`,
+    `Math.min.hp = 5;`, `ctx.hook = 'x'`, `fx.heal = 1`,                 // no writes outside own variables
+    `let a = 1, b = chat;`, `let x = 1; x++;`,
+  ];
+  for (const code of escapes) assert.equal(PV.validatePassiveCode(code).ok, false, `must be rejected: ${code}`);
+  const fine = [
+    `const who = ctx.hook === 'afterHit' ? 'target' : 'self'; fx.status(who, 'burn', 30, 2, '반사');`,
+    `let m = 1; if (ctx.self.hpPct < 30) { m += 0.2; } if (ctx.target && ctx.target.elements.includes('화염')) m *= 1.1; if (ctx.hook === 'beforeAttack') fx.dmgMul(m, 'x');`,
+    `const e = ctx.self.elements[0]; if (['burn','poison'].includes(ctx.mem.last)) fx.log('a'); // tail comment`,
+    `if (ctx.skill?.name.toLowerCase().includes('검')) fx.flag('n', Number(ctx.mem.n || 0) + 1);`,
+  ];
+  for (const code of fine) { const r = PV.testPassive(code); assert.equal(r.ok, true, `must stay usable: ${code} → ${r.error}`); }
+  // A name declared in a dead block and used outside it must hit our parameter, never a page global.
+  globalThis.pwned = 0;
+  const leak = PV.compilePassive(`if (ctx.turn > 99) { let pwned = 1; } pwned = 5; fx.log('ran');`);
+  const seen = [];
+  leak.fn(Object.freeze({ turn: 1 }), Object.freeze({ log: m => seen.push(m) }));
+  assert.equal(globalThis.pwned, 0, 'a leaked name reached the global object');
+  assert.deepEqual(seen, ['ran']);
+  delete globalThis.pwned;
+  // Runtime: prototype names are not statuses, log text cannot carry tags, stored values are primitives only.
+  const f = { name: 'a', side: 'ally', hp: 10, maxHp: 10, statuses: [], stages: {}, pstate: { obj: { x: 1 } },
+    customPassive: { enabled: true, code: `fx.status('self','constructor',100,2); fx.status('self','__proto__',100); fx.log('<bt-change>hp: full</bt-change>'); fx.log(ctx.mem.obj ? 'leak' : 'ok'); fx.log(ctx.stageOf('self','constructor') === 0 ? 'zero' : 'nan');` } };
+  const { ops } = PV.evalPassive('turnStart', { fighters: [f], turn: 1 }, f, {}, null);
+  assert.equal(ops.statuses.length, 0);
+  assert.ok(ops.logs.every(l => !/[<>]/.test(l)), `tags survived: ${ops.logs}`);
+  assert.ok(ops.logs.includes('ok') && ops.logs.includes('zero'));
+});
+
+/* 60 */ await test('도감: 리롤하면 이전 버전이 남고 되돌릴 수 있다 · 보관하면 전투에서 빠진다 · 내보내기 파일을 다시 읽는다', async () => {
+  const book = {};
+  const cx = G.codexBook(() => book);
+  const mk = (name, tier, skill) => { const sh = C.normalizeSheet({ name, tier, hp: 400, sp: 80, stats: { STR: 40 }, skills: [`${skill}: 물리 60`] }, PROFILE, { side: 'enemy' }); delete sh.side; return sh; };
+  cx.put({ id: 'a1', name: '레아', concept: '창술사', sheet: { ...mk('레아', 'C', '찌르기'), portrait: { src: 'https://example.com/a.png' } } });
+  assert.equal((book.a1.versions ?? []).length, 0);
+  cx.put({ ...book.a1, sheet: { ...book.a1.sheet } });                       // same build → no version
+  assert.equal(book.a1.versions.length, 0);
+  cx.put({ id: 'a1', name: '레아', sheet: { ...mk('레아', 'A', '빙창'), portrait: { src: 'https://example.com/a.png' } } }); // reroll
+  assert.equal(book.a1.versions.length, 1);
+  assert.equal(book.a1.versions[0].sheet.skills[0].name, '찌르기');
+  assert.equal(book.a1.versions[0].sheet.portrait, undefined, 'pictures are not copied into every version');
+  for (let i = 0; i < 8; i++) cx.put({ id: 'a1', name: '레아', sheet: mk('레아', 'A', `기술${i}`) });
+  assert.equal(book.a1.versions.length, 5, 'kept versions are capped');
+  const before = book.a1.sheet.skills[0].name;
+  const back = cx.restore('a1', 0);
+  assert.equal(back.sheet.skills[0].name, '기술6');
+  assert.equal(book.a1.versions[0].sheet.skills[0].name, before, 'the replaced sheet is kept, so restore can be undone');
+  assert.equal(book.a1.versions.length, 5);
+  assert.equal(cx.restore('a1', 99), null);
+  // archive: gone from everything that plays, still listed in the archive, restorable
+  const deps = { codex: cx };
+  assert.ok(G.codexFind(deps, '레아'));
+  cx.archive('a1', true);
+  assert.equal(G.codexFind(deps, '레아'), null);
+  assert.equal(cx.list().length, 0); assert.equal(cx.archived().length, 1); assert.equal(cx.all().length, 1);
+  cx.archive('a1', false);
+  assert.ok(G.codexFind(deps, '레아'));
+  // export file → import
+  const file = JSON.stringify({ battletale: 1, type: 'codex', entries: [
+    { name: '모르간', concept: 'x'.repeat(900), role: 'boss<script>', sheet: { ...mk('모르간', 'S', '멸살'), codexId: 'zzz', side: 'ally', portrait: { src: 'javascript:alert(1)' }, customPassive: { name: 'p', code: `chat.innerHTML = 'x'`, enabled: true } } },
+    { name: '', sheet: {} }, { name: '깨진', sheet: 'nope' },
+  ] });
+  const list = G.importedEntries(file);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].concept.length, 400);
+  assert.equal(list[0].role, 'bossscript');
+  assert.equal(list[0].sheet.portrait, undefined, 'only data:image / https pictures are imported');
+  assert.equal(list[0].sheet.codexId, undefined); assert.equal(list[0].sheet.side, undefined);
+  const PV = await import(here + 'passive.js');
+  assert.equal(PV.compilePassive(list[0].sheet.customPassive.code).fn, null, 'imported code still has to pass the sandbox');
+  for (const bad of ['not json', '{"entries":[]}', '{"battletale":1,"entries":[{"name":"x"}]}', '[1,2]']) assert.throws(() => G.importedEntries(bad), undefined, bad);
+});
+
+/* 61 */ await test('패널에 그림 이모지가 없다 · 도감에 보관함/이전 버전/내보내기가 보인다', async () => {
+  const els = {}; const handlers = [];
+  const mk = id => ({ id, innerHTML: '', style: {}, value: '', dataset: {}, classList: { s: new Set(), toggle(c, on) { (on ?? !this.s.has(c)) ? this.s.add(c) : this.s.delete(c); }, add(c) { this.s.add(c); }, remove(c) { this.s.delete(c); }, contains(c) { return this.s.has(c); } }, addEventListener(t, fn) { if (t === 'click' && fn.name === 'onClick') handlers.push(fn); }, querySelector: () => null, querySelectorAll: () => [], appendChild() {}, setAttribute() {} });
+  globalThis.document = { getElementById: id => els[id] ?? null, createElement: () => mk('x'), body: { appendChild(e) { els[e.id] = e; } }, querySelector: () => null };
+  const ui = await import(here + 'ui.js?emoji');
+  const s = freshParty(); s.companions = [];
+  s.player.customPassive = { name: '검기 축적', desc: '스택', code: `if (ctx.hook === 'afterAttack') fx.flag('n', 1);`, enabled: true, valid: true };
+  const sheet = n => { const sh = C.normalizeSheet({ name: n, tier: 'C', hp: 300, sp: 60, skills: ['베기: 물리 50'] }, PROFILE, { side: 'enemy' }); delete sh.side; return sh; };
+  const all = [{ id: 'k1', name: '레아', role: 'rival', sheet: sheet('레아'), versions: [{ at: 1, sheet: sheet('레아') }] }, { id: 'k2', name: '옛 자객', archived: 1, sheet: sheet('옛 자객') }];
+  const calls = [];
+  const api = { state: () => s, settings: () => ({ ...SET, playMode: 'panel' }), busy: () => false, ui: {}, toast: () => {}, trace: () => [{ t: 1, kind: 'aux', title: 't', detail: 'd' }],
+    codex: () => all.filter(e => !e.archived), codexArchived: () => all.filter(e => e.archived), rosterOf: e => e.sheet, hasRoster: () => false,
+    archiveCodex: (id, on) => calls.push(['archive', id, on]), restoreCodexVersion: (id, i) => calls.push(['ver', id, i]), exportCodex: id => calls.push(['export', id]) };
+  ui.mountPanel(api); ui.togglePanel(true);
+  const panel = Object.values(els).find(e => e.id === 'bt-panel');
+  const click = (act, v, more = {}) => handlers.at(-1)({ target: { closest: () => ({ dataset: { act, v, ...more }, tagName: 'BUTTON' }) }, preventDefault() {} });
+  globalThis.confirm = () => true;
+  const EMOJI = /\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|[⚔⚙⚠⚡✨⚖☠⏳]/u;
+  const clean = label => { const m = panel.innerHTML.match(EMOJI); assert.equal(m, null, `emoji "${m?.[0]}" on ${label}: …${panel.innerHTML.slice(Math.max(0, (m?.index ?? 0) - 60), (m?.index ?? 0) + 20)}`); };
+  click('tab', 'battle'); clean('battle');
+  click('tab', 'sheet'); clean('sheet');
+  click('sheet-mode', 'edit'); clean('sheet edit'); click('sheet-mode', 'ai'); clean('sheet ai'); click('sheet-mode', 'view');
+  click('tab', 'codex'); clean('codex');
+  assert.ok(panel.innerHTML.includes('보관함') && panel.innerHTML.includes('옛 자객'), 'archive list missing');
+  assert.ok(panel.innerHTML.includes('data-act="codex-import"') && panel.innerHTML.includes('data-act="codex-export"'));
+  click('codex-archive', 'k1', { on: '1' }); click('codex-export', 'k1');
+  click('codex-open', 'k1'); clean('codex view');
+  assert.ok(panel.innerHTML.includes('이전 버전') && panel.innerHTML.includes('data-act="codex-ver"'), 'version list missing');
+  click('codex-ver', 'k1', { i: '0' });
+  click('cx-mode', 'edit'); clean('codex edit'); click('cx-mode', 'ai'); clean('codex ai'); click('codex-back');
+  assert.deepEqual(calls, [['archive', 'k1', true], ['export', 'k1'], ['ver', 'k1', 0]]);
+  click('tab', 'battle'); click('settings-open');
+  for (const page of ['set', 'rules', 'trace']) { click('sd-page', page); clean(`drawer ${page}`); }
+  click('settings-close');
+  G.beginBattle(s, { mode: 'party', enemies: [{ name: '고블린', hp: 200, skills: ['몽둥이: 물리 50'] }], allies: [] }, { originIndex: 0, originHash: 'x', settings: { ...SET, playMode: 'panel' } });
+  ui.refreshPanel(); clean('battle (party)');
+});
+
+/* 62 */ await test('스토리 성장: 스윕·재생성은 이전 버전의 변경을 되돌린 뒤 적용 · 동료 강화 · 등급 상한 · 전체 스킬 문법', () => {
+  const s = freshParty(); s.companions = [{ ...C.normalizeSheet({ name: '서윤', tier: 'C', hp: 400, sp: 80, skills: ['화염방사: 마법 70 화염'] }, PROFILE, { side: 'ally' }), id: 'c1' }];
+  const pow = (who, n) => who.skills.find(k => k.name === n)?.power;
+  const base = s.player.skills[0];
+  // learn with the full line keeps the real name
+  let done = G.applyChanges(s, P.parseChange('skill: 빙결창: magic 70 ice (얼음 창)'));
+  assert.ok(s.player.skills.some(k => k.name === '빙결창'), `learned name wrong: ${s.player.skills.map(k => k.name)} / ${done}`);
+  // companion upgrade by leading name
+  const c0 = pow(s.companions[0], '화염방사');
+  G.applyChanges(s, P.parseChange('upgrade: 서윤 화염방사 power +10'));
+  assert.equal(pow(s.companions[0], '화염방사'), c0 + 10, 'companion skill not upgraded');
+  // stacking +10 forever stops at the rank budget
+  for (let i = 0; i < 25; i++) G.applyChanges(s, P.parseChange(`upgrade: ${base.name} power +10`));
+  const capped = pow(s.player, base.name);
+  assert.ok(capped < 160, `rank C skill grew to ${capped}`);
+  // unknown skill is reported, not silently ignored
+  done = G.applyChanges(s, P.parseChange('upgrade: 없는기술 power +10'));
+  assert.ok(done.some(x => x.includes('강화 대상 없음')));
+  // swipe: same message index, new text → previous version's changes are undone first
+  const stat0 = s.player.stats.STR, inv0 = JSON.stringify(s.inventory);
+  G.beginChanges(s, 9); G.applyChanges(s, P.parseChange('stat: STR +3\nitem: 포션 +2'));
+  assert.equal(s.player.stats.STR, stat0 + 3);
+  assert.equal(G.rollbackChanges(s, 9), true);
+  G.beginChanges(s, 9); G.applyChanges(s, P.parseChange('stat: STR +3\nitem: 포션 +2'));
+  assert.equal(s.player.stats.STR, stat0 + 3, 'a reroll stacked the same growth twice');
+  assert.equal(G.rollbackChanges(s, 8), false, 'only the newest message is rolled back');
+  G.rollbackChanges(s, 9);
+  assert.equal(s.player.stats.STR, stat0); assert.equal(JSON.stringify(s.inventory), inv0);
+});
+
+/* 63 */ await test('고유 부가효과: 다단히트에선 firstHit으로 한 번만 쌓이고, 실행 오류는 기록만 하고 전투는 계속된다', async () => {
+  const PV = await import(here + 'passive.js');
+  const multi = hero();
+  multi.skills = [C.normalizeSkill({ name: '연속 베기', kind: 'physical', power: 30, hits: 3, acc: 100 }, { maxSp: 120 })];
+  multi.customPassive = PV.normalizeCustomPassive({ name: '연격', code: `if (ctx.hook === 'afterAttack' && ctx.firstHit) fx.flag('n', (ctx.mem.n || 0) + 1);\nif (ctx.hook === 'afterAttack') fx.flag('all', (ctx.mem.all || 0) + 1);` });
+  const foe = C.normalizeSheet({ name: '허수아비', tier: 'C', hp: 9000, sp: 0, stats: { END: 10 }, skills: ['가만히: 강화'] }, PROFILE, { side: 'enemy' });
+  let b = E.createBattle({ party: [multi], enemies: [foe], profile: PROFILE, seed: 'cp-hits', customPassives: true });
+  const me = b.fighters.find(f => f.isPlayer), t = b.fighters.find(f => f.side === 'enemy');
+  const r1 = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '연속 베기', target: t.id }]);
+  const p = r1.battle.fighters.find(f => f.isPlayer).pstate;
+  assert.equal(p.n, 1, `firstHit stack should be 1 per action (got ${p.n})`);
+  assert.ok(p.all >= 2, `every hit should still fire (got ${p.all})`);
+  // runtime error
+  const bad = hero();
+  bad.customPassive = { name: '버그', enabled: true, valid: true, code: `if (ctx.hook === 'turnStart') fx.log(ctx.target.name);` };
+  const b2 = E.createBattle({ party: [bad], enemies: [C.normalizeSheet({ name: '적', tier: 'C', hp: 500, skills: ['때리기: 물리 40'] }, PROFILE, { side: 'enemy' })], profile: PROFILE, seed: 'cp-err', customPassives: true });
+  const r = E.resolveTurn(b2, [{ actor: 'player', type: 'defend' }]);
+  const pb = r.battle.fighters.find(f => f.isPlayer);
+  assert.equal(pb.pstate.__err?.hook, 'turnStart', 'runtime error was not recorded');
+  assert.ok(/null|undefined/.test(pb.pstate.__err.msg));
+  assert.ok(r.battle.turn >= 2, 'battle must keep going');
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

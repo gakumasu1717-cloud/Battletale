@@ -29,16 +29,16 @@ function intentShort(b, f) {
   const to = tgt && lvl >= 1 ? ` ${nm(tgt.name)}` : '';
   const num = lvl >= 2 && est ? ` ~${est}` : '';
   switch (it.type) {
-    case 'surprised': return '😵 무방비';
-    case 'stagger': return '💫 비틀';
-    case 'charge': return `⚡ 충전${to}`;
-    case 'release': { const thr = f.charging ? f.charging.threshold - f.charging.taken : null; return `⚡⚡${to}${num}${thr ? ` ⛔${thr}` : ''}`; }
-    case 'defend': return '🛡 방어';
+    case 'surprised': return '무방비';
+    case 'stagger': return '비틀';
+    case 'charge': return `충전${to}`;
+    case 'release': { const thr = f.charging ? f.charging.threshold - f.charging.taken : null; return `발동${to}${num}${thr ? ` · 저지 ${thr}` : ''}`; }
+    case 'defend': return '방어';
     case 'swap': return '↔ 이동';
-    case 'attack': return `🗡${to}${num}`;
+    case 'attack': return `공격${to}${num}`;
     case 'skill': {
       const k = sk?.kind ?? 'physical';
-      const icon = { heal: '✚', buff: '✨', debuff: '☠', guard: '🛡' }[k] ?? '🗡';
+      const icon = { heal: '회복', buff: '강화', debuff: '방해', guard: '방어' }[k] ?? '기술';
       return lvl === 0 ? `${icon} ?` : `${icon}${to}${num}`;
     }
     default: return '';
@@ -56,20 +56,20 @@ function intentOf(b, f, lang = 'ko') {
   const to = tgt && lvl >= 1 ? (ko ? ` → ${tgt.name}` : ` at ${tgt.name}`) : '';
   const num = lvl >= 2 && est ? (ko ? ` (~${est})` : ` (~${est} dmg)`) : '';
   switch (it.type) {
-    case 'surprised': return ko ? '😵 기습당해 대응 불가' : 'caught off guard, cannot act this turn';
-    case 'stagger': return ko ? '💫 비틀거림 (행동 불가)' : 'staggered, cannot act this turn';
-    case 'charge': return ko ? `⚡ 충전 시작: ${lvl >= 1 ? `「${it.skill}」` : '강력한 기술'}${to} — 다음 턴 발동` : `begins charging ${lvl >= 1 ? `"${it.skill}"` : 'a powerful technique'}${to}; it fires next turn unless broken`;
+    case 'surprised': return ko ? '기습당해 대응 불가' : 'caught off guard, cannot act this turn';
+    case 'stagger': return ko ? '비틀거림 (행동 불가)' : 'staggered, cannot act this turn';
+    case 'charge': return ko ? `충전 시작: ${lvl >= 1 ? `「${it.skill}」` : '강력한 기술'}${to} — 다음 턴 발동` : `begins charging ${lvl >= 1 ? `"${it.skill}"` : 'a powerful technique'}${to}; it fires next turn unless broken`;
     case 'release': {
       const thr = f.charging ? f.charging.threshold - f.charging.taken : null;
-      return ko ? `⚡⚡ 「${it.skill}」 발동!${to}${num}${thr ? ` · ${thr} 이상 피해/기절로 차단` : ''}` : `UNLEASHES the charged "${it.skill}"${to}${num}${thr ? `; dealing ${thr}+ damage or stunning it first will break it` : ''}`;
+      return ko ? `「${it.skill}」 발동!${to}${num}${thr ? ` · ${thr} 이상 피해/기절로 차단` : ''}` : `UNLEASHES the charged "${it.skill}"${to}${num}${thr ? `; dealing ${thr}+ damage or stunning it first will break it` : ''}`;
     }
-    case 'defend': return ko ? '🛡️ 방어 태세' : 'will defend';
+    case 'defend': return ko ? '방어 태세' : 'will defend';
     case 'swap': return ko ? '↔ 위치 이동' : 'will change position';
-    case 'attack': return lvl >= 1 ? (ko ? `🗡️ 공격${to}${num}` : `basic attack${to}${num}`) : (ko ? '🗡️ 공격 준비' : 'preparing to attack');
+    case 'attack': return lvl >= 1 ? (ko ? `공격${to}${num}` : `basic attack${to}${num}`) : (ko ? '공격 준비' : 'preparing to attack');
     case 'skill': {
       const k = sk?.kind ?? 'physical';
-      if (lvl === 0) return ko ? ({ heal: '✚ 회복 준비', buff: '✨ 무언가 준비', debuff: '☠ 방해 준비', guard: '🛡️ 방어 준비' }[k] ?? '🗡️ 공격 준비') : ({ heal: 'preparing to heal', buff: 'preparing something', debuff: 'preparing a hindrance' }[k] ?? 'preparing to attack');
-      return ko ? `${{ heal: '✚', buff: '✨', debuff: '☠', guard: '🛡️' }[k] ?? '🗡️'} 「${it.skill}」${to}${num}` : `"${it.skill}"${to}${num}`;
+      if (lvl === 0) return ko ? ({ heal: '✚ 회복 준비', buff: '무언가 준비', debuff: '방해 준비', guard: '방어 준비' }[k] ?? '공격 준비') : ({ heal: 'preparing to heal', buff: 'preparing something', debuff: 'preparing a hindrance' }[k] ?? 'preparing to attack');
+      return ko ? `${{ heal: '회복', buff: '강화', debuff: '방해', guard: '방어' }[k] ?? '기술'} 「${it.skill}」${to}${num}` : `"${it.skill}"${to}${num}`;
     }
     default: return null;
   }
@@ -83,11 +83,11 @@ function statusLine(f, profile, lang) {
   const sp = f.side === 'ally' ? `, ${profile.spLabel} ${f.sp}/${f.maxSp}` : '';
   const sts = f.statuses?.map(s => `${ko ? STATUS[s.id]?.ko : STATUS[s.id]?.en}(${s.turns})`).join(' ');
   const row = ko ? (f.row === 'back' ? '후열' : '전열') : f.row;
-  return `${f.name}${f.tier ? ` [${f.tier}]` : ''} <${row}>: ${state ?? `${hp}${sp}`}${sts ? ` | ${sts}` : ''}${f.charging ? (ko ? ' | ⚡충전 중' : ' | CHARGING') : ''}`;
+  return `${f.name}${f.tier ? ` [${f.tier}]` : ''} <${row}>: ${state ?? `${hp}${sp}`}${sts ? ` | ${sts}` : ''}${f.charging ? (ko ? ' | 충전 중' : ' | CHARGING') : ''}`;
 }
 
 export default {
-  id: 'party', ko: '파티 턴제', icon: '⚔️',
+  id: 'party', ko: '파티 턴제', icon: '',
 
   create({ spec, profile, party, allies, enemies, seed, settings }) {
     const b = E.createBattle({ party, allies, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, dealMul: settings.dealMul ?? 1, takeMul: settings.takeMul ?? 1, customPassives: settings.customPassives !== false });
@@ -217,8 +217,8 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     if (sk && ['physical', 'magic'].includes(sk.kind)) {
       const foe = E.findFighter(b, cmd.target, { side: 'enemy' }) ?? b.fighters.find(f => f.side === 'enemy' && E.active(f));
       const ratio = foe ? E.stat(actor, 'acc') / Math.max(1, E.stat(foe, 'eva')) : 1;
-      steps.push({ key: 'attack', label: `🗡️ 「${sk.name}」 공격 타이밍`, beats: clamp(sk.hits, 1, 4), ...timingFor(ratio) });
-    } else if (cmd.type === 'improvise') steps.push({ key: 'attack', label: '✨ 즉흥 행동 타이밍', beats: 1, ...timingFor(1) });
+      steps.push({ key: 'attack', label: `「${sk.name}」 공격 타이밍`, beats: clamp(sk.hits, 1, 4), ...timingFor(ratio) });
+    } else if (cmd.type === 'improvise') steps.push({ key: 'attack', label: '즉흥 행동 타이밍', beats: 1, ...timingFor(1) });
     // React to every announced attack aimed at this character (max 3).
     let n = 0;
     for (const f of b.fighters.filter(x => x.side === 'enemy' && E.active(x))) {
@@ -230,7 +230,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
       if (n++ >= 3) break;
       const ratio = E.stat(actor, 'spd') / Math.max(1, E.stat(f, 'spd'));
       const fast = it.type === 'release' ? { speed: 0.75, zone: 0.16 } : {};
-      steps.push({ key: `def:${f.id}`, label: `🛡️ ${f.name}의 ${it.type === 'attack' ? '공격' : `「${it.skill}」`} 패링`, beats: 1, ...timingFor(ratio, fast) });
+      steps.push({ key: `def:${f.id}`, label: `${f.name}의 ${it.type === 'attack' ? '공격' : `「${it.skill}」`} 패링`, beats: 1, ...timingFor(ratio, fast) });
     }
     return steps;
   },
@@ -291,7 +291,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     const skills = actor && E.active(actor) ? actor.skills.map(k => {
       const cd = actor.cds?.[k.name] ?? 0;
       const off = k.cost > actor.sp || cd > 0 || busy || !!(k.once && actor.used?.[k.name]);
-      return `<button class="bt-skill ${k.kind}" data-act="m:skill" data-v="${h(k.name)}" ${off ? 'disabled' : ''} title="${h(k.desc || '')}"><b>${h(k.name)}</b><small>${k.element && !['none', 'physical'].includes(k.element) ? `${h(typeName(k.element, b.typeSystem))} · ` : ''}${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''} · ${k.range === 'melee' ? '근접' : '원거리'} · ${TARGET_KO[k.target] ?? ''} · ${k.cost}${h(profile.spLabel)}${cd ? ` · ⏳${cd}` : ''}</small></button>`;
+      return `<button class="bt-skill ${k.kind}" data-act="m:skill" data-v="${h(k.name)}" ${off ? 'disabled' : ''} title="${h(k.desc || '')}"><b>${h(k.name)}</b><small>${k.element && !['none', 'physical'].includes(k.element) ? `${h(typeName(k.element, b.typeSystem))} · ` : ''}${KIND_KO[k.kind] ?? k.kind}${k.power ? ` ${k.power}` : ''}${k.hits > 1 ? `×${k.hits}` : ''}${k.priority ? ` · 우선${k.priority > 0 ? '+' : ''}${k.priority}` : ''} · ${k.range === 'melee' ? '근접' : '원거리'} · ${TARGET_KO[k.target] ?? ''} · ${k.cost}${h(profile.spLabel)}${cd ? ` · 대기 ${cd}` : ''}</small></button>`;
     }).join('') : '<div class="bt-note">행동할 수 있는 캐릭터가 없어요.</div>';
     const items = (inventory ?? []).filter(i => i.count > 0);
     const dis = busy ? 'disabled' : '';
@@ -302,14 +302,14 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
           <label>대상<select data-act="m:target-select">${b.fighters.filter(E.active).map(f => `<option ${f.name === target ? 'selected' : ''}>${h(f.name)}</option>`).join('')}</select></label></div>
         <div class="bt-skills">${skills}</div>
         <div class="bt-row bt-wrap">
-          <button class="menu_button" data-act="m:basic" ${dis}>🗡️ 공격</button>
-          <button class="menu_button" data-act="m:defend" ${dis}>🛡️ 방어</button>
-          <button class="menu_button" data-act="m:scan" ${dis}>🔍 관찰</button>
+          <button class="menu_button" data-act="m:basic" ${dis}>공격</button>
+          <button class="menu_button" data-act="m:defend" ${dis}>방어</button>
+          <button class="menu_button" data-act="m:scan" ${dis}>관찰</button>
           <button class="menu_button" data-act="m:swap" ${dis}>↔ ${actor?.row === 'back' ? '전열로' : '후열로'}</button>
-          <button class="menu_button" data-act="m:flee" ${busy || !b.flee ? 'disabled' : ''}>🏃 도주</button>
+          <button class="menu_button" data-act="m:flee" ${busy || !b.flee ? 'disabled' : ''}>도주</button>
         </div>
-        ${items.length ? `<div class="bt-row"><select id="bt-item">${items.map(i => `<option value="${h(i.name)}">${h(i.name)} ×${i.count}${inferItem(i.name) || i.spec ? '' : ' (?)'}</option>`).join('')}</select><button class="menu_button" data-act="m:item" ${dis}>🎒 사용</button></div>` : ''}
-        <div class="bt-row"><input type="text" class="text_pole" id="bt-free" data-enter="m:free" placeholder="즉흥 행동 (예: 기둥을 무너뜨려 깔아뭉갠다)"><button class="menu_button" data-act="m:free" ${dis}>✨</button></div>
+        ${items.length ? `<div class="bt-row"><select id="bt-item">${items.map(i => `<option value="${h(i.name)}">${h(i.name)} ×${i.count}${inferItem(i.name) || i.spec ? '' : ' (?)'}</option>`).join('')}</select><button class="menu_button" data-act="m:item" ${dis}>사용</button></div>` : ''}
+        <div class="bt-row"><input type="text" class="text_pole" id="bt-free" data-enter="m:free" placeholder="즉흥 행동 (예: 기둥을 무너뜨려 깔아뭉갠다)"><button class="menu_button" data-act="m:free" ${dis}>자유 행동</button></div>
       </div>`;
   },
 
@@ -349,7 +349,7 @@ Melee skills only reach the enemy front row while it stands. "interrupt" = an at
     });
     const basic = E.basicAttack(actor, b.attackName);
     cards.push(skillCard({ ...basic, basic: true }, { sys, spLabel: sp, targets: reach(basic), act: 'm:basic', v: '' }));
-    cards.push({ name: '방어', cost: 0, type: 'normal', typeLabel: '', kind: 'guard', icon: '⛨', kindLabel: '방어', power: null, lines: ['받는 피해 ½', `${sp} +10%`], rarity: 'paper', act: 'm:defend', v: '', target: null });
+    cards.push({ name: '방어', cost: 0, type: 'normal', typeLabel: '', kind: 'guard', icon: '방', kindLabel: '방어', power: null, lines: ['받는 피해 ½', `${sp} +10%`], rarity: 'paper', act: 'm:defend', v: '', target: null });
     return cards;
   },
 

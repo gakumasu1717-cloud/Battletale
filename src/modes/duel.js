@@ -47,7 +47,7 @@ function tellOf(b, f, lang = 'ko') {
 }
 
 export default {
-  id: 'duel', ko: '1:1 대결', icon: '🤺',
+  id: 'duel', ko: '1:1 대결', icon: '',
 
   create({ spec, profile, party, enemies, seed, settings }) {
     const b = E.createBattle({ party, enemies, profile, seed, place: spec.place, flee: spec.flee, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title, terrain: spec.terrain, initiative: spec.initiative, format: 'singles', dealMul: settings.dealMul ?? 1, takeMul: settings.takeMul ?? 1, customPassives: settings.customPassives !== false });

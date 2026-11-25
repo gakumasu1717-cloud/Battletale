@@ -18,7 +18,6 @@ import { josa } from '../narrate.js';
 export const STANCES = ['strike', 'heavy', 'guard', 'evade', 'feint'];
 export const STANCE_KO = { strike: '빠른 공격', heavy: '강공', guard: '방어', evade: '회피', feint: '페인트', finisher: '결정타', open: '무방비' };
 const STANCE_EN = { strike: 'quick strike', heavy: 'heavy attack', guard: 'guard', evade: 'evade', feint: 'feint', finisher: 'finisher', open: 'no defense' };
-const STANCE_ICON = { strike: '⚡', heavy: '💥', guard: '🛡️', evade: '💨', feint: '🎭', finisher: '☠️' };
 const WORDS = {
   strike: ['strike', 'quick', '빠른공격', '빠른 공격', '공격', '찌르기', '견제', '잽'], heavy: ['heavy', 'power', '강공', '강타', '내려베기', '일격'],
   guard: ['guard', 'block', 'parry', '방어', '막기', '가드', '패링', '받아치기'], evade: ['evade', 'dodge', '회피', '피하기', '흘리기', '물러서기'],
@@ -96,7 +95,7 @@ function moveOf(st, f, a) {
 }
 
 export default {
-  id: 'mindgame', ko: '심리전 결투', icon: '🎭',
+  id: 'mindgame', ko: '심리전 결투', icon: '',
 
   create({ spec, profile, party, enemies, seed, settings }) {
     const mine = party[0];
@@ -269,7 +268,7 @@ Pick the stance the player's words describe (e.g. "I wait for his swing and turn
     const ratio = ['strike', 'heavy', 'finisher'].includes(mv.stance) ? E.stat(A, 'acc') / Math.max(1, E.stat(B, 'eva'))
       : mv.stance === 'feint' ? Math.max(E.stat(A, 'luk'), E.stat(A, 'mag')) / Math.max(1, E.stat(B, 'acc')) : E.stat(A, 'spd') / Math.max(1, E.stat(B, 'spd'));
     const fast = mv.stance === 'guard' ? { perfect: 0.05 } : mv.stance === 'heavy' ? { speed: 1.2 } : {};
-    return [{ key: 'action', label: `${STANCE_ICON[mv.stance] ?? '✨'} ${mv.name ?? STANCE_KO[mv.stance]} 타이밍`, beats: 1, ...timingFor(ratio, fast) }];
+    return [{ key: 'action', label: `${mv.name ?? STANCE_KO[mv.stance]} 타이밍`, beats: 1, ...timingFor(ratio, fast) }];
   },
 
   applyGrades(cmd, grades) { return grades?.action ? { ...cmd, grades: [].concat(grades.action) } : cmd; },
@@ -292,10 +291,10 @@ Pick the stance the player's words describe (e.g. "I wait for his swing and turn
       ${side === 'me' ? bar(f.sp, f.maxSp, 'sp', `${profile.spLabel} ${f.sp}/${f.maxSp}`) : ''}
       ${bar(st.posture[side], 100, 'posture', `체간 ${side === 'foe' && lvl === 0 ? '?' : Math.round(st.posture[side])}/100`, side === 'foe' && lvl === 0)}
       <div class="bt-chips">${f.statuses.map(s => `<span class="bt-chip bad">${h(STATUS[s.id]?.ko)} ${s.turns}</span>`).join('')}</div></div>`;
-    const tell = st.broken.foe ? '<div class="bt-intent release">☠️ 상대의 자세가 무너졌다 — 결정타 기회!</div>'
-      : st.tell ? `<div class="bt-intent">👁️ ${h(TELL_KO[st.tell.stance])} <small>(확신도 ${relKo(st.tell.rel)})</small></div>` : '';
+    const tell = st.broken.foe ? '<div class="bt-intent release">상대의 자세가 무너졌다 — 결정타 기회!</div>'
+      : st.tell ? `<div class="bt-intent">${h(TELL_KO[st.tell.stance])} <small>(확신도 ${relKo(st.tell.rel)})</small></div>` : '';
     const dis = busy ? 'disabled' : '';
-    const stanceBtns = STANCES.map(s => `<button class="bt-skill bt-stance-${s}" data-act="m:stance" data-v="${s}" ${dis}><b>${STANCE_ICON[s]} ${STANCE_KO[s]}</b><small>${{ strike: '강공·페인트에 강함', heavy: '방어 파괴', guard: '빠른 공격 차단·패링', evade: '강공 회피', feint: '방어·회피 유인' }[s]}</small></button>`).join('');
+    const stanceBtns = STANCES.map(s => `<button class="bt-skill bt-stance-${s}" data-act="m:stance" data-v="${s}" ${dis}><b>${STANCE_KO[s]}</b><small>${{ strike: '강공·페인트에 강함', heavy: '방어 파괴', guard: '빠른 공격 차단·패링', evade: '강공 회피', feint: '방어·회피 유인' }[s]}</small></button>`).join('');
     const techs = A.skills.filter(s => classOf(s)).map(s => {
       const off = s.cost > A.sp || (A.cds[s.name] ?? 0) > 0 || busy;
       return `<button class="bt-skill ${s.kind}" data-act="m:skill" data-v="${h(s.name)}" ${off ? 'disabled' : ''} title="${h(s.desc || '')}"><b>${h(s.name)}</b><small>${STANCE_KO[classOf(s)]}${s.power ? ` ${s.power}` : ''} · ${s.cost}${h(profile.spLabel)}</small></button>`;
@@ -304,19 +303,19 @@ Pick the stance the player's words describe (e.g. "I wait for his swing and turn
     return `<div class="bt-section">${card(B, 'foe')}${tell}${card(A, 'me')}</div>
       ${st.last ? `<div class="bt-note">지난 합: 나 ${STANCE_KO[st.last.a]} vs 상대 ${STANCE_KO[st.last.b]}</div>` : ''}
       <div class="bt-section bt-actions">
-        ${st.broken.foe ? `<button class="menu_button bt-wide bt-finisher" data-act="m:finisher" ${dis}>☠️ 결정타</button>` : ''}
+        ${st.broken.foe ? `<button class="menu_button bt-wide bt-finisher" data-act="m:finisher" ${dis}>결정타</button>` : ''}
         <div class="bt-skills">${stanceBtns}</div>
         ${techs ? `<div class="bt-sub">기술</div><div class="bt-skills">${techs}</div>` : ''}
-        <div class="bt-row bt-wrap">${items.length ? `<select id="bt-item">${items.map(i => `<option value="${h(i.name)}">${h(i.name)} ×${i.count}</option>`).join('')}</select><button class="menu_button" data-act="m:item" ${dis}>🎒</button>` : ''}
-          <button class="menu_button" data-act="m:flee" ${busy || !st.flee ? 'disabled' : ''}>🏃 이탈</button></div>
-        <div class="bt-row"><input type="text" class="text_pole" id="bt-free" data-enter="m:free" placeholder="즉흥 (예: 모래를 차올려 시야를 가린다)"><button class="menu_button" data-act="m:free" ${dis}>✨</button></div>
+        <div class="bt-row bt-wrap">${items.length ? `<select id="bt-item">${items.map(i => `<option value="${h(i.name)}">${h(i.name)} ×${i.count}</option>`).join('')}</select><button class="menu_button" data-act="m:item" ${dis}>가방</button>` : ''}
+          <button class="menu_button" data-act="m:flee" ${busy || !st.flee ? 'disabled' : ''}>이탈</button></div>
+        <div class="bt-row"><input type="text" class="text_pole" id="bt-free" data-enter="m:free" placeholder="즉흥 (예: 모래를 차올려 시야를 가린다)"><button class="menu_button" data-act="m:free" ${dis}>자유 행동</button></div>
       </div>`;
   },
 
   view(st, profile, ctx) {
     const A = me(st), B = foe(st), sys = st.b.typeSystem;
     const lvl = st.intel ?? 1;
-    const tell = st.broken.foe ? '☠ 자세 붕괴 — 결정타 기회!' : st.tell ? `👁 ${STANCE_KO[st.tell.stance]} 기색 (확신도 ${relKo(st.tell.rel)})` : '';
+    const tell = st.broken.foe ? '자세 붕괴 — 결정타 기회!' : st.tell ? `${STANCE_KO[st.tell.stance]} 기색 (확신도 ${relKo(st.tell.rel)})` : '';
     const foes = [vf(B, { side: 'enemy', intel: lvl, typeSystem: sys, note: tell, noteCls: st.broken.foe ? 'release' : 'tell', posture: lvl >= 1 ? st.posture.foe : null })];
     const allies = [vf(A, { side: 'ally', typeSystem: sys, posture: st.posture.me, note: st.broken.me ? '자세 붕괴!' : st.opened.me ? '빈틈!' : '' })];
     const idle = st.broken.foe ? `${josa(B.name, '의', '의')} 자세가 무너졌다! 지금이다!` : st.tell ? `${TELL_KO[st.tell.stance]}… ${josa(A.name, '은', '는')} 어떻게 할까?` : `${josa(A.name, '은', '는')} 어떻게 할까?`;
@@ -327,11 +326,11 @@ Pick the stance the player's words describe (e.g. "I wait for his swing and turn
     const A = me(st);
     const items = (ctx.inventory ?? []).filter(i => i.count > 0);
     const HINT = { strike: '강공·페인트를 이긴다', heavy: '방어를 부순다', guard: '빠른 공격 차단·패링', evade: '강공을 흘린다', feint: '방어·회피를 속인다' };
-    if (page === 'stances') return [...STANCES.map(x => ({ label: `${STANCE_ICON[x]} ${STANCE_KO[x]}`, sub: HINT[x], cls: `st-${x}`, act: 'm:stance', v: x })), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
+    if (page === 'stances') return [...STANCES.map(x => ({ label: STANCE_KO[x], sub: HINT[x], cls: `st-${x}`, act: 'm:stance', v: x })), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
     if (page === 'tech') return [...A.skills.filter(k => classOf(k)).map(k => ({ label: k.name, meta: `${ctx?.spLabel ?? 'SP'} ${k.cost}`, sub: `${STANCE_KO[classOf(k)]}${k.power ? ` ${k.power}` : ''}`, cls: `t-${typeIn(k.element, st.b.typeSystem) || 'normal'}`, disabled: k.cost > A.sp || (A.cds[k.name] ?? 0) > 0, act: 'm:skill', v: k.name })), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
     if (page === 'bag') return [...items.map(i => ({ label: i.name, meta: `×${i.count}`, cls: 'plain', act: 'm:item', v: i.name })), { label: '◀ 돌아가기', cls: 'back', page: 'main' }];
     const main = [{ label: '자세', cls: 'm-fight', page: 'stances' }, { label: '기술', cls: 'm-party', page: 'tech' }, { label: '가방', cls: 'm-bag', page: 'bag', disabled: !items.length }, { label: '이탈', cls: 'm-run', act: 'm:flee', disabled: !st.flee }];
-    return st.broken.foe ? [{ label: '☠️ 결정타', cls: 'finisher wide', act: 'm:finisher' }, ...main] : main;
+    return st.broken.foe ? [{ label: '결정타', cls: 'finisher wide', act: 'm:finisher' }, ...main] : main;
   },
 
   onAct(act, v, st, ctx) {

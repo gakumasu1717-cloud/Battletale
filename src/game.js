@@ -108,7 +108,7 @@ export async function ensureProfile(s, deps, { force = false } = {}) {
   if (cached) { s.profile = normalizeProfile(cached); return s.profile; }
   let profile = null;
   if (deps.auxReady()) {
-    deps.toast?.('📜 보조모델이 세계관 룰을 분석하는 중…');
+    deps.toast?.('보조모델이 세계관 룰을 분석하는 중…');
     const fields = deps.statFields?.();
     try {
       const raw = await deps.auxJson(ruleMessages({ lore: await deps.lore(), character: deps.character(), persona: deps.persona().text, statTag: fields ? JSON.stringify(fields) : '' }), { maxTokens: 1500 });
@@ -137,7 +137,7 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   const maxSkills = requestedSkillCap([persona.text, extra, s.playerConcept, instruction].join('\n'), { statFields: partial ?? statFields, current });
   let raw = null;
   if (deps.auxReady()) {
-    deps.toast?.(`🧬 보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
+    deps.toast?.(`보조모델이 ${persona.name}의 전투 시트를 만드는 중…`);
     try {
       // The persona and the lorebook entries about the player come first; once the world brief exists,
       // skip dumping the entire lorebook so the player's explicit rank in the persona isn't buried in noise.
@@ -201,7 +201,7 @@ export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(
   sheet.isPlayer = true;
   if (s.player?.portrait && !sheet.portrait) sheet.portrait = s.player.portrait;
   const audit = auditSheet(sheet, profile, { clampStats: !statFields, maxSkills });
-  if (audit.notes.length) { deps.toast?.(`⚖️ 등급(${sheet.tier || '?'})에 맞게 조정: ${audit.notes.slice(0, 3).join(' · ')}${audit.notes.length > 3 ? ` 외 ${audit.notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, audit.notes.join('\n')); }
+  if (audit.notes.length) { deps.toast?.(`등급(${sheet.tier || '?'})에 맞게 조정: ${audit.notes.slice(0, 3).join(' · ')}${audit.notes.length > 3 ? ` 외 ${audit.notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, audit.notes.join('\n')); }
   if (!sheet.skills.length) sheet.skills = [normalizeSkill({ name: '전력 일격', kind: 'physical', power: 75, cost: Math.round(sheet.maxSp * 0.12) }, { maxSp: sheet.maxSp })];
   s.player = sheet;
   if (!s.inventory.length && partial?.items?.length) s.inventory = partial.items.map(name => ({ name, count: 1 }));
@@ -212,6 +212,70 @@ export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(
 /* ---------------- Character codex (world-level base sheets) + per-chat roster (growth) ---------------- */
 // Names compared without parenthetical titles: "엘리어스 (총사)" → "엘리어스".
 const nk = x => norm(String(x ?? '').replace(/[(（\[][^)）\]]*[)）\]]/g, ''));
+/* ---------- Dex storage ---------- */
+const CODEX_VERSIONS = 5;
+/** What makes two sheets "different builds" (pictures and on/off switches do not count). */
+const sheetSig = sh => JSON.stringify([sh?.tier, sh?.maxHp, sh?.maxSp, sh?.stats, sh?.elements, sh?.ptypes, sh?.skills, sh?.trait, sh?.customPassive?.code ?? '']);
+const lightSheet = sh => { const c = clone(sh); delete c.portrait; return c; };
+/** The character dex over one world's book: active list, archive, kept versions. */
+export function codexBook(book, saveSettings = () => {}) {
+  const all = () => Object.values(book()).sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    // Everything that plays (matching by name, prompts, the cast scan) sees only active entries.
+    list: () => all().filter(e => !e.archived),
+    archived: () => all().filter(e => e.archived),
+    all,
+    // Replacing a sheet with a different build keeps the old one, so a reroll can always be undone.
+    put: entry => {
+      const prev = book()[entry.id];
+      let versions = Array.isArray(prev?.versions) ? prev.versions : Array.isArray(entry.versions) ? entry.versions : [];
+      if (prev?.sheet && entry.sheet && sheetSig(prev.sheet) !== sheetSig(entry.sheet)) {
+        versions = [{ at: Date.now(), concept: prev.concept ?? '', sheet: lightSheet(prev.sheet) }, ...versions].slice(0, CODEX_VERSIONS);
+      }
+      book()[entry.id] = { ...entry, versions };
+      saveSettings();
+    },
+    /** Swap the current sheet with a kept version (the current one goes back into the list). */
+    restore: (id, index) => {
+      const e = book()[id];
+      const v = e?.versions?.[index];
+      if (!v?.sheet) return null;
+      const rest = e.versions.filter((_, i) => i !== index);
+      const sheet = { ...clone(v.sheet), codexId: id, ...(e.sheet?.portrait ? { portrait: e.sheet.portrait } : {}) };
+      book()[id] = { ...e, name: sheet.name ?? e.name, sheet, concept: v.concept || e.concept, updated: Date.now(),
+        versions: [{ at: Date.now(), concept: e.concept ?? '', sheet: lightSheet(e.sheet) }, ...rest].slice(0, CODEX_VERSIONS) };
+      saveSettings();
+      return book()[id];
+    },
+    archive: (id, on) => { const e = book()[id]; if (!e) return null; if (on) e.archived = Date.now(); else delete e.archived; saveSettings(); return e; },
+    remove: id => { delete book()[id]; saveSettings(); },
+  };
+}
+
+
+/** Parse an exported dex file into plain { name, concept, role, archived, sheet } items (throws on anything else). */
+export function importedEntries(text) {
+  if (String(text ?? '').length > 6_000_000) throw new Error('파일이 너무 커요.');
+  let j;
+  try { j = JSON.parse(text); } catch { throw new Error('JSON 파일이 아니에요.'); }
+  const raw = Array.isArray(j?.entries) ? j.entries : j?.sheet ? [j] : null;
+  if (!raw || (j.battletale == null && !j.sheet)) throw new Error('BattleTale 도감 파일이 아니에요.');
+  const okPic = p => p && typeof p === 'object' && typeof p.src === 'string' && /^(data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+|https:\/\/[^\s"'<>]+)$/.test(p.src) && p.src.length < 400_000;
+  const out = [];
+  for (const e of raw.slice(0, 60)) {
+    const sh = e?.sheet;
+    const name = String(e?.name ?? sh?.name ?? '').trim().slice(0, 40);
+    if (!name || !sh || typeof sh !== 'object' || Array.isArray(sh)) continue;
+    const sheet = JSON.parse(JSON.stringify(sh));
+    for (const k of ['codexId', 'side', 'id', '__proto__', 'constructor']) delete sheet[k];
+    if (okPic(sheet.portrait)) sheet.portrait = { src: sheet.portrait.src, pixel: !!sheet.portrait.pixel }; else delete sheet.portrait;
+    out.push({ name, concept: String(e.concept ?? '').slice(0, 400), role: String(e.role ?? '').replace(/[^a-z]/gi, '').slice(0, 12), archived: !!e.archived, sheet });
+  }
+  if (!out.length) throw new Error('불러올 캐릭터가 없어요.');
+  return out;
+}
+
+
 /**
  * Exact name or alias only — a wrong match would apply someone else's stats and growth.
  * Partial matches are offered separately (codexCandidates) for search UIs.
@@ -241,7 +305,7 @@ export function registerCharacter(s, deps, raw, { side = 'enemy', locked = false
   const sheet = normalizeSheet(raw, profile, { side, seed: raw.name });
   if (raw.tierReason) deps.trace?.('balance', `등급 판단 · ${sheet.name} → ${sheet.tier || '?'}`, String(raw.tierReason));
   const { notes } = auditSheet(sheet, profile, { clampStats: true, bonusTier: sheet.threat === 'boss' ? 1 : 0, maxSkills });
-  if (notes.length) { deps.toast?.(`⚖️ ${sheet.name} 밸런스 조정: ${notes.slice(0, 3).join(' · ')}${notes.length > 3 ? ` 외 ${notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, notes.join('\n')); }
+  if (notes.length) { deps.toast?.(`${sheet.name} 밸런스 조정: ${notes.slice(0, 3).join(' · ')}${notes.length > 3 ? ` 외 ${notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, notes.join('\n')); }
   const existing = codexFind(deps, sheet.name);
   const entry = { id: existing?.id ?? `c${uid()}`, name: sheet.name, sheet: { ...stripRuntime(sheet), side: undefined, codexId: undefined }, locked: existing?.locked ?? locked, updated: Date.now() };
   entry.sheet.codexId = entry.id;
@@ -261,7 +325,7 @@ export function resolveRegistered(s, spec, deps, settings = {}) {
     }
     if (typeof item === 'object' && item.named && settings.autoRegister !== false && !item.ref) {
       const e = registerCharacter(s, deps, item, { side });
-      deps.toast?.(`📖 도감에 등록: ${e.name}`);
+      deps.toast?.(`도감에 등록: ${e.name}`);
       return { ...item, codexId: e.id };
     }
     return item;
@@ -325,6 +389,46 @@ function editSheet(sheet, op, profile) {
   return done;
 }
 
+/* Story-driven changes (<bt-change> or the aux watcher) are applied once per message VERSION.
+ * Before the first change of a message the party is snapshotted; when the same message comes back with new text
+ * (swipe, regenerate, edit) the snapshot is restored first, so a reroll never stacks the same growth twice.
+ * Only the newest changed message keeps a snapshot: anything older may already have later changes built on it. */
+const changeSnap = s => clone({ player: s.player, companions: s.companions, inventory: s.inventory, roster: s.roster });
+export function rollbackChanges(s, index, log = () => {}) {
+  const cl = s.changeLog;
+  if (!cl || cl.index !== index || !cl.snap) return false;
+  Object.assign(s, clone(cl.snap));
+  log('change', `메시지 #${index}가 바뀌어 이전 버전의 변경을 되돌림`, (cl.done ?? []).join(', ') || '(기록 없음)');
+  s.changeLog = { index, snap: cl.snap, done: [] };
+  return true;
+}
+export function beginChanges(s, index) {
+  if (s.changeLog?.index !== index) s.changeLog = { index, snap: changeSnap(s), done: [] };
+  return s.changeLog;
+}
+
+/** Exact name first, then a partial match (the story may shorten a skill's name). */
+function findSkill(sheet, name) {
+  const k = nk(name);
+  if (!k || !sheet?.skills) return null;
+  return sheet.skills.find(x => nk(x.name) === k) ?? sheet.skills.find(x => nk(x.name).includes(k) || k.includes(nk(x.name))) ?? null;
+}
+
+/**
+ * Story growth is free to stack, so every upgrade / new skill is checked against the same rank budget that sheets are
+ * built with: a rank-B fighter can't reach rank-S power by ten "+10" lines. Returns notes for what was trimmed.
+ */
+function growthAudit(sheet, profile, names) {
+  if (!sheet || !names?.length) return [];
+  const keep = new Set(names.map(nk));
+  const probe = { ...sheet, skills: sheet.skills.map(k => clone(k)) };
+  const { notes } = auditSheet(probe, profile, { maxSkills: Math.max(12, sheet.skills.length), bonusTier: sheet.threat === 'boss' ? 1 : 0 });
+  const out = [];
+  probe.skills.forEach((k, i) => { if (keep.has(nk(k.name))) sheet.skills[i] = k; });
+  for (const n of notes) if ([...keep].some(x => nk(n).includes(x))) out.push(`등급 상한 조정: ${n}`);
+  return out;
+}
+
 /** Growth events for a registered character (from <bt-change> npc: lines or the panel). */
 export function applyNpcOps(s, deps, name, subs, { fromStory = true } = {}) {
   const entry = codexFind(deps, name);
@@ -333,7 +437,11 @@ export function applyNpcOps(s, deps, name, subs, { fromStory = true } = {}) {
   if (entry?.locked && fromStory) return { done: [], why: 'locked' };
   const profile = profileOf(s);
   let sheet = comp ?? (s.roster[entry.id] ??= clone(entry.sheet));
-  const done = subs.flatMap(op => editSheet(sheet, op, profile));
+  const done = subs.flatMap(op => {
+    const out = editSheet(sheet, op, profile);
+    const touched = op.op === 'upgrade' ? [findSkill(sheet, op.name)?.name] : op.op === 'learn' ? [sheet.skills.at(-1)?.name] : [];
+    return out.length ? [...out, ...growthAudit(sheet, profile, touched.filter(Boolean))] : out;
+  });
   return { done, name: sheet.name };
 }
 
@@ -396,7 +504,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
   const settings = deps.settings?.() ?? {};
   const withCompanions = spec => spec;
   if (!deps.auxReady()) return resolveRegistered(s, withCompanions(fallbackSpec(hint, s)), deps, settings);
-  deps.toast?.('⚔️ 최근 대화를 보고 등장 인물을 판별하는 중…');
+  deps.toast?.('최근 대화를 보고 등장 인물을 판별하는 중…');
   const party = [s.player].filter(Boolean).map(x => sheetText(x, profile)).join('\n');
   const travelling = new Set(s.companions.map(c => c.codexId).filter(Boolean));
   const allowed = allowedModes(settings);
@@ -439,7 +547,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
       const matched = fl !== 'never' && deps.matchLore ? await deps.matchLore(query).catch(() => ({ text: '', names: [] })) : { text: '', names: [] };
       const story = deps.mentions?.([name, ...aliases]) ?? '';
       const roster = deps.rosterBrief?.(name) ?? '';
-      deps.toast?.(`📖 주요 인물 도감 생성 중: ${name}${matched.names?.length ? ` (월드인포 ${matched.names.length}개 참고)` : ''}`, 'info');
+      deps.toast?.(`주요 인물 도감 생성 중: ${name}${matched.names?.length ? ` (월드인포 ${matched.names.length}개 참고)` : ''}`, 'info');
       try {
         const raw = await deps.auxJson(sheetMessages({
           profile, lore: '', own: matched.text, story, brief,
@@ -501,7 +609,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
         // Mook / generic monster (or inline sheet with skills)
         if (item.named && settings.autoRegister !== false && !item.ref) {
           const e = registerCharacter(s, deps, item, { side });
-          deps.toast?.(`📖 도감에 등록: ${e.name}`);
+          deps.toast?.(`도감에 등록: ${e.name}`);
           counts.major++;
           out.push({ ...item, codexId: e.id, _src: 'major' });
           continue;
@@ -524,7 +632,7 @@ export async function forgeSpec(s, deps, { hint = '' } = {}) {
     const allies = resolveList(parsed.allies, 'ally', 4);
     if (pendingMajors.length) {
       const concurrency = clamp(Math.round(num(settings.majorConcurrency, 2)), 1, 4);
-      if (pendingMajors.length > 1) deps.toast?.(`📖 미등록 주요 인물 ${pendingMajors.length}명 도감 생성 중 (동시 최대 ${concurrency})…`, 'info');
+      if (pendingMajors.length > 1) deps.toast?.(`미등록 주요 인물 ${pendingMajors.length}명 도감 생성 중 (동시 최대 ${concurrency})…`, 'info');
       let cursor = 0;
       const worker = async () => {
         while (cursor < pendingMajors.length) {
@@ -915,6 +1023,18 @@ export function applyChanges(s, ops, deps = null) {
   globalDeps = deps;
   const profile = profileOf(s);
   const done = [];
+  // A leading companion name ("서윤 화염방사 power +10") picks who the line is about; otherwise it is {{user}}.
+  const ownerOf = (text, ok) => {
+    const t = String(text ?? '').trim();
+    for (const x of s.companions) {
+      const n = String(x.name ?? '').trim();
+      if (n && norm(t).startsWith(norm(n)) && t.length > n.length) {
+        const rest = t.slice(n.length).replace(/^[\s|:,·-]+/, '');
+        if (rest && ok(x, rest)) return { who: x, rest };
+      }
+    }
+    return { who: s.player ?? null, rest: t };
+  };
   const pickWho = name => {
     if (!name) return s.player;
     const k = norm(name);
@@ -950,9 +1070,13 @@ export function applyChanges(s, ops, deps = null) {
         break;
       }
       case 'learn': {
-        const m = /^(.+?)\s*(?:[(（](.+)[)）])?$/.exec(op.text);
-        const sk = normalizeSkill({ ...inferSkill(m[1].trim() + ' ' + (m[2] ?? '')), name: m[1].trim(), desc: m[2] ?? '' }, { maxSp: s.player?.maxSp ?? 100 });
-        if (s.player && sk && !s.player.skills.some(x => norm(x.name) === norm(sk.name))) { s.player.skills.push(sk); done.push(`스킬 습득: ${sk.name}`); }
+        // "skill: Name: physical 70 fire (desc)" or "skill: Name (desc)"; a companion's name in front picks them.
+        const { who: tgt, rest } = ownerOf(op.text, x => true);
+        if (!tgt) break;
+        const had = new Set(tgt.skills.map(x => norm(x.name)));
+        const out = editSheet(tgt, { op: 'learn', text: rest }, profile);
+        const fresh = tgt.skills.filter(x => !had.has(norm(x.name)));
+        if (out.length) done.push(...out.map(x => `${tgt === s.player ? '' : `${tgt.name} `}${x.replace(/^습득 /, '스킬 습득: ')}`), ...growthAudit(tgt, profile, fresh.map(x => x.name)));
         break;
       }
       case 'forget': if (s.player) s.player.skills = s.player.skills.filter(x => norm(x.name) !== norm(op.name)); break;
@@ -966,13 +1090,20 @@ export function applyChanges(s, ops, deps = null) {
       }
       case 'leave': s.companions = s.companions.filter(x => norm(x.name) !== norm(op.name)); done.push(`동료 이탈: ${op.name}`); break;
       case 'tier': if (s.player && tierOf(profile, op.value)) { s.player.tier = tierOf(profile, op.value).name; done.push(`등급: ${s.player.tier}`); } break;
-      case 'upgrade': if (s.player) done.push(...editSheet(s.player, op, profile)); break;
+      case 'upgrade': {
+        // "upgrade: Skill power +10" for {{user}}, "upgrade: Companion Skill power +10" for a companion.
+        const { who: tgt, rest } = ownerOf(op.name, (x, n) => !!findSkill(x, n));
+        if (!tgt || !findSkill(tgt, rest)) { done.push(`강화 대상 없음: ${op.name}`); break; }
+        const out = editSheet(tgt, { ...op, name: findSkill(tgt, rest).name }, profile);
+        done.push(...out.map(x => (tgt === s.player ? x : `${tgt.name} ${x}`)), ...growthAudit(tgt, profile, [findSkill(tgt, rest).name]));
+        break;
+      }
       case 'level': if (who) done.push(...editSheet(who, { op: 'level', value: op.value }, profile).map(x => `${who.name} ${x}`)); break;
       case 'npc': {
         if (!deps) break;
         const r = applyNpcOps(s, deps, op.name, op.subs, { fromStory: true });
         if (r.done.length) done.push(`${r.name}: ${r.done.join(', ')}`);
-        else if (r.why === 'locked') done.push(`${op.name}: 🔒 잠김 (변경 무시)`);
+        else if (r.why === 'locked') done.push(`${op.name}: 잠김 (변경 무시)`);
         break;
       }
     }

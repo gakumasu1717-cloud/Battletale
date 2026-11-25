@@ -121,7 +121,13 @@ function triggerPassive(hook, b, f, extra, rng, ev) {
   if (extra?._fromPassive || !f?.customPassive?.enabled || b?.customPassives === false) return null;
   if (!active(f) && hook !== 'beforeHit' && hook !== 'onAllyDown') return null;
   const res = evalPassive(hook, b, f, extra, rng);
-  if (!res || res.error || !res.ops) return null;
+  if (res?.error) {
+    // Remember the first runtime error per fighter; the host reports it once (trace + badge on the sheet).
+    f.pstate ??= {};
+    if (!f.pstate.__err) f.pstate.__err = { hook, msg: String(res.error).slice(0, 160), turn: b.turn ?? 0 };
+    return null;
+  }
+  if (!res || !res.ops) return null;
   const ops = res.ops;
 
   const hasDmgMod = (hook === 'beforeAttack' || hook === 'beforeHit') && (Math.abs(ops.dmgMul - 1) >= 0.005 || (hook === 'beforeAttack' && ops.dmgFlatPct !== 0));
@@ -429,7 +435,7 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
   for (const c of cmds) { const f = byId(b, c.actor); if (f && c.defense) f.defense = c.defense; }
 
   // 0. Start-of-turn custom passives.
-  for (const f of b.fighters) { f._pHealTurn = 0; f._pSpTurn = 0; f._pStageTurn = 0; f._pStatusTurn = 0; f._pCounterTurn = 0; }
+  for (const f of b.fighters) { f._pHealTurn = 0; f._pSpTurn = 0; f._pStageTurn = 0; f._pStatusTurn = 0; f._pCounterTurn = 0; f._pFlatTurn = 0; }
   for (const f of b.fighters.filter(onField)) triggerPassive('turnStart', b, f, {}, rng, ev);
 
   // 1. One action per action-slot. Enemies follow their announced intents.
@@ -485,7 +491,7 @@ export function resolveTurn(input, commands = [], { inventory = [], attackName =
   }
   if (b.status === 'active' && b.format === 'singles') replaceFainted(b, ev);
   for (const f of b.fighters) {
-    f.guard = false; delete f.defense; delete f._pHealTurn; delete f._pSpTurn; delete f._pStageTurn; delete f._pStatusTurn; delete f._pCounterTurn; if (f.stunnedThisTurn) delete f.stunnedThisTurn;
+    f.guard = false; delete f.defense; delete f._pHealTurn; delete f._pSpTurn; delete f._pStageTurn; delete f._pStatusTurn; delete f._pCounterTurn; delete f._pFlatTurn; if (f.stunnedThisTurn) delete f.stunnedThisTurn;
     if (!f.protectedNow) f.protectChain = 0;
     delete f.protectedNow; delete f.protect;
   }
@@ -717,13 +723,19 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
           // Custom passive: beforeAttack (attacker) & beforeHit (defender)
           let passiveEndured = false, endureHealPct = 0;
           if (dmg > 0) {
-            const pAtk = triggerPassive('beforeAttack', b, f, { target: t, skill, dmg, crit, eff, effMul }, rng, ev);
+            const pAtk = triggerPassive('beforeAttack', b, f, { target: t, skill, dmg, crit, eff, effMul, hit: h }, rng, ev);
             if (pAtk?.ops) {
               if (pAtk.ops.dmgMul !== 1) dmg *= pAtk.ops.dmgMul;
-              if (pAtk.ops.dmgFlatPct !== 0) dmg += t.maxHp * (pAtk.ops.dmgFlatPct / 100);
+              if (pAtk.ops.dmgFlatPct !== 0) {
+                // Bonus damage is a share of the TARGET's max HP: cap it per turn (multi-hit / area skills), halve it on bosses.
+                const cap = t.isBoss || t.threat === 'boss' ? 6 : 12;
+                const use = pAtk.ops.dmgFlatPct > 0 ? Math.min(pAtk.ops.dmgFlatPct, Math.max(0, cap - (f._pFlatTurn ?? 0))) : pAtk.ops.dmgFlatPct;
+                if (use > 0) f._pFlatTurn = (f._pFlatTurn ?? 0) + use;
+                dmg += t.maxHp * (use / 100);
+              }
               dmg = Math.max(1, dmg);
             }
-            const pDef = triggerPassive('beforeHit', b, t, { attacker: f, target: f, skill, dmg, crit, eff, effMul, fatal: dmg >= t.hp }, rng, ev);
+            const pDef = triggerPassive('beforeHit', b, t, { attacker: f, target: f, skill, dmg, crit, eff, effMul, fatal: dmg >= t.hp, hit: h }, rng, ev);
             if (pDef?.ops) {
               if (pDef.ops.dmgMul !== 1) dmg = Math.max(1, dmg * pDef.ops.dmgMul);
               if (pDef.willEndure && dmg >= t.hp) {
@@ -769,8 +781,8 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
           }
           landed++; dealt += dmg;
           if (skill.drain && dmg) heal(f, Math.round(dmg * skill.drain), ev, { drain: true });
-          if (active(f)) triggerPassive('afterAttack', b, f, { target: t, skill, dmg, crit, eff, effMul, ko: !active(t) }, rng, ev);
-          if (dmg > 0 && active(t)) triggerPassive('afterHit', b, t, { attacker: f, target: f, skill, dmg, crit, eff, effMul, ko: false }, rng, ev);
+          if (active(f)) triggerPassive('afterAttack', b, f, { target: t, skill, dmg, crit, eff, effMul, ko: !active(t), hit: h }, rng, ev);
+          if (dmg > 0 && active(t)) triggerPassive('afterHit', b, t, { attacker: f, target: f, skill, dmg, crit, eff, effMul, ko: false, hit: h }, rng, ev);
         }
         if (landed && comboHit && skill.bonusIf.consume) {
           const i = skill.bonusIf.status === 'any' ? t.statuses.findIndex(s => !STATUS[s.id]?.good) : t.statuses.findIndex(s => s.id === skill.bonusIf.status);

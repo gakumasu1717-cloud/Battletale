@@ -120,7 +120,7 @@ function predict(st, g) {
 }
 
 export default {
-  id: 'stealth', ko: '잠입', icon: '🫥',
+  id: 'stealth', ko: '잠입', icon: '',
 
   create({ spec, profile, party, enemies, seed, settings }) {
     const b = E.createBattle({ party: party.slice(0, 1), enemies, profile, seed, place: spec.place, flee: true, length: Number(settings.length) || 1, aiLevel: aiLevelOf(settings), costScale: settings.spCostScale ?? 1.3, title: spec.title });
@@ -345,7 +345,7 @@ move = one tile, run = two tiles (noisy), wait = stay hidden, throw = stone to t
     const P = me(st), sys = st.b.typeSystem;
     return {
       foes: [], allies: [], custom: board(st, profile, ctx),
-      intro: [st.variant === 'chase' ? '추격자가 바짝 쫓아온다! 출구까지 도망쳐야 한다.' : `${st.mapName}. 경비의 시선(빨간 칸)을 피해 🚩까지 가자.`],
+      intro: [st.variant === 'chase' ? '추격자가 바짝 쫓아온다! 출구까지 도망쳐야 한다.' : `${st.mapName}. 경비의 시선(빨간 칸)을 피해 ★ 표시까지 가자.`],
       idle: ctx.ui.pzMode === 'throw' ? '돌을 던질 칸을 누르세요 (3칸 이내)' : ctx.ui.pzMode === 'run' ? '두 칸 달릴 방향의 칸을 누르세요 (시끄러움!)' : `칸을 눌러 이동 · ${josa(P.name, '은', '는')} 어떻게 할까?`,
       _sys: sys,
     };
@@ -358,13 +358,13 @@ move = one tile, run = two tiles (noisy), wait = stay hidden, throw = stone to t
     const runCost = Math.max(1, Math.round(P.maxSp * 0.06));
     const m = ctx.ui.pzMode;
     return [
-      { mini: true, label: '🚶 이동', sub: '칸을 눌러 한 칸', cls: !m ? 'm-party on' : 'plain', act: 'pk:uiset', k: 'pzMode', v: null },
-      { mini: true, label: '🏃 달리기', sub: `2칸·소음·${ctx.spLabel ?? 'SP'}${runCost}`, cls: m === 'run' ? 'm-fight on' : 'plain', act: 'pk:uiset', k: 'pzMode', v: 'run', disabled: P.sp < runCost },
-      { mini: true, label: `🪨 유인 ×${st.stones}`, sub: '3칸 안 경비 끌기', cls: m === 'throw' ? 'm-bag on' : 'plain', act: 'pk:uiset', k: 'pzMode', v: 'throw', disabled: st.stones <= 0 || st.variant === 'chase' },
-      adj.length ? { mini: true, label: '🗡 제압', sub: adj.map(g => `${g.name}(${facingSide(st.g[g.id], st.p) === 'back' ? '뒤' : '옆'})`).join(','), cls: 'm-party', act: 'm:takedown', v: adj[0].name, target: adj.length > 1 ? adj.map(g => g.name) : null }
-        : { mini: true, label: '🗡 제압', sub: '옆·뒤에서만', cls: 'plain', disabled: true },
-      { mini: true, label: '🫥 대기', sub: '엄폐 중이면 안 보임', cls: 'plain', act: 'm:wait' },
-      { mini: true, label: '⚔️ 돌파', sub: '전투로 전환', cls: 'm-run', act: 'm:fight' },
+      { mini: true, label: '이동', sub: '칸을 눌러 한 칸', cls: !m ? 'm-party on' : 'plain', act: 'pk:uiset', k: 'pzMode', v: null },
+      { mini: true, label: '달리기', sub: `2칸·소음·${ctx.spLabel ?? 'SP'}${runCost}`, cls: m === 'run' ? 'm-fight on' : 'plain', act: 'pk:uiset', k: 'pzMode', v: 'run', disabled: P.sp < runCost },
+      { mini: true, label: `유인 ×${st.stones}`, sub: '3칸 안 경비 끌기', cls: m === 'throw' ? 'm-bag on' : 'plain', act: 'pk:uiset', k: 'pzMode', v: 'throw', disabled: st.stones <= 0 || st.variant === 'chase' },
+      adj.length ? { mini: true, label: '제압', sub: adj.map(g => `${g.name}(${facingSide(st.g[g.id], st.p) === 'back' ? '뒤' : '옆'})`).join(','), cls: 'm-party', act: 'm:takedown', v: adj[0].name, target: adj.length > 1 ? adj.map(g => g.name) : null }
+        : { mini: true, label: '제압', sub: '옆·뒤에서만', cls: 'plain', disabled: true },
+      { mini: true, label: '대기', sub: '엄폐 중이면 안 보임', cls: 'plain', act: 'm:wait' },
+      { mini: true, label: '돌파', sub: '전투로 전환', cls: 'm-run', act: 'm:fight' },
     ];
   },
 
@@ -527,7 +527,7 @@ function board(st, profile, ctx) {
     const t = tile(st, x, y);
     const k = key(x, y);
     let inner = '';
-    if (t === 'G') inner += '<span class="pz-goal">🚩</span>';
+    if (t === 'G') inner += '<span class="pz-goal">★</span>';
     if (t === 'c') inner += '<span class="pz-crate"></span>';
     const body = st.bodies.find(bd => bd.x === x && bd.y === y);
     if (body) inner += '<span class="pz-body">✕</span>';
@@ -552,10 +552,10 @@ function board(st, profile, ctx) {
     const side = facingSide(gs, st.p);
     info = `<div class="pz-info"><b>${h(sel.name)}</b>${sel.tier ? ` <small>[${h(sel.tier)}]</small>` : ''} · ${ARROW[gs.face]} ${DIR_KO[gs.face]}을 봄 · ${STATE_KO[gs.state] ?? gs.state}<br><small>다음 턴: ${nextTxt}${manhattan(gs, st.p) === 1 ? ` · 지금 ${side === 'back' ? '등 뒤' : side === 'side' ? '옆' : '정면'}에 있음` : ''}</small><button class="pz-x" data-act="pz:unpick">✕</button></div>`;
   }
-  const MODE_TXT = { run: '🏃 달리기: 두 칸 떨어진 노란 칸을 누르세요 (근처 경비가 소리를 들어요)', throw: '🪨 유인: 돌을 던질 칸을 누르세요 (3칸 이내)' };
+  const MODE_TXT = { run: '달리기: 두 칸 떨어진 노란 칸을 누르세요 (근처 경비가 소리를 들어요)', throw: '유인: 돌을 던질 칸을 누르세요 (3칸 이내)' };
   const banner = mode && MODE_TXT[mode] ? `<div class="pz-mode">${MODE_TXT[mode]}<button data-act="pz:cancel">취소</button></div>` : '';
   return `<div class="pz-wrap ${st.variant}">
-    <div class="pz-hud"><div class="pk-meter alert pz-alert"><div style="width:${clamp(st.alert, 0, 100)}%"></div><span>👁 경계 ${Math.round(st.alert)}${st.alert >= 50 ? ' · 시야+1' : ''}</span></div><span>🗺 ${h(st.mapName)}</span><span>${P.sp}/${P.maxSp} ${h(profile.spLabel)}</span></div>
+    <div class="pz-hud"><div class="pk-meter alert pz-alert"><div style="width:${clamp(st.alert, 0, 100)}%"></div><span>경계 ${Math.round(st.alert)}${st.alert >= 50 ? ' · 시야+1' : ''}</span></div><span>${h(st.mapName)}</span><span>${P.sp}/${P.maxSp} ${h(profile.spLabel)}</span></div>
     ${banner}<div class="pz-grid" style="grid-template-columns:repeat(${W},1fr)">${cells}</div>
     ${info}<div class="pz-legend"><span class="go">●</span>이동 <span class="hot">■</span>시선 <span class="warm">■</span>순찰 시야 <span class="nx">▢</span>다음 턴 시야 · 경비를 누르면 정보${reserves ? ` · 다른 구역 ${reserves}명` : ''}</div>
   </div>`;

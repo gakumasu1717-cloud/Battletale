@@ -6,7 +6,7 @@ import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEn
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
-  playLocal, setupChat, resolveRegistered, registerCharacter, codexFind, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
+  playLocal, setupChat, resolveRegistered, registerCharacter, codexFind, codexBook, importedEntries, rollbackChanges, beginChanges, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
   claimLoot, restAfterBattle, resolveEnabled,
 } from './src/game.js';
 import { sheetMessages, castMessages, stateMessages, briefText, passiveMessages } from './src/prompts.js';
@@ -121,12 +121,7 @@ function codexStore() {
   const set = settings();
   set.codex ??= {};
   const key = worldKey();
-  const book = () => (set.codex[key] ??= {});
-  return {
-    list: () => Object.values(book()).sort((a, b) => a.name.localeCompare(b.name)),
-    put: entry => { book()[entry.id] = entry; saveSettings(); },
-    remove: id => { delete book()[id]; saveSettings(); },
-  };
+  return codexBook(() => (set.codex[key] ??= {}), saveSettings);
 }
 
 /* ---------------- Trace log (점검 tab) ---------------- */
@@ -252,7 +247,7 @@ globalThis.battleTaleInterceptor = async function (chat, contextSize, abort, typ
         if (r && !r.reused) {
           if (r.idle) toast('이번 메시지엔 전투 행동이 없어서 턴을 넘기지 않았어요.');
           if (r.entry && s.battle.status !== 'active') toast(`종료: ${{ win: '승리!', lose: '패배…', fled: '도주 성공', stopped: '중단', success: '성공!' }[s.battle.status] ?? s.battle.status}`, ['win', 'success'].includes(s.battle.status) ? 'success' : 'info');
-          else if (r.entry?.events?.some(e => e.t === 'transition')) toast('🚨 들켰어요! 전투로 전환됩니다.', 'warning');
+          else if (r.entry?.events?.some(e => e.t === 'transition')) toast('들켰어요! 전투로 전환됩니다.', 'warning');
         }
       });
       s2 = state();
@@ -336,11 +331,12 @@ async function processMessage(index) {
     trace('stat', fields ? `<${set.statTag}> 상태창 읽음 · 메시지 #${index}` : `<${set.statTag}> 상태창 없음 · 메시지 #${index}`, fields ? `읽은 값: ${JSON.stringify(fields)}\n전: HP ${before.hp} SP ${before.sp}\n후: HP ${s.player.hp} SP ${s.player.sp}` : '');
   }
 
+  rollbackChanges(s, index, trace);
   const blocks = findBlocks(m.mes);
   trace('detect', blocks.length ? `블록 발견: ${blocks.map(b => b.kind).join(', ')} · 메시지 #${index}` : `블록 없음 (전투 신호 X) · 메시지 #${index}`, blocks.map(b => `<bt-${b.kind}>\n${b.body}`).join('\n\n'));
   let startHint = null, spec = null;
   for (const b of blocks) {
-    if (b.kind === 'change') { const ops = parseChange(b.body); const done = applyChanges(s, ops, deps()); trace('change', `변수 변경 ${done.length}건 적용`, `해석: ${JSON.stringify(ops)}\n적용: ${done.join(', ') || '(없음)'}`); if (done.length) toast(`📝 ${done.join(', ')}`); }
+    if (b.kind === 'change') { const ops = parseChange(b.body); beginChanges(s, index); const done = applyChanges(s, ops, deps()); s.changeLog.done.push(...done); trace('change', `변수 변경 ${done.length}건 적용`, `해석: ${JSON.stringify(ops)}\n적용: ${done.join(', ') || '(없음)'}`); if (done.length) toast(`${done.join(', ')}`); }
     else if (b.kind === 'end') { const r = /(win|lose|loss|fled|stop)/i.exec(b.body)?.[1]?.toLowerCase(); if (stopBattle(s, r === 'loss' ? 'lose' : r === 'stop' ? 'stopped' : r ?? 'stopped', set)) toast('스토리가 전투를 끝냈어요.'); }
     else if (b.kind === 'battle') spec = parseBattleBody(b.body) ?? spec;
     else if (b.kind === 'start') startHint = b.body || startHint || '';
@@ -358,10 +354,10 @@ async function processMessage(index) {
   if (!live && (spec || startHint !== null)) {
     if (set.startTrigger === 'auto') await startFrom(index, { hint: startHint, spec }, s);
     else {
-      // Button mode: remember the signal; the "⚔️ 전투 시작" button under this message starts it.
+      // Button mode: remember the signal; the "전투 시작" button under this message starts it.
       m.extra.battletale.pending = { hint: startHint ?? '', spec: spec ?? null };
       trace('start', `전투 신호 대기 · 메시지 #${index}`, `신호: ${spec ? '<bt-battle>' : `<bt-start> ${startHint}`}\n메시지 아래 버튼을 누르면 시작해요.`);
-      toast('⚔️ 전투 신호! 메시지 아래 「전투 시작」을 눌러요.');
+      toast('전투 신호! 메시지 아래 「전투 시작」을 눌러요.');
     }
   }
   if (dirtyChat) { try { c.updateMessageBlock(index, m); } catch { /* older ST */ } }
@@ -383,7 +379,7 @@ async function watchState(s, m, index) {
   const text = stripBlocks(String(m.mes ?? ''));
   if (text.length < 40 || (mode === 'auto' && !STATE_CUES.test(text))) return;
   const p = profileOf(s);
-  const line = x => `- ${x.name}${x.isPlayer ? ' ({{user}})' : ''}${x.tier ? ` [${x.tier}]` : ''}: ${p.hpLabel} ${x.hp}/${x.maxHp}, ${p.spLabel} ${x.sp}/${x.maxSp}${x.statuses?.length ? `, status: ${x.statuses.map(st => st.id).join(' ')}` : ''}`;
+  const line = x => `- ${x.name}${x.isPlayer ? ' ({{user}})' : ''}${x.tier ? ` [${x.tier}]` : ''}: ${p.hpLabel} ${x.hp}/${x.maxHp}, ${p.spLabel} ${x.sp}/${x.maxSp}${x.statuses?.length ? `, status: ${x.statuses.map(st => st.id).join(' ')}` : ''}${x.skills?.length ? `\n  skills: ${x.skills.slice(0, 8).map(k => `${k.name} (${k.kind}${k.power ? ` ${k.power}` : ''})`).join(', ')}` : ''}`;
   const codex = deps().codex.list().slice(0, 30).map(e => {
     const sh = rosterSheet(s, e);
     return `- ${e.name}${sh.tier ? ` [${sh.tier}]` : ''}${sh.skills?.length ? ` · ${sh.skills.slice(0, 4).map(k => k.name).join(', ')}` : ''}${e.locked ? ' (locked)' : ''}`;
@@ -398,9 +394,11 @@ async function watchState(s, m, index) {
     const lines = (Array.isArray(r?.changes) ? r.changes : []).map(String).filter(Boolean).slice(0, 12);
     if (!lines.length) return;
     const ops = parseChange(lines.join('\n'));
+    beginChanges(s, index);
     const done = applyChanges(s, ops, deps());
+    s.changeLog.done.push(...done);
     trace('change', `상태·성장 감시 · 변경 ${done.length}건 (메시지 #${index})`, `이유: ${r?.why ?? ''}\n줄: ${lines.join(' / ')}\n적용: ${done.join(', ') || '(없음)'}`);
-    if (done.length) toast(`📝 ${done.join(', ')}`);
+    if (done.length) toast(`${done.join(', ')}`);
   } catch (e) { trace('error', '상태 감시 실패', String(e?.message ?? e)); }
 }
 
@@ -418,12 +416,12 @@ async function startFrom(index, { hint = '', spec = null } = {}, s = state()) {
       delete m.extra.battletale.pending;
       if (set.previewBeforeStart !== false && set.playMode !== 'chat') {
         ui.preview = { spec: finalSpec, index, mode: finalSpec.mode ?? 'party', hint: hint ?? '' };
-        toast('⚔️ 출전 구성을 확인하고 전투를 시작하세요!', 'info');
+        toast('출전 구성을 확인하고 전투를 시작하세요!', 'info');
         setTimeout(() => togglePanel(true), 50);
       } else {
         ui.preview = null;
         const b = beginBattle(s, finalSpec, { originIndex: index, originHash: hashStr(m.mes), settings: set });
-        trace('start', `전투 시작: ${b.mode} · ${b.title || ''}`, `신호: ${spec ? '<bt-battle> 직접 작성' : `<bt-start> ${hint}`}\n적: ${finalSpec.enemies.map(e => `${e.name}${e.tier ? ` [${e.tier}]` : ''}`).join(', ')}\n위협도: ${b.threat?.level ?? '?'}${b.spec?.threatFit ? `\n⚖️ 실력에 맞게 적 조정: 전력비 ${b.spec.threatFit.from} → ${b.spec.threatFit.to} (난이도 상한 ${b.spec.threatFit.cap})` : b.spec?.outmatched ? `\n⚠ 압도적 허용: ${b.spec.outmatchedWhy || '(이유 없음)'}` : ''}`);
+        trace('start', `전투 시작: ${b.mode} · ${b.title || ''}`, `신호: ${spec ? '<bt-battle> 직접 작성' : `<bt-start> ${hint}`}\n적: ${finalSpec.enemies.map(e => `${e.name}${e.tier ? ` [${e.tier}]` : ''}`).join(', ')}\n위협도: ${b.threat?.level ?? '?'}${b.spec?.threatFit ? `\n실력에 맞게 적 조정: 전력비 ${b.spec.threatFit.from} → ${b.spec.threatFit.to} (난이도 상한 ${b.spec.threatFit.cap})` : b.spec?.outmatched ? `\n압도적 허용: ${b.spec.outmatchedWhy || '(이유 없음)'}` : ''}`);
         m.extra.battletale.origin = [...(m.extra.battletale.origin ?? []), b.id];
         announce(b);
         ui.msg = null; ui.page = 'main'; ui.openingShown = null;
@@ -446,7 +444,7 @@ function announce(b) {
   const M = modeOf(b.mode);
   const foes = M.enemiesOf(b.st).map(f => f.name).join(', ');
   const threat = { overwhelming: '압도적', dangerous: '위험', even: '대등', favorable: '우세', trivial: '쉬움' }[b.threat?.level];
-  toast(`${M.icon} ${M.ko} 개시! ${foes}${threat && settings().showThreat ? ` · 위협도 ${threat}` : ''}${b.spec?.threatFit ? ' · ⚖️ 실력에 맞게 조정됨' : ''}${b.opening?.length ? ' · 기습당함!' : ''}`, b.threat?.level === 'overwhelming' ? 'warning' : 'success');
+  toast(`${M.ko} 개시! ${foes}${threat && settings().showThreat ? ` · 위협도 ${threat}` : ''}${b.spec?.threatFit ? ' · 실력에 맞게 조정됨' : ''}${b.opening?.length ? ' · 기습당함!' : ''}`, b.threat?.level === 'overwhelming' ? 'warning' : 'success');
 }
 
 async function commitBattle(s, spec, { index, mode = null } = {}) {
@@ -472,7 +470,7 @@ async function manualStart(hint = '', mode = null, { skipPreview = false } = {})
       const spec = await forgeSpec(s, deps(), { hint });
       if (!skipPreview && settings().previewBeforeStart !== false) {
         ui.preview = { spec, index, mode: mode ?? spec.mode ?? 'party', hint };
-        toast('⚔️ 출전 구성을 확인하고 전투를 시작하세요!', 'info');
+        toast('출전 구성을 확인하고 전투를 시작하세요!', 'info');
       } else {
         ui.preview = null;
         await commitBattle(s, spec, { index, mode });
@@ -522,7 +520,7 @@ async function modeAct(act, v) {
       if (res?.idle) toast('행동으로 해석되지 않았어요. 버튼을 쓰거나 다르게 적어주세요.', 'warning');
       if (res?.entry) {
         endTurn(res.entry.events);
-        if (res.entry.events.some(e => e.t === 'transition')) toast('🚨 들켰어요! 전투로 전환됩니다.', 'warning');
+        if (res.entry.events.some(e => e.t === 'transition')) toast('들켰어요! 전투로 전환됩니다.', 'warning');
         if (s.battle.status !== 'active') toast(`종료: ${{ win: '승리!', lose: '패배…', fled: '도주 성공', stopped: '중단', success: '성공!' }[s.battle.status] ?? s.battle.status} — 결과를 이야기로 보내주세요.`, ['win', 'success'].includes(s.battle.status) ? 'success' : 'info');
       }
     } catch (e) { console.error(e); toast(`턴 처리 오류: ${e.message}`, 'error'); }
@@ -569,9 +567,9 @@ const panelApi = {
     const m = ctx().chat?.[b.originIndex];
     if (m) { m.extra = { ...(m.extra ?? {}), battletale: { ...(m.extra?.battletale ?? {}) } }; m.extra.battletale.origin = [...(m.extra.battletale.origin ?? []), b.id]; try { await ctx().saveChat?.(); } catch { /* saved later */ } }
     ui.msg = null; ui.page = 'main'; ui.openingShown = null; ui.steps = null; ui.lastEvents = null; ui.target = null; ui.targetLocked = false;
-    trace('start', `🔁 다시하기 (${b.retries}회째) · ${b.title || b.mode}`, '');
+    trace('start', `다시하기 (${b.retries}회째) · ${b.title || b.mode}`, '');
     await saveState(); afterChange();
-    toast(`🔁 다시 도전! (${b.retries}회째)`, 'info');
+    toast(`다시 도전! (${b.retries}회째)`, 'info');
   },
   dismissResult: async () => { const s = state(); if (s?.battle) { s.battle.resultPending = false; s.battle.resultKey = 'dismissed'; await saveState(); afterChange(); } },
   codex: () => deps().codex.list(),
@@ -586,22 +584,83 @@ const panelApi = {
     e.sheet = sheet;
     deps().codex.put(e);
     if (s?.roster?.[e.id]) delete s.roster[e.id];
-    await saveState(); afterChange(); toast(`📖 저장: ${e.name}`);
+    await saveState(); afterChange(); toast(`저장: ${e.name}`);
     return e;
   },
+  codexArchived: () => deps().codex.archived?.() ?? [],
   deleteCodex: async id => { deps().codex.remove(id); afterChange(); },
+  /** Put a character away (it stops appearing in fights and prompts) or bring it back. Nothing is lost. */
+  archiveCodex: async (id, on) => {
+    const c = deps().codex;
+    if (!on) {
+      const e = c.all().find(x => x.id === id);
+      const clash = e && c.list().find(x => x.id !== id && x.name === e.name);
+      if (clash) return toast(`같은 이름의 캐릭터(${e.name})가 이미 있어요. 그쪽을 먼저 보관하거나 이름을 바꿔 주세요.`, 'warning');
+    }
+    const e = c.archive(id, on);
+    if (e) toast(on ? `${e.name}: 보관함으로 옮겼어요. 도감 아래 보관함에서 되돌릴 수 있어요.` : `${e.name}: 다시 활성화했어요.`);
+    afterChange();
+  },
+  restoreCodexVersion: async (id, index) => {
+    const s = state();
+    const e = deps().codex.restore(id, Number(index));
+    if (!e) return toast('그 버전을 찾지 못했어요.', 'warning');
+    if (s?.roster?.[id]) delete s.roster[id];
+    const comp = (s?.companions ?? []).find(c => c.codexId === id);
+    if (comp) Object.assign(comp, clone(e.sheet), { codexId: id, hp: Math.min(comp.hp ?? e.sheet.maxHp, e.sheet.maxHp), sp: Math.min(comp.sp ?? e.sheet.maxSp, e.sheet.maxSp) });
+    await saveState(); afterChange();
+    toast(`${e.name}: 이전 버전으로 되돌렸어요. 방금 버전은 이전 버전 목록에 남아 있어요.`, 'success');
+  },
+  /** One character (or the whole dex) as a JSON file. */
+  exportCodex: (id = null) => {
+    const c = deps().codex;
+    const pick = id ? c.all().filter(e => e.id === id) : c.all();
+    if (!pick.length) return toast('내보낼 캐릭터가 없어요.', 'warning');
+    const data = { battletale: 1, type: 'codex', exportedAt: new Date().toISOString(),
+      entries: pick.map(e => ({ name: e.name, concept: e.concept ?? '', role: e.role ?? '', archived: !!e.archived, sheet: { ...clone(e.sheet), codexId: undefined } })) };
+    const file = `battletale-${(id ? pick[0].name : 'dex').replace(/[^\p{L}\p{N}_-]+/gu, '_').slice(0, 40) || 'dex'}.json`;
+    try {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = file; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast(`${pick.length}명 내보냄: ${file}`);
+    } catch (err) { toast(`내보내기 실패: ${err.message}`, 'error'); }
+  },
+  /** Read a file made by exportCodex. Everything is re-normalized; imported passive code arrives switched off. */
+  importCodex: async text => {
+    const s = state();
+    if (!s) return;
+    let list;
+    try { list = importedEntries(text); } catch (err) { return toast(`불러오기 실패: ${err.message}`, 'error'); }
+    const p = profileOf(s);
+    const c = deps().codex;
+    let added = 0, replaced = 0;
+    for (const it of list) {
+      const sheet = normalizeSheet({ ...it.sheet, name: it.name }, p, { side: 'enemy', seed: it.name });
+      delete sheet.side;
+      if (sheet.customPassive) sheet.customPassive.enabled = false;
+      const old = c.all().find(e => e.name === sheet.name);
+      const id = old?.id ?? `c${Math.random().toString(36).slice(2, 10)}`;
+      sheet.codexId = id;
+      c.put({ ...(old ?? {}), id, name: sheet.name, sheet, concept: it.concept || old?.concept || '', role: it.role || old?.role || 'npc', updated: Date.now(), ...(it.archived && !old ? { archived: Date.now() } : {}) });
+      if (old) { replaced++; if (s.roster?.[id]) delete s.roster[id]; } else added++;
+    }
+    await saveState(); afterChange();
+    toast(`불러오기 완료: 새로 ${added}명${replaced ? `, 덮어쓰기 ${replaced}명 (이전 버전에서 복구 가능)` : ''}. 고유 부가효과는 꺼진 채로 들어와요.`, 'success');
+  },
   lockCodex: async (id, on) => { const c = deps().codex; const e = c.list().find(x => x.id === id); if (e) { c.put({ ...e, locked: on }); afterChange(); } },
   promote: async id => { if (promoteToCodex(state(), deps(), id)) { toast('이 채팅의 성장 상태를 기본판에 반영했어요.'); afterChange(); } },
   resetRoster: async id => { const s = state(); delete s.roster[id]; await saveState(); afterChange(); toast('이 채팅의 성장 기록을 지웠어요.'); },
-  joinCodex: async id => { const s = state(); const e = deps().codex.list().find(x => x.id === id); const j = e && joinParty(s, deps(), e.name); if (j) { await saveState(); afterChange(); toast(`🤝 ${j.name} 동료 합류`); } else toast('이미 동료이거나 찾을 수 없어요.', 'warning'); },
+  joinCodex: async id => { const s = state(); const e = deps().codex.list().find(x => x.id === id); const j = e && joinParty(s, deps(), e.name); if (j) { await saveState(); afterChange(); toast(`${j.name} 동료 합류`); } else toast('이미 동료이거나 찾을 수 없어요.', 'warning'); },
   genCodex: ({ id = null, name, concept = '', tier = '', shape = '', aliases = '', instruction = '' }) => work(async () => {
-    if (!effectiveAuxReady()) { toast('보조모델이 필요해요. ⚙ 설정에서 연결해주세요.', 'warning'); return null; }
+    if (!effectiveAuxReady()) { toast('보조모델이 필요해요. 설정에서 연결해주세요.', 'warning'); return null; }
     const s = state();
     try {
       const profile = await ensureProfile(s, deps());
       // Read only this character's own world-info entries (if any), not the whole lorebook.
       const lore = (await matchLore(settings(), [name, aliases, concept].join('\n'))).text;
-      toast(`🤖 ${name} 시트 생성 중…${lore ? ' (월드인포 참고)' : ''}`);
+      toast(`${name} 시트 생성 중…${lore ? ' (월드인포 참고)' : ''}`);
       const prev = id ? deps().codex.list().find(x => x.id === id) : null;
       const current = instruction && prev ? rosterSheet(s, prev) : null;
       // Canon for rank judgement: the card (the bot may BE this character, or describe them) and story lines that mention them.
@@ -609,7 +668,7 @@ const panelApi = {
       const seen = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(10, Number(settings().castScene) || 20) * 3 });
       const maxSkills = requestedSkillCap([concept, instruction].join('\n'), { current });
       const raw = await deps().auxJson(sheetMessages({ profile, own: lore, persona: concept, personaName: name, npc: true, tier, current, instruction, roster: rosterBrief(name), card: characterText(), story: seen, brief: briefText(s.brief), maxSkills }), { maxTokens: 2400 });
-      if (raw.__truncated) toast('⚠ 보조모델 답이 중간에 잘렸어요. 받은 부분까지만 반영했어요 (⚙ 최대 응답 토큰을 늘려보세요).', 'warning');
+      if (raw.__truncated) toast('보조모델 답이 중간에 잘렸어요. 받은 부분까지만 반영했어요 (설정의 최대 응답 토큰을 늘려보세요).', 'warning');
       Object.assign(raw, { name, desc: raw.desc || concept.slice(0, 200) });
       if (tier) raw.tier = tier;
       if (shape) raw.shape = shape;
@@ -621,7 +680,7 @@ const panelApi = {
       deps().codex.put({ ...e, concept, history: [...(old?.history ?? []), ...(instruction ? [{ at: Date.now(), instruction }] : [])].slice(-8) });
       if (s.roster?.[e.id]) delete s.roster[e.id];
       await saveState();
-      toast(`📖 ${e.name} 등록 완료`, 'success');
+      toast(`${e.name} 등록 완료`, 'success');
       afterChange();
       return e;
     } catch (err) { toast(`생성 실패: ${err.message}`, 'error'); afterChange(); return null; }
@@ -629,7 +688,7 @@ const panelApi = {
   // One shot: find the cast AND build their sheets in the same aux call, register them right away.
   // Unwanted ones are rerolled or deleted from the codex list afterwards.
   scanCast: () => work(async () => {
-    if (!effectiveAuxReady()) return toast('보조모델이 필요해요. ⚙ 설정에서 연결해주세요.', 'warning');
+    if (!effectiveAuxReady()) return toast('보조모델이 필요해요. 설정에서 연결해주세요.', 'warning');
     const s = state();
     try {
       const profile = await ensureProfile(s, deps());
@@ -640,9 +699,9 @@ const panelApi = {
       const existing = rosterBrief('') || '';
       const limit = Math.max(1, Math.min(8, Number(settings().castBatch) || 4));
       const includePlayer = !s.player;
-      toast(`🧭 인물을 찾아 바로 시트까지 만드는 중… (최대 ${limit}명${includePlayer ? ' + 나' : ''})`);
+      toast(`인물을 찾아 바로 시트까지 만드는 중… (최대 ${limit}명${includePlayer ? ' + 나' : ''})`);
       const r = await deps().auxJson(castMessages({ profile, personaName: persona.name, persona: persona.text, character: characterText(), lore, history, existing: existing ? existing.split('\n') : [], limit, includePlayer, brief: briefText(s.brief) }), { maxTokens: 9000 });
-      const known = new Set(deps().codex.list().flatMap(e => [e.name, ...(Array.isArray(e.sheet?.aliases) ? e.sheet.aliases : [])]).map(x => String(x).trim()));
+      const known = new Set((deps().codex.all?.() ?? deps().codex.list()).flatMap(e => [e.name, ...(Array.isArray(e.sheet?.aliases) ? e.sheet.aliases : [])]).map(x => String(x).trim()));
       const list = (Array.isArray(r?.characters) ? r.characters : []).filter(c => c?.name && !known.has(String(c.name).trim()) && (includePlayer || c.role !== 'player')).slice(0, limit + (includePlayer ? 1 : 0));
       const fresh = [];
       for (const c of list) {
@@ -663,9 +722,9 @@ const panelApi = {
       ui.castMore = !!r?.more || !!r?.__truncated;
       ui.cast = null;
       await saveState();
-      if (r?.__truncated) toast('⚠ 답이 길어서 잘렸어요. 완성된 인물까지만 등록했어요 — 나머지는 "더 찾기"로 (⚙ 최대 응답 토큰을 늘리거나 "인물 찾기 한 번에"를 줄여도 돼요).', 'warning');
+      if (r?.__truncated) toast('답이 길어서 잘렸어요. 완성된 인물까지만 등록했어요 — 나머지는 "더 찾기"로 (설정의 최대 응답 토큰을 늘리거나 "인물 찾기 한 번에"를 줄여도 돼요).', 'warning');
       if (!fresh.length) toast('찾은 인물이 없어요. 대화가 조금 더 진행된 뒤 다시 해보세요.', 'warning');
-      else toast(`📖 ${fresh.length}명 등록! 마음에 안 드는 인물은 목록의 🎲 리롤 / ✕ 삭제로 정리하세요.${ui.castMore ? ' 남은 인물은 "더 찾기"로.' : ''}`, 'success');
+      else toast(`${fresh.length}명 등록! 마음에 안 드는 인물은 목록의 리롤 / 보관으로 정리하세요.${ui.castMore ? ' 남은 인물은 "더 찾기"로.' : ''}`, 'success');
     } catch (e) { toast(`인물 찾기 실패: ${e.message}`, 'error'); }
     afterChange();
   }),
@@ -679,14 +738,14 @@ const panelApi = {
     const s = state();
     const e = deps().codex.list().find(x => x.id === id);
     if (!e) return;
-    if (!effectiveAuxReady()) return toast('먼저 ⚙ 설정에서 보조모델을 연결해 주세요.', 'warning');
+    if (!effectiveAuxReady()) return toast('먼저 설정에서 보조모델을 연결해 주세요.', 'warning');
     const profile = profileOf(s);
     const sh = rosterSheet(s, e);
     const names = [e.name, ...(Array.isArray(sh.aliases) ? sh.aliases : [])];
     const story = mentions(ctx().chat, names, { strip: stripBlocks, lookback: Math.max(15, Number(settings().castScene) || 20) * 3 });
     const scene = recentScene(ctx().chat, Math.max(6, Number(settings().sheetScene) || 6), { strip: stripBlocks });
     if (!story && !scene) return toast('최근 대화에서 반영할 내용을 찾지 못했어요.', 'warning');
-    toast(`📖 "${e.name}" 최근 대화 반영해 갱신 중…`);
+    toast(`"${e.name}" 최근 대화 반영해 갱신 중…`);
     try {
       const own = (await matchLore(settings(), names.join('\n')).catch(() => null))?.text ?? '';
       const raw = await deps().auxJson(sheetMessages({
@@ -700,7 +759,7 @@ const panelApi = {
       const next = normalizeSheet({ ...raw, name: e.name, aliases: sh.aliases ?? raw.aliases }, profile, { side: e.side ?? 'enemy', seed: e.name });
       deps().codex.put({ ...e, sheet: next, updatedAt: Date.now() });
       if (s.roster?.[e.id]) s.roster[e.id] = { ...s.roster[e.id], hp: Math.min(s.roster[e.id].hp ?? next.maxHp, next.maxHp), maxHp: next.maxHp, sp: Math.min(s.roster[e.id].sp ?? next.maxSp, next.maxSp), maxSp: next.maxSp, tier: next.tier, stats: clone(next.stats), skills: clone(next.skills), lines: clone(next.lines) };
-      toast(`✨ "${e.name}" 최신 대화 반영 완료!`, 'success');
+      toast(`"${e.name}" 최신 대화 반영 완료!`, 'success');
       trace('change', `도감 대화 동기화 · ${e.name}`, `등급: ${sh.tier ?? '?'} → ${next.tier ?? '?'}\n스킬: ${next.skills.map(k => k.name).join(', ')}`);
       await saveState();
     } catch (err) { toast(`도감 갱신 실패: ${err.message}`, 'error'); }
@@ -740,14 +799,14 @@ const panelApi = {
     const added = claimLoot(s, s?.battle);
     if (!added.length) return toast('이미 가방에 담았거나 전리품이 없어요.', 'info');
     await saveState(); afterChange();
-    toast(`🎒 가방에 담음: ${added.join(', ')}`, 'success');
+    toast(`가방에 담음: ${added.join(', ')}`, 'success');
   },
   restAfter: async (kind = 'short') => {
     const s = state();
     const done = restAfterBattle(s, kind);
     if (!done.length) return toast('이미 최상의 컨디션이에요.', 'info');
     await saveState(); afterChange();
-    toast(kind === 'full' ? `🛏 완전 회복 완료 (${done.join(', ')})` : `🏕 짧은 휴식 +30% (${done.join(', ')})`, 'success');
+    toast(kind === 'full' ? `완전 회복 완료 (${done.join(', ')})` : `짧은 휴식 +30% (${done.join(', ')})`, 'success');
   },
   setRuleSet: async sys => {
     const s = state();
@@ -764,7 +823,7 @@ const panelApi = {
     settings().ruleSet = s.profile.typeSystem;
     saveSettings();
     deps().cache.set(s.profile); await saveState(); afterChange();
-    toast(sys === 'pokemon' ? '🎮 포켓몬 속성 체계로 전환 (18타입·공식 상성표)' : '🌍 세계관 속성 체계로 전환');
+    toast(sys === 'pokemon' ? '포켓몬 속성 체계로 전환 (18타입·공식 상성표)' : '세계관 속성 체계로 전환');
   },
   setTierPreset: async key => {
     const s = state();
@@ -773,9 +832,9 @@ const panelApi = {
     s.profile = profile;
     remapTiers(s, before.tiers, profile.tiers);
     deps().cache.set(s.profile); await saveState(); afterChange();
-    toast(`🏷 등급 체계: ${profile.tiers.map(t => t.name).join(' → ')}`);
+    toast(`등급 체계: ${profile.tiers.map(t => t.name).join(' → ')}`);
   },
-  switchMode: async mode => { const s = state(); if (switchMode(s, mode, settings())) { await saveState(); afterChange(); toast(`${MODES[mode].icon} ${MODES[mode].ko}(으)로 바꿨어요.`); } else { toast('이 형식으로는 바꿀 수 없어요 (결투는 적이 1명일 때만).', 'warning'); afterChange(); } },
+  switchMode: async mode => { const s = state(); if (switchMode(s, mode, settings())) { await saveState(); afterChange(); toast(`${MODES[mode].ko}(으)로 바꿨어요.`); } else { toast('이 형식으로는 바꿀 수 없어요 (결투는 적이 1명일 때만).', 'warning'); afterChange(); } },
   stop: async (result = 'stopped') => {
     const s = state();
     const r = String(result ?? '').trim();
@@ -785,7 +844,7 @@ const panelApi = {
   genSheet: (extra, instruction = '') => work(async () => {
     const s = state();
     s.playerConcept = extra || s.playerConcept || '';
-    try { await ensurePlayer(s, deps(), { force: true, extra: s.playerConcept, instruction }); toast(instruction ? '✍️ 지시대로 고쳤어요!' : '🧬 시트 완성!', 'success'); } catch (e) { toast(`시트 생성 실패: ${e.message}`, 'error'); }
+    try { await ensurePlayer(s, deps(), { force: true, extra: s.playerConcept, instruction }); toast(instruction ? '지시대로 고쳤어요!' : '시트 완성!', 'success'); } catch (e) { toast(`시트 생성 실패: ${e.message}`, 'error'); }
     await saveState(); afterChange();
   }),
   importStat: async () => {
@@ -794,7 +853,7 @@ const panelApi = {
     if (!f) return toast(`최근 메시지에서 <${settings().statTag || 'stat'}> 태그를 찾지 못했어요.`, 'warning');
     if (!s.player) { await work(() => ensurePlayer(s, deps()).catch(e => toast(e.message, 'error'))); }
     else syncFromStatus(s, f, 'all');
-    await saveState(); afterChange(); toast('📥 상태창 값을 가져왔어요.');
+    await saveState(); afterChange(); toast('상태창 값을 가져왔어요.');
   },
   setup: () => runSetup({ ask: false }),
   enabledHere,
@@ -844,7 +903,7 @@ const panelApi = {
   brief: () => state()?.brief ?? null,
   genRules: () => work(async () => {
     const s = state();
-    try { await ensureProfile(s, deps(), { force: true }); toast('📜 룰 분석 완료! 시트도 새 룰로 다시 만들면 좋아요.', 'success'); } catch (e) { toast(`룰 분석 실패: ${e.message}`, 'error'); }
+    try { await ensureProfile(s, deps(), { force: true }); toast('룰 분석 완료! 시트도 새 룰로 다시 만들면 좋아요.', 'success'); } catch (e) { toast(`룰 분석 실패: ${e.message}`, 'error'); }
     await saveState(); afterChange();
   }),
   saveRules: async j => { const s = state(); s.profile = normalizeProfile(j); deps().cache.set(s.profile); await saveState(); afterChange(); },
@@ -870,7 +929,9 @@ const panelApi = {
     const lore = (await matchLore(settings(), [sheet.name, ...(sheet.aliases ?? []), concept].join('\n')).catch(() => ({ text: '' }))).text;
     const brief = briefText(s.brief);
 
-    let prevError = '', prevCode = '', finalCp = null, lastRes = null;
+    // A passive that crashed in a real fight: give the aux model the error and the code that caused it.
+    const crashed = sheet.customPassive?.lastError ? sheet.customPassive : null;
+    let prevError = crashed ? `전투 중 런타임 오류 (${crashed.lastError.hook}): ${crashed.lastError.msg}` : '', prevCode = crashed?.code ?? '', finalCp = null, lastRes = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       const msgs = passiveMessages({ profile: p, sheet, concept, lore, brief, instruction, prevError, prevCode });
       let raw;
@@ -902,7 +963,7 @@ const panelApi = {
     await saveState();
     afterChange();
     const hooks = lastRes?.triggeredHooks?.length ? ` · 훅 ${lastRes.triggeredHooks.length}개 확인` : '';
-    toast(`✦ 「${finalCp.name}」 고유 부가효과 적용 완료! (보안·드라이런 통과${hooks})`, 'success');
+    toast(`「${finalCp.name}」 고유 부가효과 적용 완료! (보안·드라이런 통과${hooks})`, 'success');
   }),
   savePassive: async (target, raw) => {
     const s = state();
@@ -929,7 +990,7 @@ const panelApi = {
     }
     await saveState();
     afterChange();
-    toast(`🔒 「${clean.name}」 안전 검증 통과 · 저장 완료!`, 'success');
+    toast(`「${clean.name}」 안전 검증 통과 · 저장 완료!`, 'success');
     return { ok: true, res };
   },
   togglePassive: async target => {
@@ -944,6 +1005,7 @@ const panelApi = {
       if (!res.ok) return toast(`보안 검증 실패로 켤 수 없어요: ${res.error}`, 'error');
       cp.valid = true;
       delete cp.error;
+      delete cp.lastError;
     }
     cp.enabled = !cp.enabled;
     if (!isPlayer) {
@@ -988,7 +1050,39 @@ function renderAll() {
     setFab(settings().enabled && !!ctx().chatId, s?.battle?.status === 'active');
   }, 60);
 }
-function afterChange() { renderAll(); refreshPanel(); try { refreshDock(); } catch { /* dock not open */ } }
+/** A passive that throws during a fight is skipped; tell the user once and mark the sheet so it can be rerolled. */
+function reportPassiveErrors() {
+  const s = state();
+  const st = s?.battle?.st;
+  const fighters = st?.fighters ?? st?.b?.fighters ?? [];
+  let marked = false;
+  for (const f of fighters) {
+    const err = f.pstate?.__err;
+    if (!err || err.reported) continue;
+    err.reported = true;
+    const name = f.customPassive?.name || '고유 특성';
+    trace('error', `고유 부가효과 실행 오류 · ${f.name} 「${name}」`, `훅: ${err.hook} · ${err.turn}턴
+오류: ${err.msg}
+이번 전투에서는 오류가 난 훅만 건너뛰고 나머지는 계속 실행해요.
+
+코드:
+${f.customPassive?.code ?? ''}`);
+    toast(`${f.name}의 고유 부가효과 「${name}」 실행 중 오류가 났어요. 캐릭터 카드에서 확인 후 리롤해 주세요.`, 'warning');
+    const mark = cp => { if (cp && cp.code === f.customPassive?.code) cp.lastError = { at: Date.now(), hook: err.hook, msg: err.msg }; };
+    if (f.isPlayer) mark(s.player?.customPassive);
+    if (f.codexId) {
+      const c = deps().codex;
+      const e = c.all().find(x => x.id === f.codexId);
+      if (e?.sheet?.customPassive) { mark(e.sheet.customPassive); c.put(e); }
+      mark(s.roster?.[f.codexId]?.customPassive);
+      for (const comp of s.companions ?? []) if (comp.codexId === f.codexId) mark(comp.customPassive);
+    }
+    marked = true;
+  }
+  if (marked) saveState();
+}
+
+function afterChange() { try { reportPassiveErrors(); } catch { /* reporting never blocks the UI */ } renderAll(); refreshPanel(); try { refreshDock(); } catch { /* dock not open */ } }
 
 /* ---------------- Settings UI ---------------- */
 function bindSettings() {
@@ -1129,15 +1223,15 @@ async function runSetup({ ask = true } = {}) {
   s.activated = true;
   if (!settings().enabled) setSetting('enabled', true);
   await saveState(); afterChange();
-  if (!effectiveAuxReady()) { toast('활성화했어요. 기초 설정은 ⚙ 설정에서 보조모델을 연결한 뒤 ⚙ → 룰의 "기초 설정 만들기"로 만들 수 있어요.', 'warning'); togglePanel(true); return; }
+  if (!effectiveAuxReady()) { toast('활성화했어요. 기초 설정은 설정에서 보조모델을 연결한 뒤 설정 → 룰의 "기초 설정 만들기"로 만들 수 있어요.', 'warning'); togglePanel(true); return; }
   await work(async () => {
     const hadPlayer = !!s.player;
     try {
-      toast('🧭 세계관을 읽고 기초 설정을 만드는 중…');
+      toast('세계관을 읽고 기초 설정을 만드는 중…');
       await setupChat(s, deps());
       const p = s.profile;
-      toast(`📜 기초 설정 완료 — ${p.name} · 등급 ${p.tiers.length}단계${p.elements?.length ? ` · 속성 ${p.elements.length}종` : ''}${!hadPlayer && s.player ? ` · ${s.player.name} 시트 (${s.player.tier})` : ''}`, 'success');
-      if (hadPlayer) toast('기존 캐릭터 시트는 그대로 뒀어요. 새 기준으로 다시 만들려면 캐릭터 탭에서 🤖 다시 만들기를 눌러주세요.');
+      toast(`기초 설정 완료 — ${p.name} · 등급 ${p.tiers.length}단계${p.elements?.length ? ` · 속성 ${p.elements.length}종` : ''}${!hadPlayer && s.player ? ` · ${s.player.name} 시트 (${s.player.tier})` : ''}`, 'success');
+      if (hadPlayer) toast('기존 캐릭터 시트는 그대로 뒀어요. 새 기준으로 다시 만들려면 캐릭터 탭에서 다시 만들기를 눌러주세요.');
     } catch (e) { toast(`기초 설정 실패: ${e.message}`, 'error'); }
   });
   await saveState(); afterChange(); togglePanel(true);
@@ -1166,7 +1260,7 @@ function registerCommands() {
     const skills = rest.join('|').split(/\s+\/\s+|\n/).map(x => x.trim()).filter(Boolean);
     const e = registerCharacter(s, deps(), { name, elements: types, tier, skills }, { side: 'enemy' });
     await saveState(); afterChange();
-    toast(`📖 ${e.name} 등록 (스킬 ${e.sheet.skills.length}개)`, 'success');
+    toast(`${e.name} 등록 (스킬 ${e.sheet.skills.length}개)`, 'success');
     return '';
   }, '도감에 캐릭터 등록: /bt-register 이름 | 타입 | 등급 | 스킬1 / 스킬2');
   reg('bt-mode', m => panelApi.switchMode(({ 파티: 'party', 결투: 'duel', 잠입: 'stealth', 추격: 'stealth' })[m] ?? m), '첫 턴 전에 형식 변경: party | duel | stealth');

@@ -355,14 +355,14 @@ ${text}
 ## Task
 Did this passage change anyone's HP, resource, status, items, stats, rank, skills, or companions OUTSIDE a battle? Answer with ONE JSON object:
 {"changes": ["<lines in this syntax>"], "why": "one short line"}
-Line syntax (who defaults to {{user}}; add a name for a companion):
+Line syntax (who defaults to {{user}}; put a companion's name first to target them):
   hp: full | +30% | -15% | +120 | Name +40%
   sp: full | +40% | -30% | Name full
   status: clear | Name clear
   item: Item name -1 | Item name +2
   stat: STR +2 | AGI +1
   skill: Skill name: physical 70 fire (short desc)
-  upgrade: Skill name power +10
+  upgrade: Skill name power +10 | Companion Skill name power +5 cost -2
   join: Name | tier <tier>
   leave: Name
   npc: RegisteredName | tier <tier> | stat AGI +3 | learn Skill name: magic 70 ice (short desc) | upgrade Skill name power +10
@@ -372,6 +372,8 @@ Guide — scale to what is actually shown:
 - potion, first aid, healing magic → as strong as described; a used consumable → item -1
 - new wounds, poison, exhaustion, spending mana on a spell → hp -10..40%, sp -20..60%; do not drop anyone to 0 unless they collapse
 - real training breakthrough, rank promotion, awakening, learning a named technique/spell, or a named companion joining/leaving → emit the matching stat / skill / upgrade / join / leave / npc line! Keep stat boosts modest (+1..+5) and only emit when the passage clearly shows it happening NOW.
+- Skill growth: name a skill EXACTLY as listed above. One upgrade per skill per passage, power +5..+15 (or cost -2..-5, acc +5..+10). A new technique uses the full skill line. The engine caps everything at the character's rank, so a big leap needs a rank change (tier:) the story actually shows.
+- Never repeat a change that "Just before" already showed, or one already reflected in the numbers above: an ongoing training scene is ONE upgrade when it pays off, not one per message.
 - Only what the passage shows happening now. No change, talk only, or a fight still in progress → {"changes": []}.`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
@@ -676,6 +678,8 @@ Read-only ctx:
 - ctx.self / ctx.target / ctx.attacker / ctx.victim / ctx.fallen:
   { name, hp, maxHp, hpPct (0-100), sp, maxSp, spPct (0-100), row ('front'|'back'), elements, statuses, statusCount, hasDebuff, hasBuff, isBoss }
 - ctx.skill: { name, kind ('physical'|'magic'|'heal'|'buff'|'debuff'|'guard'), element, power, range ('melee'|'ranged'), isBasic, hits, priority }
+- ctx.hit (0-based hit number) / ctx.firstHit: the attack hooks fire once PER HIT, so a multi-hit skill (hits 3) runs beforeAttack/afterAttack 3 times. Use if (ctx.firstHit) for "once per action" stacks or bonuses.
+- turnStart / turnEnd fire once per turn; stacks that grow "every turn" go there.
 - ctx.dmg, ctx.crit, ctx.eff ('super'|'weak'|'resist'|'immune'|null), ctx.ko, ctx.fatal (boolean: incoming hit would KO)
 - ctx.mem: persistent per-battle key-value object (read stacks/flags stored by fx.flag)
 - ctx.hasStatus('self'|'target'|'attacker', statusId) -> boolean
@@ -684,7 +688,7 @@ Read-only ctx:
 
 Effect API (fx.*) — engine enforces balance caps automatically:
 - fx.dmgMul(mul, msg?): multiply damage in beforeAttack/beforeHit (0.65..1.45)
-- fx.dmgFlat(pctMaxHp, msg?): bonus flat damage in beforeAttack (-10..12 % of target maxHp)
+- fx.dmgFlat(pctMaxHp, msg?; 12 % total per turn, 6 % on bosses): bonus flat damage in beforeAttack (-10..12 % of target maxHp)
 - fx.heal(pctMaxHp, msg?): heal self (1..20 % of maxHp; capped 25%/turn)
 - fx.sp(pctMaxSp, msg?): change self SP (-25..25 % of maxSp)
 - fx.stage('self'|'target'|'foes'|'allies', stat, delta, msg?): stat in pow|mag|def|res|spd|acc|eva|luk, delta -2..+2
@@ -696,13 +700,15 @@ Effect API (fx.*) — engine enforces balance caps automatically:
 
 STRICT SECURITY RULES (violation rejects the code):
 - ONLY use if/else, const/let, arithmetic, comparisons, dot property access, ctx.*, fx.*, Math.min/max/floor/ceil/round/abs.
+- ALLOWLIST: any name that is not ctx, fx, Math, Number, String, Boolean or a variable you declared with const/let is rejected, and so is any property not listed above (plus .length .includes .indexOf .startsWith .endsWith .toLowerCase .toUpperCase .trim .slice .at on strings/arrays).
+- Read stored values directly as ctx.mem.key (do not copy ctx.mem into a variable). Assign only to your own let variables; no ++/--, one variable per const/let.
 - NEVER use: while, for, do, function, =>, new, class, this, try/catch, backticks (\`), regex, Math.random, eval, Function, window, document, fetch, Object, or dynamic bracket access obj[key] (only obj.prop or arr[0]).
 - Always guard nullable objects (e.g. if (ctx.skill && ctx.skill.kind === 'physical')).
 - Keep code concise (5-20 lines), thematic to the character, and tactically interesting (1-2 clean synergistic hooks — e.g. stacking mechanic, conditional power, crisis survival, counter-stance, or kill momentum — NOT overpowered).
 
 ## Examples
 Example 1 (sword aura stacker):
-{"name":"검기 축적","desc":"물리 공격마다 검기 스택을 1 쌓는다(최대 4). 스택당 물리 피해 +8%, 4스택 도달 시 스피드 상승.","code":"if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {\\n  const s = ctx.mem.stacks || 0;\\n  if (s > 0) fx.dmgMul(1 + s * 0.08, '검기 방출');\\n}\\nif (ctx.hook === 'afterAttack' && ctx.skill && ctx.skill.kind === 'physical') {\\n  const next = Math.min(4, (ctx.mem.stacks || 0) + 1);\\n  fx.flag('stacks', next);\\n  if (next === 4 && !ctx.mem.peaked) { fx.flag('peaked', true); fx.stage('self', 'spd', 1, '검기 완성'); }\\n}"}
+{"name":"검기 축적","desc":"물리 공격마다 검기 스택을 1 쌓는다(최대 4). 스택당 물리 피해 +8%, 4스택 도달 시 스피드 상승.","code":"if (ctx.hook === 'beforeAttack' && ctx.skill && ctx.skill.kind === 'physical') {\\n  const s = ctx.mem.stacks || 0;\\n  if (s > 0) fx.dmgMul(1 + s * 0.08, '검기 방출');\\n}\\nif (ctx.hook === 'afterAttack' && ctx.firstHit && ctx.skill && ctx.skill.kind === 'physical') {\\n  const next = Math.min(4, (ctx.mem.stacks || 0) + 1);\\n  fx.flag('stacks', next);\\n  if (next === 4 && !ctx.mem.peaked) { fx.flag('peaked', true); fx.stage('self', 'spd', 1, '검기 완성'); }\\n}"}
 
 Example 2 (phoenix crisis passive):
 {"name":"불사조의 잔불","desc":"전투당 1회 치명타/치명상을 HP 1로 버티고 체력을 18% 회복한다. 근접 피격 시 30% 확률로 화상 반사.","code":"if (ctx.hook === 'beforeHit' && ctx.fatal && !ctx.mem.revived) {\\n  fx.flag('revived', true);\\n  fx.endure('불사조의 가호');\\n  fx.heal(18, '잔불 재생');\\n}\\nif (ctx.hook === 'afterHit' && ctx.attacker && ctx.skill && ctx.skill.range === 'melee') {\\n  fx.status('target', 'burn', 30, 2, '작열의 반사');\\n}"}

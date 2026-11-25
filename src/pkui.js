@@ -286,9 +286,9 @@ export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, 
   const t = k.element && !['none', 'physical'].includes(k.element) ? typeIn(k.element, sys) : 'normal';
   const over = (k.cost ?? 0) > actor.sp;
   const tags = [];
-  if (['physical', 'magic'].includes(k.kind)) tags.push({ text: `${k.kind === 'magic' ? '✦' : '⚔'}${k.power}${k.hits > 1 ? `×${k.hits}` : ''}` });
+  if (['physical', 'magic'].includes(k.kind)) tags.push({ text: `${k.kind === 'magic' ? '마법' : '물리'} ${k.power}${k.hits > 1 ? `×${k.hits}` : ''}` });
   else if (k.kind === 'heal') tags.push({ text: `✚${k.power}%` });
-  else tags.push({ text: { buff: '▲강화', debuff: '▼방해', guard: k.protect ? '⛨막기' : '⛨방어', revive: '✚부활', cleanse: '❖정화' }[k.kind] ?? k.kind });
+  else tags.push({ text: { buff: '▲강화', debuff: '▼방해', guard: k.protect ? '막기' : '방어', revive: '✚부활', cleanse: '❖정화' }[k.kind] ?? k.kind });
   if (k.priority > 0) tags.push({ text: '선공', cls: 'prio' });
   if (foe && ['physical', 'magic'].includes(k.kind)) {
     const mul = E.elementMul(foe, k.element, b).mul;
@@ -301,8 +301,8 @@ export function skillItem(k, { actor, b, sys, foe = null, cd = 0, used = false, 
   }
   const first = skillCard(k, { sys }).lines.find(l => !/^(선공|후공|재사용|\d+회 공격|적 전체|아군|자신|명중|HP \d+% 회복)/.test(l));
   if (first) tags.push({ text: first.length > 12 ? `${first.slice(0, 11)}…` : first, cls: 'fx' });
-  const why = used ? '사용함' : cd ? `⏳${cd}` : '';
-  const title = `${k.name}${k.desc ? ` — ${k.desc}` : ''}${over ? `\n⚠ 기력 부족 → 과로 (HP 소모·다음 턴 탈진)` : ''}`;
+  const why = used ? '사용함' : cd ? `대기 ${cd}` : '';
+  const title = `${k.name}${k.desc ? ` — ${k.desc}` : ''}${over ? `\n기력 부족 → 과로 (HP 소모·다음 턴 탈진)` : ''}`;
   return { label: k.name, type: t, cost: k.cost, over, tags, why, title, disabled: !!(cd || used), act, v: k.name, target };
 }
 
@@ -344,7 +344,7 @@ export function inspectHtml(f, { b, profile, intel = 2, side, intent = '' }) {
   const cp = f.customPassive;
   const pstateEntries = Object.entries(f.pstate ?? {}).filter(([k]) => !k.startsWith('__'));
   const cpHtml = cp && cp.enabled && b?.customPassives !== false && (side !== 'enemy' || intel >= 1)
-    ? `<div class="pk-passive"><b>✦ ${h(cp.name)}</b>${cp.desc ? ` <small>${h(cp.desc)}</small>` : ''}${pstateEntries.length ? `<div class="pk-pstate">${pstateEntries.map(([k, v]) => `<span>${h(k)}: <b>${h(String(v))}</b></span>`).join('')}</div>` : ''}</div>`
+    ? `<div class="pk-passive"><b>${h(cp.name)}</b>${cp.desc ? ` <small>${h(cp.desc)}</small>` : ''}${pstateEntries.length ? `<div class="pk-pstate">${pstateEntries.map(([k, v]) => `<span>${h(k)}: <b>${h(String(v))}</b></span>`).join('')}</div>` : ''}</div>`
     : '';
   return `<div class="pk-inspect"><div class="pk-ins-box">
     <div class="pk-ins-head"><b>${h(f.name)}</b> <small>${h(f.tier ?? '')}</small> ${types.map(t => `<span class="bt-type t-${typeIn(t, sys)}">${h(typeName(t, sys))}</span>`).join('')}<button class="pk-ins-x" data-act="pk:inspect-close">✕</button></div>
@@ -361,7 +361,7 @@ export function inspectHtml(f, { b, profile, intel = 2, side, intent = '' }) {
 }
 
 /* ---------- Library-of-Ruina style combat pages ---------- */
-const KIND_ICON = { physical: '⚔', magic: '✦', heal: '✚', buff: '▲', debuff: '▼', guard: '⛨', revive: '✚', cleanse: '❖' };
+const KIND_ICON = { physical: '물', magic: '마', heal: '✚', buff: '▲', debuff: '▼', guard: '방', revive: '✚', cleanse: '❖' };
 const KIND_NAME = { physical: '물리', magic: '특수', heal: '회복', buff: '강화', debuff: '방해', guard: '방어', revive: '부활', cleanse: '정화' };
 const STG = { pow: '공격', mag: '특공', def: '방어', res: '특방', spd: '스피드', acc: '명중', eva: '회피', luk: '운' };
 
