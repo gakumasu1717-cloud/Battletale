@@ -1566,6 +1566,56 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.equal(P.detectStatTag(['<memo>장소: 숲\n날씨: 맑음\n시간: 밤</memo>']), '', 'needs a health/resource/rank field');
 });
 
+/* 70 */ await test('기술별 AI 부가효과: 그 기술을 쓸 때만 발동 · 보조기(onUse)도 동작 · 시트 저장 후에도 유지', async () => {
+  const PV = await import(here + 'passive.js');
+  const fxCode = `if (ctx.hook === 'onUse') fx.flag('used', (ctx.mem.used || 0) + 1);\nif (ctx.hook === 'beforeAttack' && ctx.firstHit) fx.dmgMul(1.2, '각인');`;
+  const raw = { name: '각인 베기', kind: 'physical', power: 60, acc: 100, customFx: { name: '각인', desc: '쓸 때마다 각인', code: fxCode, enabled: true, valid: true } };
+  const k = C.normalizeSkill(raw, { maxSp: 200 });
+  assert.equal(k.customFx?.code, fxCode, 'normalizeSkill must keep the coded effect');
+  assert.equal(PV.testPassive(k.customFx, { skill: k }).ok, true);
+  const me = hero();
+  me.skills = [k, C.normalizeSkill({ name: '평범한 찌르기', kind: 'physical', power: 60, acc: 100 }, { maxSp: 200 }), C.normalizeSkill({ name: '기합', kind: 'buff', target: 'self', stages: { pow: 1 }, customFx: { name: '집중', code: `if (ctx.hook === 'onUse') fx.flag('focus', true);`, enabled: true } }, { maxSp: 200 })];
+  me.sp = me.maxSp = 300;
+  const foe = C.normalizeSheet({ name: '허수아비', tier: 'C', hp: 9000, stats: { END: 10 }, skills: ['가만히: 강화'] }, PROFILE, { side: 'enemy' });
+  const b0 = E.createBattle({ party: [me], enemies: [foe], profile: PROFILE, seed: 'sfx', customPassives: true });
+  const t = b0.fighters.find(f => f.side === 'enemy');
+  let r = E.resolveTurn(b0, [{ actor: 'player', type: 'skill', skill: '평범한 찌르기', target: t.id }]);
+  assert.equal(r.battle.fighters.find(f => f.isPlayer).pstate.used, undefined, 'another skill must not run this code');
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '각인 베기', target: t.id }]);
+  const p1 = r.battle.fighters.find(f => f.isPlayer).pstate;
+  assert.equal(p1.used, 1, 'onUse must fire once for the skill');
+  assert.ok(r.events.some(e => e.t === 'passive' && e.name === '각인'), 'the effect shows in the log under its name');
+  r = E.resolveTurn(r.battle, [{ actor: 'player', type: 'skill', skill: '기합' }]);
+  assert.equal(r.battle.fighters.find(f => f.isPlayer).pstate.focus, true, 'non-damaging skills run onUse too');
+  // chat switch off → nothing runs
+  const off = E.createBattle({ party: [me], enemies: [foe], profile: PROFILE, seed: 'sfx2', customPassives: false });
+  const r2 = E.resolveTurn(off, [{ actor: 'player', type: 'skill', skill: '각인 베기', target: off.fighters.find(f => f.side === 'enemy').id }]);
+  assert.equal(r2.battle.fighters.find(f => f.isPlayer).pstate.used, undefined);
+  // the sandbox rules are the same as for passives
+  assert.equal(PV.testPassive({ code: `chat.innerHTML = 'x'` }, { skill: k }).ok, false);
+});
+
+/* 71 */ await test('스탯: 세계관 스탯이 어떤 전투 스탯에 쓰이는지 알 수 있고, 행운이 상태이상 확률에도 쓰인다', () => {
+  const p = C.normalizeProfile({ stats: ['STR', 'INT', 'AGI', 'END', 'SEN', 'LUK', 'CHA'] });
+  const roles = C.statRoles(p);
+  assert.deepEqual(roles.STR, ['pow']); assert.deepEqual(roles.LUK, ['luk']); assert.deepEqual(roles.CHA, []);
+  assert.ok(roles.INT.includes('mag') && roles.INT.includes('res'));
+  const run = luk => {
+    const me = hero(); me.stats.LUK = luk;
+    me.skills = [C.normalizeSkill({ name: '독침', kind: 'physical', power: 10, acc: 100, status: { id: 'poison', chance: 50 } }, { maxSp: 200 })];
+    let n = 0;
+    for (let i = 0; i < 120; i++) {
+      const foe = C.normalizeSheet({ name: '표적', tier: 'C', hp: 9000, stats: { END: 40, LUK: 40 }, skills: ['가만히: 강화'] }, PROFILE, { side: 'enemy' });
+      const b = E.createBattle({ party: [me], enemies: [foe], profile: PROFILE, seed: `luk${luk}:${i}` });
+      const r = E.resolveTurn(b, [{ actor: 'player', type: 'skill', skill: '독침', target: b.fighters.find(f => f.side === 'enemy').id }]);
+      if (r.events.some(e => e.t === 'status' && e.status === 'poison')) n++;
+    }
+    return n;
+  };
+  const lucky = run(160), unlucky = run(10);
+  assert.ok(lucky > unlucky + 15, `luck should tilt status chance (lucky ${lucky} vs unlucky ${unlucky} of 120)`);
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

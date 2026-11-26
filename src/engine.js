@@ -8,7 +8,7 @@
 //  - terrain, initiative (ambush) and intel (how much you know) come from the story
 // Physical layer: optional timing grades for the player's attacks and defenses.
 import { STATUS, DERIVED, TRAITS, derive, inferItem, elementId, stageKey, typeIn, typesFor } from './catalog.js';
-import { evalPassive } from './passive.js';
+import { evalPassive, SKILL_FX_HOOKS } from './passive.js';
 import { makeRng, clamp, clone, norm, pct, num } from './util.js';
 
 const STAGE_MIN = -4, STAGE_MAX = 4;
@@ -116,15 +116,34 @@ function entryTrait(b, f, ev) {
   triggerPassive('battleStart', b, f, {}, rng, ev);
 }
 
-/** Run a fighter's LLM-coded custom passive safely and apply its clamped effects. */
+/**
+ * Run a fighter's LLM-coded effects for a hook: the signature passive, plus the extra effect of the skill being used
+ * (onUse / beforeAttack / afterAttack only, and only the attacker's own skill). Per-turn caps are shared by all of a
+ * fighter's code, so stacking several coded skills can't break them. Damage modifiers combine.
+ */
 function triggerPassive(hook, b, f, extra, rng, ev) {
-  if (extra?._fromPassive || !f?.customPassive?.enabled || b?.customPassives === false) return null;
+  if (extra?._fromPassive || b?.customPassives === false || !f) return null;
   if (!active(f) && hook !== 'beforeHit' && hook !== 'onAllyDown') return null;
-  const res = evalPassive(hook, b, f, extra, rng);
+  const sources = [];
+  if (f.customPassive?.enabled) sources.push(f.customPassive);
+  const sk = extra?.skill;
+  if (sk?.customFx?.enabled && SKILL_FX_HOOKS.includes(hook) && (f.skills ?? []).some(k => k.name === sk.name)) sources.push({ ...sk.customFx, name: sk.customFx.name || sk.name });
+  let out = null;
+  for (const cp of sources) {
+    const r = runCoded(hook, b, f, extra, rng, ev, cp);
+    if (!r) continue;
+    out = out ? { ops: { ...r.ops, dmgMul: out.ops.dmgMul * r.ops.dmgMul, dmgFlatPct: out.ops.dmgFlatPct + r.ops.dmgFlatPct }, willEndure: out.willEndure || r.willEndure } : r;
+  }
+  if (out) out.ops.dmgMul = clamp(out.ops.dmgMul, 0.6, 1.5);
+  return out;
+}
+
+function runCoded(hook, b, f, extra, rng, ev, cp) {
+  const res = evalPassive(hook, b, f, extra, rng, cp);
   if (res?.error) {
     // Remember the first runtime error per fighter; the host reports it once (trace + badge on the sheet).
     f.pstate ??= {};
-    if (!f.pstate.__err) f.pstate.__err = { hook, msg: String(res.error).slice(0, 160), turn: b.turn ?? 0 };
+    if (!f.pstate.__err) f.pstate.__err = { hook, msg: String(res.error).slice(0, 160), turn: b.turn ?? 0, source: cp === f.customPassive ? 'passive' : cp.name, code: cp.code };
     return null;
   }
   if (!res || !res.ops) return null;
@@ -140,7 +159,7 @@ function triggerPassive(hook, b, f, extra, rng, ev) {
   const willLog = ops.logs.length > 0;
 
   if (hasDmgMod || willEndure || willHeal || willSp || willStage || willStatus || willCounter || willLog) {
-    ev.push({ t: 'passive', who: f.name, name: f.customPassive.name || '고유 특성', msg: ops.logs.join(' · ') });
+    ev.push({ t: 'passive', who: f.name, name: cp.name || '고유 특성', msg: ops.logs.join(' · ') });
   }
 
   if (willHeal && !willEndure) {
@@ -197,7 +216,7 @@ function triggerPassive(hook, b, f, extra, rng, ev) {
     if (usePct > 0) {
       f._pCounterTurn = (f._pCounterTurn ?? 0) + usePct;
       const cdmg = Math.max(1, Math.round(extra.attacker.maxHp * usePct / 100));
-      applyDamage(b, f, extra.attacker, cdmg, ev, { label: f.customPassive.name || '반격', _fromPassive: true, rng });
+      applyDamage(b, f, extra.attacker, cdmg, ev, { label: cp.name || '반격', _fromPassive: true, rng });
     }
   }
   return { ops, willEndure };
@@ -377,6 +396,8 @@ export function hitChance(a, t, skill) {
   return clamp(p, 0.05, 1);
 }
 
+/** Luck tilts status infliction: ×0.7 … ×1.3 by the attacker's luck against the target's. */
+const luckMul = (a, t) => clamp(1 + 0.3 * Math.log2(Math.max(1, stat(a, 'luk')) / Math.max(1, stat(t, 'luk'))), 0.7, 1.3);
 const critChance = (a, t, skill) => clamp(0.05 + 0.1 * clamp(Math.log2(Math.max(1, stat(a, 'luk')) / Math.max(1, stat(t, 'luk'))), -1, 1) + (skill.crit ?? 0), 0.02, 0.5);
 
 export function estimate(b, a, t, skill) {
@@ -681,6 +702,7 @@ function useSkill(b, f, skill, wanted, rng, ev, cmd = {}, { released = false } =
       else ev.push({ t: 'swap', who: f.name, row: f.row, fromSkill: true });
     }
     if (active(f) && skill.pivot) pivotOut(b, f, ev);
+    if (active(f)) triggerPassive('onUse', b, f, { skill, target: targets[0] ?? null }, rng, ev);
   }
 }
 
@@ -794,7 +816,7 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
         }
         if (skill.pull && landed && active(t) && t.row === 'back' && b.format !== 'singles') { t.row = 'front'; ev.push({ t: 'swap', who: t.name, row: 'front', pulled: true }); }
         if (landed && active(t)) {
-          if (skill.status && rng.chance(skill.status.chance / 100)) addStatus(t, skill.status, ev, f);
+          if (skill.status && rng.chance(clamp(skill.status.chance / 100 * (t.side !== f.side ? luckMul(f, t) : 1), 0, 1))) addStatus(t, skill.status, ev, f);
           if (skill.stages) applyStages(b, f, t, skill.stages, ev);
         } else if (landed && skill.stages) applyStages(b, f, t, skill.stages, ev, { selfOnly: true });
         break;
@@ -846,7 +868,7 @@ function targetsLoop(b, f, skill, targets, rng, ev, cmd, aoe) {
         if (t.protect && t.side !== f.side) { ev.push({ t: 'protected', who: t.name, attacker: f.name, skill: skill.name }); break; }
         if (t.side !== f.side && !rng.chance(hitChance(f, t, skill))) { ev.push({ t: 'miss', who: f.name, target: t.name }); break; }
         if (skill.stages) applyStages(b, f, t, skill.stages, ev, { force: true });
-        if (skill.status && rng.chance(skill.status.chance / 100)) addStatus(t, skill.status, ev, f);
+        if (skill.status && rng.chance(clamp(skill.status.chance / 100 * (t.side !== f.side ? luckMul(f, t) : 1), 0, 1))) addStatus(t, skill.status, ev, f);
         else if (skill.status) ev.push({ t: 'resist', who: t.name, status: skill.status.id });
         if (skill.power > 0) applyDamage(b, f, t, Math.max(1, Math.round(rawDamage(b, f, t, { ...skill, kind: 'magic' }, { rand: rng.range(0.85, 1), aoe }))), ev, {});
         break;

@@ -1053,6 +1053,54 @@ const panelApi = {
     toast(`「${clean.name}」 안전 검증 통과 · 저장 완료!`, 'success');
     return { ok: true, res };
   },
+  /** AI-code an extra effect for one skill (player or dex character), security-checked and dry-run with that skill. */
+  genSkillFx: (target, skillName, instruction = '') => work(async () => {
+    if (!effectiveAuxReady()) return toast('먼저 보조모델을 연결해 주세요.', 'warning');
+    const s = state();
+    if (!s) return;
+    const p = profileOf(s);
+    const isPlayer = target === 'player';
+    const entry = isPlayer ? null : deps().codex.list().find(e => e.id === target);
+    const sheet = isPlayer ? s.player : (entry ? rosterSheet(s, entry) : null);
+    const skill = sheet?.skills?.find(k => k.name === skillName);
+    if (!skill) return toast('기술을 찾지 못했어요.', 'warning');
+    const concept = isPlayer ? (s.playerConcept || personaInfo().text || '') : (entry.concept || entry.sheet?.desc || '');
+    const crashed = skill.customFx?.lastError ? skill.customFx : null;
+    let prevError = crashed ? `전투 중 런타임 오류 (${crashed.lastError.hook}): ${crashed.lastError.msg}` : '', prevCode = crashed?.code ?? '', done = null, lastRes = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let raw;
+      try {
+        raw = await deps().auxJson(passiveMessages({ profile: p, sheet, concept, brief: briefText(s.brief), instruction, prevError, prevCode, skill }), { maxTokens: 2000, label: `기술 부가효과 (${sheet.name} · ${skill.name}${attempt ? ' · 재시도' : ''})` });
+      } catch (e) { return toast(`부가효과 생성 실패: ${e.message}`, 'error'); }
+      const cp = normalizeCustomPassive(raw);
+      const res = testPassive(cp, { skill });
+      lastRes = res;
+      if (cp && res.ok) { done = { ...cp, enabled: true, valid: true }; break; }
+      prevError = res.error || cp?.error || '검증 실패';
+      prevCode = String(raw?.code ?? '');
+    }
+    if (!done) return toast(`부가효과 보안·실행 검증 실패: ${lastRes?.error || prevError}`, 'error');
+    editSkillEverywhere(s, target, skillName, k => { k.customFx = clone(done); });
+    await saveState(); afterChange();
+    toast(`「${skill.name}」에 부가효과 「${done.name}」을 붙였어요.`, 'success');
+  }),
+  toggleSkillFx: async (target, skillName) => {
+    const s = state();
+    let blocked = '';
+    editSkillEverywhere(s, target, skillName, k => {
+      if (!k.customFx) return;
+      if (!k.customFx.enabled) { const r = testPassive(k.customFx, { skill: k }); if (!r.ok) { blocked = r.error; return; } delete k.customFx.lastError; }
+      k.customFx.enabled = !k.customFx.enabled;
+    });
+    if (blocked) return toast(`보안 검증 실패로 켤 수 없어요: ${blocked}`, 'error');
+    await saveState(); afterChange();
+  },
+  deleteSkillFx: async (target, skillName) => {
+    const s = state();
+    editSkillEverywhere(s, target, skillName, k => { delete k.customFx; });
+    await saveState(); afterChange();
+    toast('기술 부가효과를 지웠어요.');
+  },
   togglePassive: async target => {
     const s = state();
     if (!s) return;
@@ -1111,6 +1159,17 @@ function renderAll() {
   }, 60);
 }
 /** A passive that throws during a fight is skipped; tell the user once and mark the sheet so it can be rerolled. */
+/** Apply fn to the named skill on every copy of a character's sheet (player; or dex base, chat growth, companion). */
+function editSkillEverywhere(s, target, skillName, fn) {
+  const hit = sh => { const k = sh?.skills?.find(x => x.name === skillName); if (k) fn(k); };
+  if (target === 'player') return hit(s?.player);
+  const c = deps().codex;
+  const e = c.all().find(x => x.id === target);
+  if (e?.sheet) { hit(e.sheet); c.put(e); }
+  hit(s?.roster?.[target]);
+  for (const comp of s?.companions ?? []) if (comp.codexId === target) hit(comp);
+}
+
 function reportPassiveErrors() {
   const s = state();
   const st = s?.battle?.st;
@@ -1120,15 +1179,25 @@ function reportPassiveErrors() {
     const err = f.pstate?.__err;
     if (!err || err.reported) continue;
     err.reported = true;
-    const name = f.customPassive?.name || '고유 특성';
+    const isSkill = err.source && err.source !== 'passive';
+    const name = isSkill ? err.source : f.customPassive?.name || '고유 특성';
     trace('error', `고유 부가효과 실행 오류 · ${f.name} 「${name}」`, `훅: ${err.hook} · ${err.turn}턴
 오류: ${err.msg}
 이번 전투에서는 오류가 난 훅만 건너뛰고 나머지는 계속 실행해요.
 
 코드:
-${f.customPassive?.code ?? ''}`);
+${err.code ?? f.customPassive?.code ?? ''}`);
     toast(`${f.name}의 고유 부가효과 「${name}」 실행 중 오류가 났어요. 캐릭터 카드에서 확인 후 리롤해 주세요.`, 'warning');
-    const mark = cp => { if (cp && cp.code === f.customPassive?.code) cp.lastError = { at: Date.now(), hook: err.hook, msg: err.msg }; };
+    const code = err.code ?? f.customPassive?.code;
+    const stamp = cp => { if (cp && cp.code === code) cp.lastError = { at: Date.now(), hook: err.hook, msg: err.msg }; };
+    const mark = cp => stamp(cp);
+    if (isSkill) {
+      const tgt = f.isPlayer ? 'player' : f.codexId;
+      const sk = (f.skills ?? []).find(k => k.customFx?.code === code);
+      if (tgt && sk) editSkillEverywhere(s, tgt, sk.name, k => stamp(k.customFx));
+      marked = true;
+      continue;
+    }
     if (f.isPlayer) mark(s.player?.customPassive);
     if (f.codexId) {
       const c = deps().codex;

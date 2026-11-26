@@ -651,14 +651,17 @@ export function panelWaitPrompt(b, profile, opts = {}) {
 }
 
 /* ====================== Aux model: LLM-coded signature passive ====================== */
-export function passiveMessages({ profile, sheet, concept = '', lore = '', brief = '', instruction = '', prevError = '', prevCode = '' }) {
-  const system = `You design and code ONE balanced, character-defining combat passive in a restricted JavaScript sandbox for a turn-based RPG engine. Output ONLY a single JSON object: {"name": "...", "desc": "...", "code": "..."}. No markdown, no commentary.`;
+export function passiveMessages({ profile, sheet, concept = '', lore = '', brief = '', instruction = '', prevError = '', prevCode = '', skill = null }) {
+  const system = skill
+    ? `You design and code ONE extra effect for a single skill of a turn-based RPG character, in a restricted JavaScript sandbox. The skill's normal effect (damage, its listed status/stat changes) already happens; your code adds what makes this skill special. Output ONLY a single JSON object: {"name": "...", "desc": "...", "code": "..."}. No markdown, no commentary.`
+    : `You design and code ONE balanced, character-defining combat passive in a restricted JavaScript sandbox for a turn-based RPG engine. Output ONLY a single JSON object: {"name": "...", "desc": "...", "code": "..."}. No markdown, no commentary.`;
+  const skillPart = skill ? `\n## THE SKILL this effect belongs to\n${skillLine(skill)}${skill.desc ? ` — ${skill.desc}` : ''}${skill.customFx?.name ? `\nCurrent extra effect: ${skill.customFx.name} — ${skill.customFx.desc}` : ''}\nYour code runs ONLY while this skill is being used. Use these hooks only:\n- 'onUse': once, after the skill resolves (ctx.target = its first target, ctx.skill = this skill) — any skill kind\n- 'beforeAttack': each hit of this skill before damage (ctx.target, ctx.dmg; fx.dmgMul / fx.dmgFlat change this hit) — damaging skills only\n- 'afterAttack': each hit after damage (ctx.ko, ctx.firstHit) — damaging skills only\nDo not repeat what the skill line already does. Keep it to ONE clear twist (a condition, a follow-up, a stack, a trade-off), not raw extra power.\n` : '';
   const user = `## Character
 ${sheetText(sheet, profile)}
 Elements: ${(sheet.elements ?? []).join(', ') || 'none'} | Threat: ${sheet.threat ?? 'normal'} | Trait: ${sheet.trait ?? 'none'}
 ${concept ? `Concept / bio: ${concept}` : ''}
 ${sheet.customPassive?.name ? `Current passive: ${sheet.customPassive.name} — ${sheet.customPassive.desc}` : ''}
-
+${skillPart}
 ${brief ? `## World\n${String(brief).slice(0, 600)}\n` : ''}${lore ? `## Relevant lore\n${String(lore).slice(0, 1200)}\n` : ''}${instruction ? `## User request (follow this)\n${instruction}\n` : ''}${prevError ? `## Previous attempt failed — FIX THIS\nError: ${prevError}\nPrevious code:\n${prevCode}\n` : ''}
 ## Sandbox API (strict — code is statically security-checked before running)
 Your code runs as the body of a function(ctx, fx, Math). Check ctx.hook and call fx.* to trigger effects.
@@ -716,6 +719,6 @@ Example 2 (phoenix crisis passive):
 
 ## Output
 Return ONE JSON object in Korean for name & desc, valid sandbox JS for code:
-{"name": "짧은 고유 특성명", "desc": "효과 요약 (한국어 1-2문장)", "code": "JS code"}`;
+${skill ? '{"name": "짧은 부가효과 이름", "desc": "이 기술에 더해지는 효과 (한국어 1문장)", "code": "JS code using only onUse / beforeAttack / afterAttack"}' : '{"name": "짧은 고유 특성명", "desc": "효과 요약 (한국어 1-2문장)", "code": "JS code"}'}`;
   return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }

@@ -1,6 +1,6 @@
 // DOM: floating battle panel, in-chat turn cards, settings drawer.
 import { escapeHtml as h, pct, norm } from './util.js';
-import { STATUS, DERIVED_KO, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS, rulesToText } from './catalog.js';
+import { STATUS, DERIVED_KO, DERIVED_USE, statRoles, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS, rulesToText } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
 import { scene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, tdot, skillCard, skillDetailLines, skillSheet, setColorContext, SWATCHES, swatchOf } from './pkui.js';
 import { findFighter } from './engine.js';
@@ -906,7 +906,9 @@ async function shrinkImage(file, pixel) {
 const tip = text => `<span class="bt-tip" title="${h(text)}" tabindex="0" data-act="pk:tip" data-v="${h(text)}">ⓘ</span>`;
 
 function statGrid(stats, p) {
-  return `<div class="sk-stats">${p.stats.map(x => `<span><small>${h(x.label || x.key)}</small><b>${stats?.[x.key] ?? '-'}</b></span>`).join('')}</div>`;
+  const roles = statRoles(p);
+  const SHORT = { pow: '물공', mag: '마공', def: '방어', res: '저항', spd: '속도', acc: '명중', luk: '행운' };
+  return `<div class="sk-stats">${p.stats.map(x => { const r = roles[x.key] ?? []; return `<span title="${h(r.length ? r.map(d => `${DERIVED_KO[d]}: ${DERIVED_USE[d]}`).join('\n') : '전투 계산에 쓰이지 않아요 (룰 편집의 계산식에서 연결할 수 있어요)')}" class="${r.length ? '' : 'unused'}"><small>${h(x.label || x.key)}</small><b>${stats?.[x.key] ?? '-'}</b><em>${r.length ? r.map(d => SHORT[d]).join('·') : '미사용'}</em></span>`; }).join('')}</div>`;
 }
 
 /* ---------- Character / codex: a profile card to look at, edit and AI forms only on request ---------- */
@@ -953,11 +955,30 @@ function skillView(skills, p, scope = 'view') {
       <div class="pc-sd-meta">${tdot(c.type, c.typeLabel || '노말')}<span>${h(pow)}</span><span>${k.cost ? `소모 ${k.cost} ${h(p.spLabel)}` : '자원 소모 없음'}</span></div>
       ${skillDetailLines(k, { verbose: true }).map(l => `<div class="pc-sd-line">· ${h(l)}</div>`).join('')}
       ${k.desc ? `<div class="pc-sd-desc">${h(k.desc)}</div>` : ''}
+      ${skillFxBox(k, i, scope)}
     </div>` : '';
     return `<div class="pc-skill ${open ? 'open' : ''}" style="--tc:${TYPE_HEX[c.type] ?? '#8a8c8a'}" data-act="sk-detail" data-v="${h(key)}">
-      <div class="pc-sl1"><i class="sk-dot"></i><b>${h(k.name)}</b><span class="pc-pow">${h(pow)}</span><em>${k.cost ? `${k.cost}` : '무료'}</em><span class="pc-caret">${open ? '▾' : '▸'}</span></div>
+      <div class="pc-sl1"><i class="sk-dot"></i><b>${h(k.name)}</b>${k.customFx ? `<span class="pc-fxmark ${k.customFx.enabled ? '' : 'off'} ${k.customFx.lastError ? 'bad' : ''}" title="${h(k.customFx.desc || k.customFx.name)}">${h(k.customFx.name)}</span>` : ''}<span class="pc-pow">${h(pow)}</span><em>${k.cost ? `${k.cost}` : '무료'}</em><span class="pc-caret">${open ? '▾' : '▸'}</span></div>
       ${!open && c.lines.length ? `<div class="pc-sl2">${c.lines.slice(0, 3).map(l => `<span>${h(l)}</span>`).join('')}${c.lines.length > 3 ? `<span>+${c.lines.length - 3}</span>` : ''}</div>` : ''}${detail}</div>`;
   }).join('');
+}
+
+/** A skill's own AI-coded extra effect (character tab and dex detail). */
+function skillFxBox(k, i, scope) {
+  const target = scope === 'player' ? 'player' : String(scope).startsWith('cx:') ? String(scope).slice(3) : null;
+  if (!target) return '';
+  const fx = k.customFx;
+  const busy = api.busy();
+  const chatOn = !!api.activationInfo?.()?.chatPassives && api.settings().customPassives !== false;
+  const badge = !fx ? '' : fx.lastError ? '<span class="bt-cp-badge bad">실행 오류</span>' : !fx.enabled ? '<span class="bt-cp-badge off">꺼짐</span>' : !chatOn ? '<span class="bt-cp-badge off">이 채팅 꺼짐</span>' : '<span class="bt-cp-badge ok">적용 중</span>';
+  const id = `bt-sfx-${String(scope).replace(/[^\w-]/g, '')}-${i}`;
+  const a = act => `data-act="${act}" data-v="${h(target)}" data-k="${h(k.name)}"`;
+  return `<div class="pc-sfx" data-act="noop">
+    ${fx ? `<div class="pc-sfx-h"><b>부가효과 · ${h(fx.name)}</b>${badge}</div>${fx.desc ? `<div class="bt-note">${h(fx.desc)}</div>` : ''}${fx.lastError ? `<div class="bt-cp-err">전투 중 <b>${h(fx.lastError.hook)}</b>에서 오류: <code>${h(fx.lastError.msg)}</code> — 다시 코딩하면 이 오류를 고쳐서 만들어요.</div>` : ''}<details><summary class="sd-hint">코드 보기</summary><pre class="bt-pre bt-cp-pre">${h(fx.code)}</pre></details>`
+      : `<div class="sd-hint">이 기술을 쓸 때만 발동하는 효과를 AI가 코딩해요${chatOn ? '' : ' (이 채팅에서 고유 부가효과 스크립트를 켜야 전투에 적용돼요)'}.</div>`}
+    <div class="bt-row"><input type="text" class="text_pole" id="${id}" data-act="sk-fx-in" placeholder="(선택) 방향 · 예) 처치하면 기력 회복 / 같은 적에게 연속으로 쓰면 강해짐"></div>
+    <div class="bt-row bt-wrap"><button class="bt-mini bt-cp-btn" ${a('sk-fx-gen')} data-p="${id}" ${busy ? 'disabled' : ''}>${fx ? '다시 코딩' : 'AI로 부가효과 만들기'}</button>${fx ? `<button class="bt-mini" ${a('sk-fx-toggle')}>${fx.enabled ? '끄기' : '켜기'}</button><button class="bt-mini" ${a('sk-fx-del')}>삭제</button>` : ''}</div>
+  </div>`;
 }
 
 /** Feedback box (edit / AI modes): fix the current sheet with it, or rebuild everything from scratch with it. */
@@ -1087,7 +1108,7 @@ function rulesTab(s) {
   return `${briefBox}<div class="bt-section">
       <div class="bt-fname">${h(p.name)} ${s.profile ? '' : '<small>(기본값)</small>'}</div>
       <div class="bt-note">스탯: ${p.stats.map(x => h(x.label && x.label !== x.key ? `${x.key}(${x.label})` : x.key)).join(', ')} · 체력 ${h(p.hpLabel)} · 자원 ${h(p.spLabel)}</div>
-      <div class="bt-note">계산: ${Object.entries(p.map).map(([k, v]) => `${DERIVED_KO[k]}=${h(v)}`).join(', ')}</div>
+      <details class="bt-note"><summary>계산: 세계관 스탯 → 전투 스탯</summary>${Object.entries(p.map).map(([k, v]) => `<div>· <b>${DERIVED_KO[k]}</b> = ${h(v)} <small>— ${DERIVED_USE[k] ?? ''}</small></div>`).join('')}</details>
       <div class="bt-note">등급: ${p.tiers.map(t => `<span title="${h(t.desc ?? '')}">${h(t.name)}(${t.hp[0]}~${t.hp[1]})</span>`).join(' → ')}</div>
       ${p.tiers.some(t => t.desc) ? `<details class="bt-note"><summary>등급별 기준</summary>${p.tiers.map(t => `<div>· <b>${h(t.name)}</b>${t.aliases?.length ? ` <small>(= ${t.aliases.map(h).join(' / ')})</small>` : ''} — ${h(t.desc ?? '(설명 없음)')}</div>`).join('')}</details>` : ''}
       ${p.elements?.length ? `<div class="bt-note">속성: ${p.elements.map(h).join(', ')}</div>` : ''}
@@ -1409,6 +1430,9 @@ function onClick(e) {
       if (!confirm(text ? '피드백을 반영해 이 캐릭터를 처음부터 다시 만들까요? (고유 부가효과도 다시 코딩해요)' : '피드백 없이 이 캐릭터를 처음부터 다시 만들까요?')) return;
       return api.regenCharacter?.(v, text);
     }
+    case 'sk-fx-gen': return api.genSkillFx?.(v, el.dataset.k, document.getElementById(el.dataset.p)?.value?.trim() ?? '');
+    case 'sk-fx-toggle': return api.toggleSkillFx?.(v, el.dataset.k);
+    case 'sk-fx-del': if (confirm('이 기술의 부가효과를 지울까요?')) return api.deleteSkillFx?.(v, el.dataset.k); return;
     case 'cx-archive-toggle': api.ui.cxArchiveOpen = !api.ui.cxArchiveOpen; return;
     case 'codex-archive': if (el.dataset.back) editing = null; return api.archiveCodex?.(v, el.dataset.on === '1');
     case 'codex-purge': if (confirm('보관함에서 완전히 삭제할까요? 되돌릴 수 없어요.')) return api.deleteCodex(v); return;

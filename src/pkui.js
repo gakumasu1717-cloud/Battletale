@@ -303,7 +303,7 @@ function unitRow(F, ctx, side) {
     ${intent}${fx.html}</div>`;
 }
 
-/** Field = enemies (front line, then back line) · message box · allies. */
+/** Field = enemies (front line, then back line) · allies · then the message box, right above the commands. */
 export function scene(V, ctx, { box = '' } = {}) {
   const foes = V.foes ?? [], allies = V.allies ?? [];
   const back = foes.filter(F => F.row === 'back'), front = foes.filter(F => F.row !== 'back');
@@ -313,8 +313,8 @@ export function scene(V, ctx, { box = '' } = {}) {
   return `<div class="bf-sheet"${moodId ? ` style="--mt:${typeHex(moodId)}"` : ''}>
       <div class="bf-head"><span>적 ${foes.filter(F => !F.down).length}/${foes.length}</span>${V.place ? `<span class="bf-where">${h(V.place)}</span>` : ''}</div>
       ${group(front, back.length ? '전열' : '', 'enemy')}${group(back, '후열', 'enemy')}
-    </div>${box}
-    <div class="bf-sheet ally">${allies.length ? `<div class="bf-head"><span>아군</span></div>${allies.map(F => unitRow(F, ctx, 'ally')).join('')}` : ''}</div>${V.banner ?? ''}`;
+    </div>
+    <div class="bf-sheet ally">${allies.length ? `<div class="bf-head"><span>아군</span></div>${allies.map(F => unitRow(F, ctx, 'ally')).join('')}` : ''}</div>${box}${V.banner ?? ''}`;
 }
 
 /** Skill details in the panel's own style (bottom sheet), from a skillCard() object. */

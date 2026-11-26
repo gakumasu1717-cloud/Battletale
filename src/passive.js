@@ -13,8 +13,10 @@ import { clamp } from './util.js';
 
 export const PASSIVE_HOOKS = [
   'battleStart', 'turnStart', 'beforeAttack', 'afterAttack',
-  'beforeHit', 'afterHit', 'turnEnd', 'onKill', 'onAllyDown',
+  'beforeHit', 'afterHit', 'turnEnd', 'onKill', 'onAllyDown', 'onUse',
 ];
+/** Hooks a skill's own extra effect can use: it only runs while that skill is being used. */
+export const SKILL_FX_HOOKS = ['onUse', 'beforeAttack', 'afterAttack'];
 
 const MAX_CODE_LEN = 1500;
 const MAX_CODE_LINES = 40;
@@ -520,10 +522,10 @@ function createCollector() {
  * Returns collected (clamped) ops, or null if skipped/disabled/invalid/errored.
  * Caller (engine.js) applies ops through engine helpers so state stays valid & logged.
  */
-export function evalPassive(hook, b, f, extra = {}, rng) {
-  if (!f?.customPassive?.enabled || !f.customPassive.code) return null;
+export function evalPassive(hook, b, f, extra = {}, rng, cp = f?.customPassive) {
+  if (!cp?.enabled || !cp.code) return null;
   if (b?.customPassives === false) return null;
-  const compiled = compilePassive(f.customPassive.code);
+  const compiled = compilePassive(cp.code);
   if (!compiled.fn) return null;
 
   const ctx = buildContext(hook, b, f, extra, rng);
@@ -551,7 +553,7 @@ export function evalPassive(hook, b, f, extra = {}, rng) {
  * Dry-run self-test across all hooks on synthetic healthy & crisis battle snapshots.
  * Verifies security, compilation, zero runtime exceptions, and reports which hooks triggered.
  */
-export function testPassive(passive) {
+export function testPassive(passive, { skill = null } = {}) {
   const code = typeof passive === 'string' ? passive : String(passive?.code ?? '');
   const v = validatePassiveCode(code);
   if (!v.ok) return { ok: false, error: v.error, triggeredHooks: [], warnings: [] };
@@ -584,19 +586,21 @@ export function testPassive(passive) {
   ];
 
   const rng = mkRng();
+  if (skill) for (const sc of scenarios) sc.skill = { ...sc.skill, name: skill.name, kind: skill.kind, element: skill.element ?? null, power: skill.power ?? 0, range: skill.range ?? 'melee', hits: skill.hits ?? 1, priority: skill.priority ?? 0, isBasic: false };
   for (const sc of scenarios) {
     const self = mkFighter('테스트', 'ally', sc.selfHp, 100, sc.selfSt, sc.stages);
     const foe = mkFighter('상대', 'enemy', sc.foeHp, 100, sc.foeSt, {});
     const ally = mkFighter('동료', 'ally', 50, 100, [], {});
     const b = { turn: sc.turn, fighters: [self, ally, foe], customPassives: true };
 
-    for (const hook of PASSIVE_HOOKS) {
+    for (const hook of skill ? SKILL_FX_HOOKS : PASSIVE_HOOKS) {
       const extra = hook === 'beforeAttack' || hook === 'afterAttack'
         ? { target: foe, skill: sc.skill, dmg: sc.dmg, crit: sc.crit, eff: sc.eff, effMul: sc.effMul, ko: sc.ko }
         : hook === 'beforeHit' || hook === 'afterHit'
           ? { attacker: foe, target: foe, skill: sc.skill, dmg: sc.dmg, crit: sc.crit, eff: sc.eff, effMul: sc.effMul, ko: sc.ko, fatal: sc.fatal }
           : hook === 'onKill' ? { victim: foe, target: foe, skill: sc.skill }
           : hook === 'onAllyDown' ? { fallen: ally }
+          : hook === 'onUse' ? { target: foe, skill: sc.skill }
           : {};
       const res = evalPassive(hook, b, self, extra, rng);
       if (res?.error) {

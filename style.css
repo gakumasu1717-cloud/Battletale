@@ -1433,3 +1433,13 @@
 #bt-panel .pk-log > summary { font-size: 12px; color: var(--bt-dim, #b6bbc8); }
 #bt-panel .pk-log > div { font-size: 12.5px; line-height: 1.6; padding: 4px 2px; }
 #bt-panel .pk-log-t { color: var(--bt-dim, #b6bbc8); margin-top: 4px; }
+
+#bt-panel .pc-sfx { margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--bt-line2, #ffffff38); background: #101217; cursor: default; }
+#bt-panel .pc-sfx-h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+#bt-panel .pc-sfx .bt-row { margin: 6px 0 0; }
+#bt-panel .pc-sfx input[type=text] { width: 100%; }
+#bt-panel .pc-fxmark { flex-shrink: 0; font-size: 10.5px; padding: 0 6px; border-radius: 4px; border: 1px solid #b48cff66; color: #d8c6ff; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bt-panel .pc-fxmark.off { opacity: .5; } #bt-panel .pc-fxmark.bad { border-color: #e0605a88; color: #ffb3ab; }
+
+#bt-panel .sk-stats span em { font-style: normal; font-size: 10px; color: var(--bt-dim, #b6bbc8); opacity: .8; line-height: 1.2; }
+#bt-panel .sk-stats span.unused { opacity: .55; }

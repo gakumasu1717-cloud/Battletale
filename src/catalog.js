@@ -754,6 +754,9 @@ export function normalizeSkill(raw, { maxSp = 100, prefersMagic = false } = {}) 
   const auto = autoCost(out, maxSp);
   // Written costs can't undercut the economy by much (a 60-power move is never nearly free).
   out.cost = s.cost != null && s.cost !== '' ? Math.max(Math.round(num(s.cost)), Math.round(auto * 0.9)) : auto;
+  // An AI-coded extra effect that runs only when this skill is used (same sandbox as signature passives).
+  const fx = safeCustomPassive(s.customFx);
+  if (fx) out.customFx = fx;
   return out;
 }
 
@@ -928,6 +931,21 @@ function splitPair(v) {
   if (m) return [num(m[1]), num(m[2])];
   const one = String(v).match(/[\d,.]+/);
   return one ? [num(one[0]), null] : [null, null];
+}
+
+/** What each fixed combat stat does in the engine (shown in the character card and rules page). */
+export const DERIVED_USE = {
+  pow: '물리 기술 피해', mag: '마법 기술 피해', def: '받는 물리 피해 감소', res: '받는 마법 피해 감소',
+  spd: '행동 순서 · 회피', acc: '명중 · 정보 파악', luk: '치명타 · 상태이상 거는/버티는 확률',
+};
+/** World stat key → the combat stats whose formula uses it (from the rule profile's map). */
+export function statRoles(profile) {
+  const out = {};
+  for (const s of profile.stats ?? []) {
+    const re = new RegExp(`(^|[^A-Za-z0-9_가-힣])${s.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^A-Za-z0-9_가-힣])`);
+    out[s.key] = DERIVED.filter(d => re.test(String(profile.map?.[d] ?? '')));
+  }
+  return out;
 }
 
 export function derive(sheet, profile) {
