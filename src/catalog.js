@@ -57,6 +57,47 @@ const STAGE_WORDS = words({
 });
 export const stageKey = raw => STAGE_WORDS.get(norm(raw)) ?? null;
 
+/* ---------- Skill coefficients (like Pokémon's Body Press / Foul Play) ----------
+ * Which combat stats a damaging skill hits with, and which stat of the target blocks it.
+ * atk: up to 2 stats with weights summing to 1 (default: pow for physical, mag for magic); def: one stat
+ * (default: def / res). Written as {atk: {pow: 0.7, spd: 0.3}, def: 'def'} or "물공 70 + 속도 30 / 방어". */
+const COEF_KEYS = ['pow', 'mag', 'def', 'res', 'spd', 'acc', 'luk'];
+const coefKey = raw => { const k = stageKey(raw) ?? ({ 물공: 'pow', 마공: 'mag', 특공: 'mag', 특수: 'mag', 방어력: 'def', 특방: 'res', 운: 'luk' })[String(raw ?? '').trim()]; return k === 'eva' ? 'spd' : COEF_KEYS.includes(k) ? k : null; };
+export const defaultScale = kind => (kind === 'magic' ? { atk: { mag: 1 }, def: 'res' } : { atk: { pow: 1 }, def: 'def' });
+export function normalizeScale(raw, kind) {
+  if (!raw || !['physical', 'magic'].includes(kind)) return null;
+  let atkRaw, defRaw;
+  if (typeof raw === 'string') { const [a, d] = raw.split(/\/|\bvs\b|대\s/i); atkRaw = a; defRaw = d; }
+  else { atkRaw = raw.atk ?? raw.attack; defRaw = raw.def ?? raw.defense; }
+  const terms = [];
+  if (typeof atkRaw === 'string') {
+    for (const part of atkRaw.split(/[+,]/)) {
+      const m = /^\s*([^\d*x×%]+?)\s*[*x×]?\s*(\d+(?:\.\d+)?)?\s*%?\s*$/.exec(part);
+      const k = m && coefKey(m[1]);
+      if (k) terms.push([k, m[2] != null ? Number(m[2]) : 1]);
+    }
+  } else if (atkRaw && typeof atkRaw === 'object') {
+    for (const [k0, w] of Object.entries(atkRaw)) { const k = coefKey(k0); if (k && Number(w) > 0) terms.push([k, Number(w)]); }
+  }
+  const def = defRaw != null ? coefKey(String(defRaw).trim()) : null;
+  const base = defaultScale(kind);
+  const merged = {};
+  for (const [k, w] of terms.slice(0, 2)) merged[k] = (merged[k] ?? 0) + w;
+  const total = Object.values(merged).reduce((a, w) => a + w, 0);
+  const atk = total > 0 ? Object.fromEntries(Object.entries(merged).map(([k, w]) => [k, Math.round(w / total * 100) / 100])) : base.atk;
+  const out = { atk, def: def ?? base.def };
+  return JSON.stringify(out) === JSON.stringify(base) ? null : out;
+}
+/** "위력 80 · 공격 = 물공 70% + 속도 30% · 막는 쪽 = 상대 방어" (with the world's stat names when a profile is given). */
+export function formulaText(k, profile = null) {
+  if (!['physical', 'magic'].includes(k?.kind)) return '';
+  const sc = k.scale ?? defaultScale(k.kind);
+  const ko = { pow: '물공', mag: '마공', def: '방어', res: '저항', spd: '속도', acc: '명중', luk: '행운' };
+  const world = d => { const expr = String(profile?.map?.[d] ?? ''); if (!expr) return ''; const names = (profile.stats ?? []).filter(s => new RegExp('(^|[^A-Za-z0-9_가-힣])' + s.key.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&') + '($|[^A-Za-z0-9_가-힣])').test(expr)).map(s => s.label || s.key); return names.length ? '(' + names.join('·') + ')' : ''; };
+  const atk = Object.entries(sc.atk).map(([s, w]) => ko[s] + world(s) + (Object.keys(sc.atk).length > 1 ? ' ' + Math.round(w * 100) + '%' : '')).join(' + ');
+  return '위력 ' + k.power + (k.hits > 1 ? '×' + k.hits : '') + ' · 공격 = ' + atk + ' · 막는 쪽 = 상대 ' + ko[sc.def] + world(sc.def);
+}
+
 const KIND_WORDS = words({
   physical: ['physical', 'phys', 'melee', 'attack', '물리', '근접', '공격'],
   magic: ['magic', 'magical', 'spell', 'special', 'ranged', '마법', '술식', '원거리', '특수'],
@@ -427,8 +468,12 @@ export function parseSkillLine(line, { prefersMagic = false } = {}) {
   const m = /^([^:：]+?)\s*[:：]\s*(.*)$/.exec(src);
   if (m) { name = m[1].trim(); rest = m[2]; }
   let desc = '';
+  // Coefficients token: 계수=pow60+spd40@def (kept out of the parenthesised description).
+  let coef = null;
+  rest = rest.replace(/(?:계수|coef)\s*[=＝]\s*(\S+)/i, (_, v) => { coef = v.replace('@', '/'); return ' '; });
   rest = rest.replace(/[(（]([^)）]*)[)）]/g, (_, d) => { desc = d.trim(); return ' '; }).replace(/—\s*(.+)$/, (_, d) => { desc = desc || d.trim(); return ' '; });
   const out = { name };
+  if (coef) out.scale = coef;
   let ctx = null;                   // 'self' | 'target' for stage tokens
   const stages = {}, selfStages = {};
   let heal = null, powerSeen = false;
@@ -519,6 +564,7 @@ export function skillLine(k, system = 'world') {
   if (k.kind === 'heal') parts.push(`회복${k.power}%`);
   if (k.element && !['none', 'physical'].includes(k.element)) parts.push(typeName(k.element, system));
   if (k.hits > 1) parts.push(`${k.hits}연타`);
+  if (k.scale) parts.push(`계수=${Object.entries(k.scale.atk).map(([s, w]) => `${s}${Math.round(w * 100)}`).join('+')}@${k.scale.def}`);
   if (TARGET_SHORT[k.target] && !(k.kind === 'buff' && k.target === 'self')) parts.push(TARGET_SHORT[k.target]);
   if (k.priority) parts.push(`우선도${k.priority > 0 ? '+' : ''}${k.priority}`);
   if (k.acc && k.acc !== 95) parts.push(`명중${k.acc}`);
@@ -754,6 +800,8 @@ export function normalizeSkill(raw, { maxSp = 100, prefersMagic = false } = {}) 
   const auto = autoCost(out, maxSp);
   // Written costs can't undercut the economy by much (a 60-power move is never nearly free).
   out.cost = s.cost != null && s.cost !== '' ? Math.max(Math.round(num(s.cost)), Math.round(auto * 0.9)) : auto;
+  const sc = normalizeScale(s.scale ?? s.coef ?? s.coefficient ?? s['계수'], finalKind);
+  if (sc) out.scale = sc;
   // An AI-coded extra effect that runs only when this skill is used (same sandbox as signature passives).
   const fx = safeCustomPassive(s.customFx);
   if (fx) out.customFx = fx;

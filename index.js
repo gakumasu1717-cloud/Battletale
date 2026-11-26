@@ -6,7 +6,7 @@ import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEn
 import {
   stateOf, profileOf, ensureProfile, ensurePlayer, forgeSpec, beginBattle, syncHistory, playUserMessage,
   stopBattle, applyChanges, syncFromStatus, promptFor, msgKey, stampId, switchMode, storeTiming, modeOf, MODES,
-  playLocal, setupChat, resolveRegistered, registerCharacter, codexFind, codexBook, importedEntries, rollbackChanges, beginChanges, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
+  playLocal, setupChat, resolveRegistered, registerCharacter, codeKit, carryCoded, codexFind, codexBook, importedEntries, rollbackChanges, beginChanges, rosterSheet, applyNpcOps, promoteToCodex, joinParty, applyPlayerSheet, retryBattle,
   claimLoot, restAfterBattle, resolveEnabled,
 } from './src/game.js';
 import { sheetMessages, castMessages, stateMessages, briefText, passiveMessages } from './src/prompts.js';
@@ -19,7 +19,7 @@ import { mountPanel, togglePanel, refreshPanel, refreshTrace, renderCards, setti
 const NAME = 'battletale';
 const PROMPT_KEY = 'BATTLETALE';
 const DEFAULTS = {
-  enabled: true, exclude: '', optIn: false, charEnabled: {}, charLabels: {}, customPassives: true,
+  enabled: true, exclude: '', optIn: false, charEnabled: {}, charLabels: {}, customPassives: true, autoKit: true,
   tokenizerMode: 'auto', geminiTokenKey: '', geminiTokenModel: 'gemini-2.5-flash',
   auxSource: 'main', auxProfile: '', auxUrl: '', auxKey: '', auxModel: '', auxMaxTokens: 10000, auxTemp: 0.4, auxTopP: null, auxReasoning: '', auxJsonMode: false, auxExtra: '', auxHeaders: '', auxProfilePreset: false, auxOverride: false, auxProfileModel: '', auxMaxInput: 16000, castScene: 20, sheetScene: 4, castBatch: 4, difficulty: 'normal', spCostScale: '1.3', auxCommands: true, sceneSize: 3, forgeLore: 'auto',
   startMode: 'hybrid', startTrigger: 'button', suggestStart: true, statTag: 'stat', statSync: 'all', trackChanges: true, loreBooks: '', loreBudget: 14000,
@@ -694,7 +694,11 @@ const panelApi = {
       if (aliases) raw.aliases = aliases;
       const old = prev ?? deps().codex.list().find(x => x.name === name);
       if (old?.sheet?.portrait && !raw.portrait) raw.portrait = old.sheet.portrait;
+      const kitIdea = raw.kit;
       const e = registerCharacter(s, deps(), raw, { side: 'enemy', locked: old?.locked ?? false, maxSkills });
+      // A text revision keeps the coded effects; a fresh build or a feedback rebuild gets a newly coded kit.
+      if (instruction) carryCoded(old?.sheet, e.sheet);
+      else await codeKit(s, deps(), e.sheet, kitIdea ?? {}, { concept, feedback });
       if (old && old.id !== e.id) deps().codex.remove(old.id);
       deps().codex.put({ ...e, concept, history: [...(old?.history ?? []), ...(instruction || feedback ? [{ at: Date.now(), instruction: instruction || `피드백: ${feedback}` }] : [])].slice(-8) });
       if (s.roster?.[e.id]) delete s.roster[e.id];
@@ -880,7 +884,10 @@ const panelApi = {
       const out = await panelApi.genCodex({ id: e.id, name: e.name, concept: e.concept ?? sh.desc ?? '', tier: '', shape: sh.shape ?? '', aliases: (sh.aliases ?? []).join(', '), feedback: fb });
       if (!out) return;
     }
-    if (hadPassive) await panelApi.genPassive(target, fb ? `사용자 피드백: ${fb}` : '');
+    // The rebuild codes a new kit (passive + skill effects) itself; only fall back to the old single-passive call when it didn't.
+    const ent = target === 'player' ? null : deps().codex.list().find(x => x.id === target);
+    const now = target === 'player' ? s.player : ent ? rosterSheet(s, ent) : null;
+    if (hadPassive && !now?.customPassive) await panelApi.genPassive(target, fb ? `사용자 피드백: ${fb}` : '');
     afterChange();
     toast(`전체 재생성 완료${hadPassive ? ' (고유 부가효과 포함)' : ''}. 이전 버전은 ${target === 'player' ? '되돌릴 수 없으니 마음에 안 들면 다시 재생성해 주세요' : '도감 "이전 버전"에서 되돌릴 수 있어요'}.`, 'success');
   }),

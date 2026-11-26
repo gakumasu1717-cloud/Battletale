@@ -351,8 +351,10 @@ export function stageScaleMul(b, a, t, skill) {
 
 export function rawDamage(b, a, t, skill, { rand = 0.925, crit = false, aoe = false } = {}) {
   const magic = skill.kind === 'magic';
-  const A = stat(a, magic ? 'mag' : 'pow');
-  const D = stat(t, magic ? 'res' : 'def');
+  // Coefficients: which of the attacker's stats hit (weighted) and which of the target's stats block.
+  const sc = skill.scale;
+  const A = sc?.atk ? Object.entries(sc.atk).reduce((sum, [k, w]) => sum + stat(a, k) * w, 0) : stat(a, magic ? 'mag' : 'pow');
+  const D = stat(t, sc?.def ?? (magic ? 'res' : 'def'));
   let dmg = (skill.power / 100) * A * b.scale * Math.sqrt(clamp(A / Math.max(1, D), 0.05, 20));
   dmg *= elementMul(t, skill.element, b).mul * stabOf(b, a, skill);
   if (crit) dmg *= 1.5;

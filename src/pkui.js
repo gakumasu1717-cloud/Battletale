@@ -459,6 +459,10 @@ const SCALE_TEXT = {
 /** Detailed human-readable mechanics lines for a skill (shared by combat cards & codex skill details). */
 export function skillDetailLines(k, { verbose = false } = {}) {
   const lines = [];
+  if (k.scale && ['physical', 'magic'].includes(k.kind)) {
+    const ko = { pow: '물공', mag: '마공', def: '방어', res: '저항', spd: '속도', acc: '명중', luk: '행운' };
+    lines.push(`계수 ${Object.entries(k.scale.atk).map(([s, w]) => `${ko[s]}${Object.keys(k.scale.atk).length > 1 ? ` ${Math.round(w * 100)}%` : ''}`).join('+')} → 상대 ${ko[k.scale.def]}`);
+  }
   if (k.hits > 1) lines.push(`${k.hits}회 공격`);
   if (k.target === 'enemies') lines.push('적 전체');
   else if (k.target === 'allies') lines.push('아군 전체');

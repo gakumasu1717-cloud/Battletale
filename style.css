@@ -1443,3 +1443,5 @@
 
 #bt-panel .sk-stats span em { font-style: normal; font-size: 10px; color: var(--bt-dim, #b6bbc8); opacity: .8; line-height: 1.2; }
 #bt-panel .sk-stats span.unused { opacity: .55; }
+
+#bt-panel .pc-sd-formula { margin: 2px 0 4px; padding: 4px 8px; border-radius: 6px; background: #0f1116; font-size: 11.5px; color: var(--bt-text, #eef0f5); font-variant-numeric: tabular-nums; }

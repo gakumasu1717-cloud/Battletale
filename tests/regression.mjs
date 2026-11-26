@@ -1445,7 +1445,7 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   let asked = null;
   const deps = {
     persona: () => ({ name: '카인', text: '제국 최강의 기사.' }), statFields: () => ({ 등급: '도미누스', HP: '900/900' }), statedRank: () => '도미누스',
-    auxReady: () => true, toast: () => {}, trace: () => {}, lore: async () => '', settings: () => ({}), cache: { set: () => {} },
+    auxReady: () => true, toast: () => {}, trace: () => {}, lore: async () => '', settings: () => ({ autoKit: false }), cache: { set: () => {} },
     auxJson: async msgs => { asked = msgs.map(m => m.content).join('\n'); return { tier: 'S', tierReason: '도미누스는 최상위', stats: { STR: 300 }, skills: ['검격: 물리 90'] }; },
   };
   const top = PROFILE.tiers.at(-1).name;
@@ -1614,6 +1614,65 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   };
   const lucky = run(160), unlucky = run(10);
   assert.ok(lucky > unlucky + 15, `luck should tilt status chance (lucky ${lucky} vs unlucky ${unlucky} of 120)`);
+});
+
+/* 72 */ await test('기술 계수: 포켓몬식으로 어떤 스탯으로 때리고 무엇으로 막는지 정하고 보여 준다', () => {
+  const p = C.normalizeProfile({ stats: [{ key: 'STR', label: '힘' }, { key: 'AGI', label: '민첩' }, { key: 'END', label: '인내' }, { key: 'LUK', label: '운' }, 'INT', 'SEN'] });
+  const flurry = C.normalizeSkill({ name: '질풍 연격', kind: 'physical', power: 70, scale: '물공 60 + 속도 40 / 방어' });
+  assert.deepEqual(flurry.scale, { atk: { pow: 0.6, spd: 0.4 }, def: 'def' });
+  assert.match(C.formulaText(flurry, p), /물공\(힘\) 60% \+ 속도\(민첩\) 40% · 막는 쪽 = 상대 방어\(인내\)/);
+  assert.equal(C.normalizeSkill({ name: '평타', kind: 'physical', power: 60, scale: 'pow/def' }).scale, undefined, 'the default needs no coefficients');
+  const line = C.skillLine(flurry);
+  assert.deepEqual(C.normalizeSkill(`질풍 연격: ${line}`).scale, flurry.scale, 'coefficients survive the text editor');
+  // the engine really uses them: a lucky shot hits harder with more luck, a normal shot does not care
+  const shot = (luk, scale) => {
+    const me = hero(); me.stats.LUK = luk;
+    me.skills = [C.normalizeSkill({ name: '사격', kind: 'physical', power: 80, acc: 100, ...(scale ? { scale } : {}) }, { maxSp: 200 })];
+    const foe = C.normalizeSheet({ name: '과녁', tier: 'C', hp: 99999, stats: { END: 50, AGI: 50 }, skills: ['가만히: 강화'] }, PROFILE, { side: 'enemy' });
+    const b = E.createBattle({ party: [me], enemies: [foe], profile: PROFILE, seed: 'coef' });
+    const t = b.fighters.find(f => f.side === 'enemy');
+    return E.rawDamage(b, b.fighters.find(f => f.isPlayer), t, me.skills[0], { rand: 1 });
+  };
+  assert.ok(shot(200, { atk: { luk: 1 } }) > shot(20, { atk: { luk: 1 } }) * 2, 'luck-scaled skill must scale with luck');
+  assert.equal(Math.round(shot(200)), Math.round(shot(20)), 'a plain skill ignores luck');
+});
+
+/* 73 */ await test('캐릭터를 만들 때 고유 부가효과와 기술 효과를 한 번에 코딩해 시트에 붙인다 (실패한 조각만 빠짐)', async () => {
+  const s = G.stateOf({}); s.profile = PROFILE;
+  const calls = [];
+  const deps = {
+    persona: () => ({ name: '카인', text: '불꽃 검사. 화상을 쌓아 터뜨린다.' }), statFields: () => null, statedRank: () => '',
+    auxReady: () => true, toast: () => {}, trace: () => {}, lore: async () => '', settings: () => ({}), cache: { set: () => {} },
+    auxJson: async msgs => {
+      const text = msgs.map(m => m.content).join('\n');
+      calls.push(text);
+      if (/combat kit/.test(text)) return {
+        passive: { name: '잔불', desc: '화상 걸린 적에게 피해 증가', code: "if (ctx.hook === 'beforeAttack' && ctx.hasStatus('target', 'burn')) fx.dmgMul(1.15, '잔불');" },
+        skills: [
+          { skill: '불꽃 베기', name: '불씨', desc: '쓰면 스택', code: "if (ctx.hook === 'onUse') fx.flag('ember', (ctx.mem.ember || 0) + 1);" },
+          { skill: '없는 기술', name: 'x', code: "fx.log('x')" },
+          { skill: '폭염', name: '폭발', code: "chat.innerHTML = 'x'" },
+        ] };
+      return { tier: 'C', kit: { passive: '화상 걸린 적에게 강해진다', twists: { '불꽃 베기': '쓸 때마다 불씨를 쌓는다' } }, stats: { STR: 60 }, skills: ['불꽃 베기: 물리 70 화염 화상30%', '폭염: 마법 80 화염'] };
+    },
+  };
+  const sh = await G.ensurePlayer(s, deps, { force: true });
+  assert.equal(calls.length, 3, `sheet call + kit call + one retry for the failed pieces (got ${calls.length})`);
+  assert.match(calls[1], /Passive: 화상 걸린 적에게 강해진다/);
+  assert.match(calls[1], /Skill "불꽃 베기": 쓸 때마다 불씨를 쌓는다/);
+  assert.equal(sh.customPassive?.name, '잔불');
+  assert.equal(sh.skills.find(k => k.name === '불꽃 베기').customFx?.name, '불씨');
+  assert.equal(sh.skills.find(k => k.name === '폭염').customFx, undefined, 'a piece that fails the sandbox is left out');
+  // a text revision keeps the coded kit and does not call the kit coder again
+  calls.length = 0;
+  const sh2 = await G.ensurePlayer(s, deps, { force: true, instruction: '이름 더 멋있게' });
+  assert.equal(calls.filter(c => /combat kit/.test(c)).length, 0);
+  assert.equal(sh2.customPassive?.name, '잔불');
+  assert.equal(sh2.skills.find(k => k.name === '불꽃 베기')?.customFx?.name, '불씨');
+  // setting off → no kit call
+  calls.length = 0;
+  await G.ensurePlayer(s, { ...deps, settings: () => ({ autoKit: false }) }, { force: true });
+  assert.equal(calls.length, 1);
 });
 
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);

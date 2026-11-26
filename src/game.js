@@ -3,8 +3,9 @@
 import { normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, requestedSkillCap, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL, threatOf, createBattle } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
-import { ruleMessages, setupMessages, briefText, sheetMessages, forgeMessages, planMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
+import { ruleMessages, setupMessages, briefText, sheetMessages, kitMessages, forgeMessages, planMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
 import { MODES, modeOf } from './modes/index.js';
+import { normalizeCustomPassive, testPassive } from './passive.js';
 import { quickBlocks } from './modes/shared.js';
 import { hashStr, clone, norm, num, clamp, uid } from './util.js';
 
@@ -170,7 +171,15 @@ export async function ensurePlayer(s, deps, { force = false, extra = '', instruc
   if (!raw) raw = { stats: partial?.stats, hp: partial?.hp, sp: partial?.sp, tier: fixedTier || profile.tiers[Math.min(2, profile.tiers.length - 1)]?.name, skills: partial?.skillNames ?? [] };
   if (mapRank && !tierOf(profile, raw.tier)) deps.toast?.(`"${mapRank}" 등급을 등급표에서 찾지 못했어요. 캐릭터 → 편집에서 등급을 직접 골라 주세요.`, 'warning');
   if (persona.text) s.playerPersonaHash = hashStr(persona.text);
-  return applyPlayerSheet(s, deps, raw, { statFields, partial, maxSkills });
+  const fromAux = !!raw && deps.auxReady();
+  const kit = raw?.kit;
+  const sheet = applyPlayerSheet(s, deps, raw, { statFields, partial, maxSkills });
+  // A fresh build (or a feedback rebuild) gets a kit designed for it; a text revision keeps the coded effects it had.
+  if (fromAux && !current) {
+    if (feedback) { delete sheet.customPassive; for (const k of sheet.skills) delete k.customFx; }
+    await codeKit(s, deps, sheet, kit ?? {}, { concept: persona.text, feedback });
+  }
+  return sheet;
 }
 
 /**
@@ -215,6 +224,51 @@ export function rememberRankAlias(s, deps, tierName, alias) {
   return true;
 }
 
+/**
+ * Code a character's kit right after their sheet is built: the signature passive and up to 2 skill effects, from the
+ * sheet builder's design notes (raw.kit). Every piece is security-checked and dry-run; what fails is left out.
+ * Mutates the sheet. Off when the setting is off, custom code is disallowed, or there is no aux model.
+ */
+export async function codeKit(s, deps, sheet, kit = {}, { concept = '', feedback = '' } = {}) {
+  const set = deps.settings?.() ?? {};
+  if (!sheet || set.autoKit === false || set.customPassives === false || !deps.auxReady?.()) return null;
+  const profile = profileOf(s);
+  let prevError = '', best = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let raw;
+    try {
+      raw = await deps.auxJson(kitMessages({ profile, sheet, kit, concept, brief: briefText(s.brief), feedback, prevError }), { maxTokens: 3000, label: `고유 효과 세트 (${sheet.name}${attempt ? ' · 재시도' : ''})` });
+    } catch (e) { deps.trace?.('error', `고유 효과 세트 실패 · ${sheet.name}`, String(e?.message ?? e)); return best; }
+    const got = { passive: null, fx: {}, errors: [] };
+    const cp = normalizeCustomPassive(raw?.passive);
+    if (cp) { const t = testPassive(cp); if (t.ok) got.passive = { ...cp, enabled: true, valid: true }; else got.errors.push(`passive: ${t.error}`); }
+    for (const it of (Array.isArray(raw?.skills) ? raw.skills : []).slice(0, 2)) {
+      const k = (sheet.skills ?? []).find(x => x.name === String(it?.skill ?? '').trim());
+      if (!k) { got.errors.push(`unknown skill "${it?.skill}" — use an exact skill name`); continue; }
+      const c = normalizeCustomPassive(it);
+      if (!c) continue;
+      const t = testPassive(c, { skill: k });
+      if (t.ok) got.fx[k.name] = { ...c, enabled: true, valid: true }; else got.errors.push(`${k.name}: ${t.error}`);
+    }
+    if (!best || (got.passive ? 1 : 0) + Object.keys(got.fx).length > (best.passive ? 1 : 0) + Object.keys(best.fx).length) best = got;
+    if (!got.errors.length) break;
+    prevError = got.errors.join('\n');
+  }
+  if (!best) return null;
+  if (best.passive) sheet.customPassive = best.passive;
+  for (const [n, fx] of Object.entries(best.fx)) { const k = sheet.skills.find(x => x.name === n); if (k) k.customFx = fx; }
+  deps.trace?.('aux', `고유 효과 세트 · ${sheet.name}`, [best.passive ? `고유: ${best.passive.name} — ${best.passive.desc}` : '고유: (없음)', ...Object.entries(best.fx).map(([n, f]) => `${n}: ${f.name} — ${f.desc}`), ...(best.errors.length ? ['', '제외된 것:', ...best.errors] : [])].join('\n'));
+  return best;
+}
+
+/** Coded effects survive a sheet revision: the passive, and each skill's effect by skill name. */
+export function carryCoded(from, to) {
+  if (!from || !to) return to;
+  if (from.customPassive && !to.customPassive) to.customPassive = clone(from.customPassive);
+  for (const k of to.skills ?? []) { const old = (from.skills ?? []).find(x => x.name === k.name); if (old?.customFx && !k.customFx) k.customFx = clone(old.customFx); }
+  return to;
+}
+
 /** Turn a raw (aux model) sheet into the player's sheet: normalize, audit, keep the portrait. */
 export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(), partial = null, maxSkills = 6 } = {}) {
   const profile = profileOf(s);
@@ -224,6 +278,7 @@ export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(
   sheet.id = 'player';
   sheet.isPlayer = true;
   if (s.player?.portrait && !sheet.portrait) sheet.portrait = s.player.portrait;
+  carryCoded(s.player, sheet);
   const audit = auditSheet(sheet, profile, { clampStats: !statFields, maxSkills });
   if (audit.notes.length) { deps.toast?.(`등급(${sheet.tier || '?'})에 맞게 조정: ${audit.notes.slice(0, 3).join(' · ')}${audit.notes.length > 3 ? ` 외 ${audit.notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, audit.notes.join('\n')); }
   if (!sheet.skills.length) sheet.skills = [normalizeSkill({ name: '전력 일격', kind: 'physical', power: 75, cost: Math.round(sheet.maxSp * 0.12) }, { maxSp: sheet.maxSp })];

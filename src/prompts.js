@@ -92,6 +92,7 @@ export const SHEET_SCHEMA = `{
   "ptypes": ["ALWAYS 1-2 of the 18 Pokémon types (포켓몬 속성: 불꽃, 물, 풀, 전기, 얼음, 격투, 독, 땅, 비행, 에스퍼, 벌레, 바위, 고스트, 드래곤, 악, 강철, 페어리, 노말) — always fill separately from elements so the user can freely switch systems"], "weak": [], "resist": [], "immune": [],
   "archetype": "burst|combo|tank|support|trickster — the ONE plan their kit is built around",
   "trait": "intimidate|vanguard|opportunist|medic|avenger|null — at most one fixed role passive, only if it clearly fits",
+  "kit": {"passive": "ONE line: the signature passive that defines how they fight (from who they are; the engine codes it)", "twists": {"<exact name of one of the skills below>": "ONE line: the extra effect that makes this skill theirs"}},   // design the kit as a whole: decide the passive FIRST, then build the skills to play into it (feed its stacks or condition, exploit it, pay it off); up to 2 twists, on signature skills only; give coefficients (scale) to skills that should use their standout stats
   "skills": [{
     "name": "", "desc": "one line: what it looks like",
     "kind": "physical|magic|heal|buff|debuff|guard|revive|cleanse",
@@ -101,6 +102,7 @@ export const SHEET_SCHEMA = `{
     "stages": {"pow": 1, "def": -1}, "selfStages": {"def": 1}, "selfHeal": 0,
     "recoil": 0.25, "hpCost": 10, "once": true,
     "bonusIf": {"status": "mark|burn|poison|…|any", "mul": 1.6, "consume": true} | {"selfHpBelow": 0.5, "mul": 1.4} | {"targetFullHp": true, "mul": 1.3} | {"targetCharging": true, "mul": 1.5},
+    "scale": {"atk": {"pow": 0.6, "spd": 0.4}, "def": "def"} — optional coefficients, like Pokémon's Body Press / Foul Play: which of pow|mag|def|res|spd|acc|luk the skill hits with (1-2, weights sum to 1) and which target stat blocks it. Omit for a plain physical (pow vs def) or magic (mag vs res) move. Use it to make the character's distinctive stats matter: a speed-based flurry (pow+spd), a lucky shot (luk vs spd), a shield bash (def), a mental assault (mag vs res→mag vs luk)…,
     "scaleStages": "self|target|ally — optional: +12% dmg per self buff stage / target debuff stage / +8% per ally team buff stage (use sparingly on 1 signature/combo skill)",
     "pivot": true, "protect": true, "move": "front|back", "pull": true
   }],
@@ -648,6 +650,32 @@ export function panelWaitPrompt(b, profile, opts = {}) {
     '- Do not narrate any attack, damage, detection or outcome. If {{user}} speaks, keep the reply short and in the moment, with the confrontation still unresolved.',
     '</battle_engine>',
   ].join('\n');
+}
+
+/* ====================== Aux model: coding a character's whole kit ====================== */
+/** One call: the signature passive and up to 2 skill effects, implementing the sheet builder's design notes. */
+export function kitMessages({ profile, sheet, kit = {}, concept = '', brief = '', feedback = '', prevError = '' }) {
+  const base = passiveMessages({ profile, sheet, concept, brief })[1].content;
+  const api = base.slice(base.indexOf('## Sandbox API'), base.indexOf('## Output'));
+  const twists = Object.entries(kit?.twists ?? {}).filter(([n]) => (sheet.skills ?? []).some(k => k.name === n));
+  const system = 'You code the combat kit of one turn-based RPG character in a restricted JavaScript sandbox: ONE signature passive plus extra effects for up to 2 of their skills, designed together so they work as one plan. Output ONLY one JSON object. No markdown, no commentary.';
+  const user = `## Character
+${sheetText(sheet, profile)}
+Elements: ${(sheet.elements ?? []).join(', ') || 'none'} | Threat: ${sheet.threat ?? 'normal'} | Archetype: ${sheet.archetype ?? '-'}
+${concept ? `Concept / bio: ${String(concept).slice(0, 800)}\n` : ''}${brief ? `\n## World\n${String(brief).slice(0, 600)}\n` : ''}
+## Design notes from the sheet builder (implement these)
+Passive: ${kit?.passive || '(none given — design one from who they are and their skills)'}
+${twists.length ? twists.map(([n, t]) => `Skill "${n}": ${t}`).join('\n') : 'Skill twists: (none given — pick up to 2 signature skills that fit the passive, or none)'}
+${feedback ? `\n## The user's feedback (follow it; balance caps still apply)\n${feedback}\n` : ''}${prevError ? `\n## Previous attempt failed — FIX THIS\n${prevError}\n` : ''}
+${api}
+## Skill effects
+A skill effect runs ONLY while that skill is used. Hooks: 'onUse' (once, after the skill resolves; ctx.target = first target) for any skill, 'beforeAttack' / 'afterAttack' (each hit, ctx.firstHit) for damaging skills. The skill's own listed effect already happens — add a twist, not raw power.
+The passive and the skill effects share ctx.mem, so a skill can feed or spend the passive's stacks (e.g. the passive grants a stack on fire hits, the finisher consumes them for a bonus).
+All of a character's code shares the per-turn caps, so keep each piece small.
+
+## Output
+{"passive": {"name": "짧은 이름", "desc": "한국어 1-2문장", "code": "JS"}, "skills": [{"skill": "<exact skill name from the sheet>", "name": "짧은 이름", "desc": "한국어 1문장", "code": "JS using only onUse / beforeAttack / afterAttack"}]}`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
 /* ====================== Aux model: LLM-coded signature passive ====================== */

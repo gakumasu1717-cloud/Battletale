@@ -1,6 +1,6 @@
 // DOM: floating battle panel, in-chat turn cards, settings drawer.
 import { escapeHtml as h, pct, norm } from './util.js';
-import { STATUS, DERIVED_KO, DERIVED_USE, statRoles, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS, rulesToText } from './catalog.js';
+import { STATUS, DERIVED_KO, DERIVED_USE, statRoles, formulaText, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS, rulesToText } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
 import { scene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, tdot, skillCard, skillDetailLines, skillSheet, setColorContext, SWATCHES, swatchOf } from './pkui.js';
 import { findFighter } from './engine.js';
@@ -247,6 +247,7 @@ const SETTINGS = [
     { key: 'difficulty', basic: true, type: 'select', label: '난이도', options: [['easy', '쉬움 — 공정한 전투, 기습 없음, AI 가끔 실수'], ['normal', '기본 — 유저 편향 없음, 기습·지형에 대비'], ['hard', '어려움 — 강한 적·연계, 전술 없으면 돌파 불가'], ['nightmare', '악몽 — 약점 저격·기습·불리한 지형, AI 최상']], hint: '적 구성(보조모델)과 적 AI, 기습·지형 확률이 같이 바뀌어요' },
     { key: 'spCostScale', type: 'select', label: '기력 소모 배율', options: [['1', '×1.0 (가볍게)'], ['1.3', '×1.3 (기본)'], ['1.6', '×1.6 (빡빡하게)'], ['2', '×2.0 (매 턴 신중하게)']], hint: '기술 비용에 곱해져요. 잡몹은 기력 없이 싸우고, 엘리트·보스·도감 캐릭터만 기력을 써요.' },
     { key: 'showThreat', type: 'check', label: '위협도 표시' },
+    { key: 'autoKit', type: 'check', label: '캐릭터를 만들 때 고유 부가효과·기술 효과도 같이 코딩', hint: '시트를 만든 뒤 보조모델을 한 번 더 불러 고유 부가효과 1개와 대표 기술 효과 최대 2개를 시트에 맞춰 코딩해요. 인물 한꺼번에 찾기에는 적용하지 않아요.' },
     { key: 'customPassives', type: 'check', label: '주요 캐릭터 고유 부가효과 스크립트 허용', hint: '보조모델이 코딩하고 보안 검증을 통과한 패시브를 채팅에서 켰을 때 실행해요. 코딩 능력이 충분한 중·상급 보조모델 권장' },
     { key: 'autoPlay', type: 'select', label: '전투 메시지 자동 넘김', options: [['0', '끔 (탭해서 넘김)'], ['900', '빠르게'], ['1300', '보통 (기본)'], ['1900', '느리게']], hint: '탭하면 언제든 바로 다음으로' },
     { key: 'showFab', type: 'check', label: '화면에 떠 있는 패널 버튼도 쓰기', hint: '기본은 채팅창 옆 확장 메뉴에서 열어요' },
@@ -953,7 +954,8 @@ function skillView(skills, p, scope = 'view') {
     const pow = c.power != null ? `${kindKo} ${c.power}${k.hits > 1 ? `×${k.hits}` : ''}` : { heal: `회복 ${k.power}%`, buff: '강화', debuff: '방해', guard: '방어', revive: '부활', cleanse: '정화' }[k.kind] ?? kindKo;
     const detail = open ? `<div class="pc-sdetail">
       <div class="pc-sd-meta">${tdot(c.type, c.typeLabel || '노말')}<span>${h(pow)}</span><span>${k.cost ? `소모 ${k.cost} ${h(p.spLabel)}` : '자원 소모 없음'}</span></div>
-      ${skillDetailLines(k, { verbose: true }).map(l => `<div class="pc-sd-line">· ${h(l)}</div>`).join('')}
+      ${formulaText(k, p) ? `<div class="pc-sd-formula">${h(formulaText(k, p))}</div>` : ''}
+      ${skillDetailLines(k, { verbose: true }).filter(l => !l.startsWith('계수 ')).map(l => `<div class="pc-sd-line">· ${h(l)}</div>`).join('')}
       ${k.desc ? `<div class="pc-sd-desc">${h(k.desc)}</div>` : ''}
       ${skillFxBox(k, i, scope)}
     </div>` : '';
