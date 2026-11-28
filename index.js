@@ -573,7 +573,7 @@ const panelApi = {
     return startFrom(index, { hint: '' });
   },
   command: putCommand,
-  modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, setSprite, setSpriteImage, spritesOf, folderArtOf: target => folderArt(artNameOf(target)), artNameOf,
+  modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, setSprite, setSpriteImage, setSpriteFiles, adoptFolderArt, spritesOf, folderArtOf: target => folderArt(artNameOf(target)), artNameOf,
   // Stage art for a fighter in battle: the player's, or its dex entry's (companions and named enemies).
   stageArt: f => (f?.isPlayer ? state()?.player?.sprites : f?.codexId ? deps().codex.list().find(x => x.id === f.codexId)?.sheet?.sprites : null) ?? folderArt(f?.name),
   artFolder: name => `${ART_ROOT}/${artDir(name)}/`, rescanArt: () => { FOLDER_ART.clear(); refreshPanel(); }, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
@@ -1349,6 +1349,29 @@ async function setSpriteImage(target, slot, dataUrl, smallUrl = dataUrl) {
   if (!path && dataUrl.length > 700000) return toast('이미지가 너무 커서 저장하지 못했어요. 더 작은 그림을 써 주세요.', 'warning');
   if (!path) toast('서버 이미지 폴더에 올리지 못해서 설정 파일에 작게 저장했어요.', 'info');
   return setSprite(target, cur => ({ ...cur, [slot]: path ?? dataUrl }));
+}
+/** Register several poses at once (from a multi-file / folder pick). */
+async function setSpriteFiles(target, items, facing = null) {
+  const got = {};
+  let inline = 0;
+  for (const it of items) {
+    if (!SPRITE_SLOTS.includes(it.slot)) continue;
+    const path = await uploadImage(it.full, `bt_${hashStr(`${target}:${it.slot}:${Date.now()}`)}`);
+    const src = path ?? it.small;
+    if (!path) inline++;
+    if (src && src.length <= 700000) got[it.slot] = src;
+  }
+  if (!got.idle && !spritesOf(target)?.idle) return toast('기본 그림(idle)을 저장하지 못했어요.', 'warning');
+  await setSprite(target, cur => ({ ...cur, ...got, ...(facing ? { facing } : {}) }));
+  toast(`전투 일러 ${Object.keys(got).length}장을 등록했어요${inline ? ' (서버에 못 올린 것은 설정 파일에 작게 저장)' : ''}.`, 'success');
+}
+/** Copy what the server folder has onto the sheet, so it stays with the character (renames included). */
+async function adoptFolderArt(target) {
+  const name = artNameOf(target);
+  const sp = await probeArt(name);
+  if (!sp) return toast(`user/images/BattleTale/${name}/ 에서 idle 그림을 못 찾았어요.`, 'warning');
+  await setSprite(target, () => sp);
+  toast('서버 폴더의 일러를 이 캐릭터에 등록했어요.', 'success');
 }
 function spritesOf(target) {
   const s = state();

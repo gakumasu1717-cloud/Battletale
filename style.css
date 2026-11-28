@@ -1575,3 +1575,13 @@
 #bt-panel .sp-folder { margin-top: 6px; font-size: 11px; color: var(--bt-dim, #a9adb8); line-height: 1.5; word-break: break-all; }
 #bt-panel .sp-folder code { font-size: 10.5px; padding: 0 3px; border-radius: 3px; background: #0d0f14; color: #d8dbe4; }
 #bt-panel .sp-folder b { color: #8fd19e; font-weight: 600; }
+#bt-panel .sp-bulk { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+#bt-panel .sp-bulk .sp-pick { cursor: pointer; }
+#bt-panel .sp-ctl .sd-hint code { font-size: 10.5px; padding: 0 3px; border-radius: 3px; background: #0d0f14; }
+#bt-panel .sp-view .bt-sub { display: flex; align-items: center; gap: 6px; }
+#bt-panel .sp-view .bt-sub .bt-mini { margin-left: auto; }
+#bt-panel .sp-ths { display: flex; gap: 6px; overflow-x: auto; }
+#bt-panel .sp-th { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 64px; flex: none; }
+#bt-panel .sp-th img { height: 84px; width: 100%; object-fit: contain; object-position: bottom; background: repeating-conic-gradient(#1c1e25 0 25%, #22252d 0 50%) 0 0 / 10px 10px; border-radius: 5px; }
+#bt-panel .sp-th img.flip { transform: scaleX(-1); }
+#bt-panel .sp-th small { font-size: 10.5px; color: var(--bt-dim, #a9adb8); }

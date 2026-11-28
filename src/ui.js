@@ -931,14 +931,32 @@ function spriteControls(target) {
     const off = k !== 'idle' && !sp?.idle;
     return `<div class="sp-slot ${src ? 'has' : ''} ${off ? 'off' : ''}">
       <label class="sp-prev" title="${off ? '기본 스탠딩을 먼저 넣어 주세요' : `${SPRITE_KO[k]} 그림 ${src ? '바꾸기' : '넣기'}`}">${src ? `<img src="${h(src)}" alt="" referrerpolicy="no-referrer" class="${sp.facing === 'right' ? 'flip' : ''}">` : '<span>＋</span>'}<input type="file" accept="image/png,image/webp,image/gif,image/jpeg" data-act="sp-file" data-v="${h(target)}" data-slot="${k}" hidden ${off ? 'disabled' : ''}></label>
-      <div class="sp-lab">${SPRITE_KO[k]}${k === 'idle' ? '<small>필수</small>' : ''}${src ? `<button class="bt-mini" data-act="sp-clear" data-v="${h(target)}" data-slot="${k}" title="지우기">✕</button>` : ''}</div></div>`;
+      <div class="sp-lab">${SPRITE_KO[k]}${k === 'idle' ? '<small>필수</small>' : ''}${src && own ? `<button class="bt-mini" data-act="sp-clear" data-v="${h(target)}" data-slot="${k}" title="지우기">✕</button>` : ''}</div></div>`;
   };
-  return `<div class="sp-ctl"><div class="sp-head"><b>전투 일러</b><small>배경이 투명한 PNG·WebP · 적 자리(왼쪽을 보는 그림) 기준, 아군일 때는 자동으로 좌우가 뒤집혀요</small></div>
+  return `<div class="sp-ctl">
+    <div class="sp-bulk">
+      <label class="menu_button sp-pick" title="idle / attack / hit / down 이름의 파일을 여러 개 골라요 (기본·공격·피격·쓰러짐도 돼요)">파일 여러 개 등록<input type="file" multiple accept="image/png,image/webp,image/gif,image/jpeg,.json" data-act="sp-files" data-v="${h(target)}" hidden></label>
+      <label class="menu_button sp-pick" title="자르기 도구로 만든 캐릭터 폴더를 통째로 골라요">폴더 등록<input type="file" webkitdirectory multiple data-act="sp-files" data-v="${h(target)}" hidden></label>
+      ${folder ? `<button class="menu_button bt-send" data-act="sp-adopt" data-v="${h(target)}" title="서버 폴더에 있는 그림을 이 캐릭터에 등록해요 (이름이 바뀌어도 유지)">서버 폴더 일러 등록</button>` : ''}
+    </div>
     <div class="sp-slots">${['idle', 'attack', 'hit', 'down'].map(slot).join('')}</div>
-    ${sp?.idle ? `<div class="sp-face">그림이 보는 방향 <button class="menu_button ${sp.facing !== 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="left">← 왼쪽</button><button class="menu_button ${sp.facing === 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="right">오른쪽 →</button></div>` : ''}
-    <div class="sd-hint">기본만 넣어도 돼요. 공격·피격·쓰러짐이 없으면 기본 그림을 움직여서 보여 줘요.</div>
-    <div class="sp-folder">${folder ? '<b>폴더 일러 사용 중</b> · ' : ''}파일로 넣기: SillyTavern의 <code>data/(사용자)/user/images/BattleTale/${h(dirName || '이름')}/</code> 폴더에 <code>idle.png</code> · <code>attack.png</code> · <code>hit.png</code> · <code>down.png</code> <button class="bt-mini" data-act="sp-rescan" title="폴더를 다시 확인">다시 찾기</button></div></div>`;
+    ${sp?.idle && own ? `<div class="sp-face">그림이 보는 방향 <button class="menu_button ${sp.facing !== 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="left">← 왼쪽</button><button class="menu_button ${sp.facing === 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="right">오른쪽 →</button></div>` : ''}
+    <div class="sd-hint">배경이 투명한 PNG·WebP · 왼쪽(적 자리)을 보는 그림 기준이고 아군일 때는 자동으로 뒤집혀요. 기본만 넣어도 공격·피격·쓰러짐은 기본 그림을 움직여서 보여 줘요. 파일 이름이 <code>idle</code>·<code>attack</code>·<code>hit</code>·<code>down</code>(또는 기본·공격·피격·쓰러짐)이면 한 번에 자리를 찾아 들어가요.</div>
+    <div class="sp-folder">${folder ? '<b>서버 폴더 일러를 쓰는 중 (아직 등록 전)</b> · ' : ''}서버 폴더: <code>user/images/BattleTale/${h(dirName || '이름')}/</code> <button class="bt-mini" data-act="sp-rescan" title="폴더를 다시 확인">다시 찾기</button></div></div>`;
 }
+
+/** Battle art as its own section of the character / dex page: thumbnails when viewing, the full controls when editing. */
+function artSection(target, mode) {
+  const own = api.spritesOf?.(target) ?? null;
+  const sp = own ?? api.folderArtOf?.(target) ?? null;
+  if (mode === 'edit') return `<div class="bt-section"><div class="bt-sub">전투 일러</div>${spriteControls(target)}</div>`;
+  const thumbs = sp ? ['idle', 'attack', 'hit', 'down'].filter(k => sp[k]).map(k => `<span class="sp-th"><img src="${h(sp[k])}" alt="" referrerpolicy="no-referrer" class="${sp.facing === 'right' ? 'flip' : ''}"><small>${SPRITE_KO[k]}</small></span>`).join('') : '';
+  return `<div class="bt-section sp-view"><div class="bt-sub">전투 일러 ${own ? '' : sp ? '<small class="sd-hint">서버 폴더</small>' : ''}<button class="bt-mini" data-act="${target === 'player' ? 'sheet' : 'cx'}-mode" data-v="edit" title="편집에서 등록·변경">${sp ? '변경' : '등록'}</button></div>${thumbs ? `<div class="sp-ths">${thumbs}</div>` : '<div class="sd-hint">없으면 전투에서 초상화나 실루엣으로 서요.</div>'}</div>`;
+}
+
+/** Which slot a dropped file is for, from its name. */
+const SLOT_NAMES = [['idle', /^(idle|stand(ing)?|base|기본|스탠딩|대기)$/], ['attack', /^(attack|atk|공격)$/], ['hit', /^(hit|hurt|damage|피격)$/], ['down', /^(down|ko|dead|knockdown|쓰러짐|다운)$/]];
+const slotOfFile = name => { const b = String(name).toLowerCase().replace(/\.[a-z0-9]+$/, '').trim(); return SLOT_NAMES.find(([, re]) => re.test(b))?.[0] ?? null; };
 
 /** Stage art keeps its transparency and enough detail to be zoomed in on: up to 720px tall. */
 async function shrinkSprite(file) {
@@ -1003,7 +1021,7 @@ function profileCard(sh, p, { target, sub = '', btns = '', current = true }) {
     <div class="pc-head">${pic ? `<button class="pc-pic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 바꾸기">${pic}</button>` : ''}
       <div class="pc-id"><div class="pc-name"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(t => `${tdot(typeIn(t, sys), typeName(t, sys))}`).join('')}${altChip}${trait}${cpChip}${pic ? '' : `<button class="bt-mini pc-addpic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 넣기">사진</button>`}</div>${sub ? `<div class="pc-sub">${sub}</div>` : ''}</div>
       ${btns}</div>
-    ${open ? portraitControls(target, sh.portrait) + spriteControls(target) : ''}
+    ${open ? portraitControls(target, sh.portrait) : ''}
     ${bar(current ? sh.hp : sh.maxHp, sh.maxHp, 'hp', p.hpLabel)}${sh.maxSp ? bar(current ? sh.sp : sh.maxSp, sh.maxSp, 'sp', p.spLabel) : ''}
     ${statGrid(sh.stats, p)}
   </div>`;
@@ -1146,7 +1164,7 @@ function sheetTab(s) {
       <div class="bt-row"><label>${h(p.spLabel)}<input type="number" data-act="num" data-v="sp" value="${me.sp}">/<input type="number" data-act="num" data-v="maxSp" value="${me.maxSp}"></label></div>
       <div class="bt-stats">${p.stats.map(x => `<label class="bt-stat">${h(x.label || x.key)}<input type="number" data-act="stat" data-v="${h(x.key)}" value="${me.stats[x.key] ?? 0}"></label>`).join('')}</div>
       <button class="menu_button" data-act="edit-json" data-v="player" style="margin-top:6px">JSON</button></div>`;
-  return `${personaBanner(busy)}${card}${editForm}${mode === 'ai' ? aiForm : ''}${mode !== 'view' ? feedbackBox('player', busy) : ''}${passiveBox(me, 'player', { mode, busy })}
+  return `${personaBanner(busy)}${card}${artSection('player', mode)}${editForm}${mode === 'ai' ? aiForm : ''}${mode !== 'view' ? feedbackBox('player', busy) : ''}${passiveBox(me, 'player', { mode, busy })}
     <div class="bt-section"><div class="bt-sub">기술 <small class="sd-hint">클릭하면 상세 보기</small></div>${mode === 'edit' ? skillRows(me.skills, p, { del: true }) : skillView(me.skills, p, 'player')}</div>
     <div class="bt-section"><div class="bt-sub">함께 다니는 인물 ${tip('따로 편입할 필요 없어요. 전투를 만들 때 보조모델이 대화를 보고 장면에 있는 도감 인물을 아군·적으로 넣어요. 여기 있는 사람은 「요즘 같이 다님」으로 참고만 해요.')}</div>${comps ? `<div class="pc-chips">${comps}</div>` : '<div class="bt-empty">없음</div>'}</div>
     <div class="bt-section"><div class="bt-sub">가방</div>${bag ? (mode === 'edit' ? bag : `<div class="pc-chips">${bag}</div>`) : '<div class="bt-empty">비어 있음</div>'}
@@ -1312,7 +1330,7 @@ function codexEditor(s, p, id, list) {
         ${grown ? `<button class="menu_button" data-act="codex-promote" data-v="${h(entry.id)}">성장 → 기본판</button><button class="menu_button" data-act="codex-reset" data-v="${h(entry.id)}">성장 초기화</button>` : ''}
         <button class="menu_button" data-act="codex-export" data-v="${h(entry.id)}">내보내기</button><button class="menu_button" data-act="codex-archive" data-v="${h(entry.id)}" data-on="1" data-back="1">보관</button></div>
       <details><summary class="sd-hint">JSON 직접 수정</summary><textarea id="bt-cx-json" class="text_pole bt-json">${h(JSON.stringify(entry.sheet, null, 1))}</textarea><button class="menu_button" data-act="codex-json" data-v="${h(entry.id)}">저장</button></details></div>`;
-  return `${back}${card}${editForm}${aiForm}${mode !== 'view' ? feedbackBox(entry.id, busy) : ''}${passiveBox(sh, entry.id, { mode, busy })}
+  return `${back}${card}${artSection(`codex:${entry.id}`, mode)}${editForm}${aiForm}${mode !== 'view' ? feedbackBox(entry.id, busy) : ''}${passiveBox(sh, entry.id, { mode, busy })}
     <div class="bt-section"><div class="bt-sub">기술 <small class="sd-hint">클릭하면 상세 보기</small></div>${skillView(sh.skills, p, `cx:${entry.id}`)}</div>
     ${sh.desc && mode === 'view' ? `<div class="bt-section"><div class="sd-hint">${h(sh.desc)}</div></div>` : ''}${versionList(entry, p)}`;
 }
@@ -1434,6 +1452,7 @@ function onClick(e) {
     case 'pt-pixel': return api.setPortrait(v, p0 => (p0 ? { ...p0, pixel: !p0.pixel } : null));
     case 'pt-clear': return api.setPortrait(v, null);
     case 'sp-clear': { const k = el.dataset.slot; return api.setSprite(v, cur => (k === 'idle' ? null : { ...cur, [k]: undefined })); }
+    case 'sp-adopt': return api.adoptFolderArt?.(v);
     case 'sp-rescan': return api.rescanArt?.();
     case 'view-toggle': return api.setSetting('battleView', stageOn() ? 'sheet' : 'stage');
     case 'sp-facing': return api.setSprite(v, cur => ({ ...cur, facing: el.dataset.slot }));
@@ -1593,6 +1612,27 @@ function onChange(e) {
     const f = el.files?.[0]; if (!f) return;
     if (f.size > 8e6) return api.toast('이미지가 너무 커요 (8MB 이하).', 'warning');
     shrinkImage(f, false).then(src => api.setPortrait(el.dataset.v, { src, pixel: false })).catch(() => api.toast('이미지를 읽지 못했어요.', 'error'));
+    return;
+  }
+  if (act === 'sp-files') {
+    const files = [...(el.files ?? [])];
+    if (!files.length) return;
+    const json = files.find(f => /\.json$/i.test(f.name));
+    const picks = new Map();
+    for (const f of files) { const k = slotOfFile(f.name); if (k && /^image\//.test(f.type || 'image/') && !picks.has(k)) picks.set(k, f); }
+    const v = el.dataset.v;
+    el.value = '';
+    if (!picks.size) return api.toast('idle / attack / hit / down (또는 기본·공격·피격·쓰러짐) 이름의 그림을 못 찾았어요.', 'warning');
+    if (!picks.has('idle') && !api.spritesOf?.(v)?.idle) return api.toast('기본 그림(idle)이 같이 있어야 해요.', 'warning');
+    if ([...picks.values()].some(f => f.size > 15e6)) return api.toast('15MB 넘는 그림이 있어요.', 'warning');
+    api.toast(`${picks.size}장 등록 중…`);
+    Promise.all([...picks].map(([k, f]) => shrinkSprite(f).then(r => ({ slot: k, ...r }))))
+      .then(async items => {
+        let facing = null;
+        if (json) { try { const j = JSON.parse(await json.text()); if (j?.facing === 'right' || j?.facing === 'left') facing = j.facing; } catch { /* optional */ } }
+        return api.setSpriteFiles(v, items, facing);
+      })
+      .catch(() => api.toast('그림을 읽지 못했어요.', 'error'));
     return;
   }
   if (act === 'sp-file') {
