@@ -573,9 +573,10 @@ const panelApi = {
     return startFrom(index, { hint: '' });
   },
   command: putCommand,
-  modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, setSprite, setSpriteImage, spritesOf,
+  modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, setSprite, setSpriteImage, spritesOf, folderArtOf: target => folderArt(artNameOf(target)), artNameOf,
   // Stage art for a fighter in battle: the player's, or its dex entry's (companions and named enemies).
-  stageArt: f => (f?.isPlayer ? state()?.player?.sprites : f?.codexId ? spritesOf(f.codexId) : null) ?? null, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
+  stageArt: f => (f?.isPlayer ? state()?.player?.sprites : f?.codexId ? deps().codex.list().find(x => x.id === f.codexId)?.sheet?.sprites : null) ?? folderArt(f?.name),
+  artFolder: name => `${ART_ROOT}/${artDir(name)}/`, rescanArt: () => { FOLDER_ART.clear(); refreshPanel(); }, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
   tokenStats: () => ensureTokenStats(state()),
   clearTokenStats: async () => { const s = state(); if (!s) return; resetTokenStats(s); await saveState(); refreshPanel(); toast('이 채팅의 토큰 기록을 초기화했어요.'); },
   // Same encounter again from the pre-battle state (only before the result went to the story).
@@ -1354,6 +1355,42 @@ function spritesOf(target) {
   if (target === 'player') return s?.player?.sprites ?? null;
   const id = String(target).startsWith('codex:') ? target.slice(6) : target;
   return deps().codex.list().find(x => x.id === id)?.sheet?.sprites ?? null;
+}
+/** The name whose image folder belongs to this target. */
+function artNameOf(target) {
+  const s = state();
+  if (target === 'player') return s?.player?.name ?? '';
+  const id = String(target).startsWith('codex:') ? target.slice(6) : target;
+  return deps().codex.list().find(x => x.id === id)?.name ?? '';
+}
+
+/* ---------- Battle art dropped into a folder by hand ----------
+ * SillyTavern serves data/<user>/user/images as /user/images, so files put in
+ *   user/images/BattleTale/<character name>/idle.png (attack / hit / down; .png or .webp; optional art.json {"facing":"right"})
+ * show up on the stage without going through the panel. Looked up once per name per session ("다시 찾기" clears it). */
+const ART_ROOT = '/user/images/BattleTale';
+const FOLDER_ART = new Map();
+const artDir = name => encodeURIComponent(String(name ?? '').replace(/[\\/:*?"<>|]/g, '').trim());
+async function probeArt(name) {
+  const dir = `${ART_ROOT}/${artDir(name)}/`;
+  const found = async file => { try { const r = await fetch(dir + file, { method: 'HEAD', cache: 'no-store' }); return r.ok && /image/.test(r.headers.get('content-type') ?? 'image') ? dir + file : null; } catch { return null; } };
+  const out = {};
+  for (const slot of SPRITE_SLOTS) {
+    for (const ext of ['png', 'webp']) { const u = await found(`${slot}.${ext}`); if (u) { out[slot] = u; break; } }
+    if (slot === 'idle' && !out.idle) return null;
+  }
+  try { const r = await fetch(dir + 'art.json', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j?.facing === 'right') out.facing = 'right'; } } catch { /* optional */ }
+  return safeSprites(out);
+}
+function folderArt(name) {
+  if (!name) return null;
+  const v = FOLDER_ART.get(name);
+  if (v === undefined) {
+    FOLDER_ART.set(name, 'pending');
+    probeArt(name).then(sp => { FOLDER_ART.set(name, sp); if (sp) refreshPanel(); }).catch(() => FOLDER_ART.set(name, null));
+    return null;
+  }
+  return v === 'pending' ? null : v;
 }
 
 function connectionProfiles() {

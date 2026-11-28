@@ -922,7 +922,10 @@ function portraitControls(target, portrait) {
 /** Battle stage art: a standing picture (required) and optional attack / hit / down poses, plus which way it faces. */
 const SPRITE_KO = { idle: '기본', attack: '공격', hit: '피격', down: '쓰러짐' };
 function spriteControls(target) {
-  const sp = api.spritesOf?.(target) ?? null;
+  const own = api.spritesOf?.(target) ?? null;
+  const folder = own ? null : api.folderArtOf?.(target) ?? null;
+  const sp = own ?? folder;
+  const dirName = api.artNameOf?.(target) ?? '';
   const slot = k => {
     const src = sp?.[k];
     const off = k !== 'idle' && !sp?.idle;
@@ -933,7 +936,8 @@ function spriteControls(target) {
   return `<div class="sp-ctl"><div class="sp-head"><b>전투 일러</b><small>배경이 투명한 PNG·WebP · 적 자리(왼쪽을 보는 그림) 기준, 아군일 때는 자동으로 좌우가 뒤집혀요</small></div>
     <div class="sp-slots">${['idle', 'attack', 'hit', 'down'].map(slot).join('')}</div>
     ${sp?.idle ? `<div class="sp-face">그림이 보는 방향 <button class="menu_button ${sp.facing !== 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="left">← 왼쪽</button><button class="menu_button ${sp.facing === 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="right">오른쪽 →</button></div>` : ''}
-    <div class="sd-hint">기본만 넣어도 돼요. 공격·피격·쓰러짐이 없으면 기본 그림을 움직여서 보여 줘요.</div></div>`;
+    <div class="sd-hint">기본만 넣어도 돼요. 공격·피격·쓰러짐이 없으면 기본 그림을 움직여서 보여 줘요.</div>
+    <div class="sp-folder">${folder ? '<b>폴더 일러 사용 중</b> · ' : ''}파일로 넣기: SillyTavern의 <code>data/(사용자)/user/images/BattleTale/${h(dirName || '이름')}/</code> 폴더에 <code>idle.png</code> · <code>attack.png</code> · <code>hit.png</code> · <code>down.png</code> <button class="bt-mini" data-act="sp-rescan" title="폴더를 다시 확인">다시 찾기</button></div></div>`;
 }
 
 /** Stage art keeps its transparency and enough detail to be zoomed in on: up to 720px tall. */
@@ -1430,6 +1434,7 @@ function onClick(e) {
     case 'pt-pixel': return api.setPortrait(v, p0 => (p0 ? { ...p0, pixel: !p0.pixel } : null));
     case 'pt-clear': return api.setPortrait(v, null);
     case 'sp-clear': { const k = el.dataset.slot; return api.setSprite(v, cur => (k === 'idle' ? null : { ...cur, [k]: undefined })); }
+    case 'sp-rescan': return api.rescanArt?.();
     case 'view-toggle': return api.setSetting('battleView', stageOn() ? 'sheet' : 'stage');
     case 'sp-facing': return api.setSprite(v, cur => ({ ...cur, facing: el.dataset.slot }));
     case 'cast-scan': return api.scanCast();

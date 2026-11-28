@@ -1572,3 +1572,6 @@
 #bt-panel .sp-face { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; flex-wrap: wrap; }
 #bt-panel .sp-face .menu_button.on { outline: 1px solid var(--bt-acc, #e8a33d); }
 @media (prefers-reduced-motion: reduce) { #bt-panel .stg .stg-world, #bt-panel .su .su-fig { animation-duration: 1ms !important; } }
+#bt-panel .sp-folder { margin-top: 6px; font-size: 11px; color: var(--bt-dim, #a9adb8); line-height: 1.5; word-break: break-all; }
+#bt-panel .sp-folder code { font-size: 10.5px; padding: 0 3px; border-radius: 3px; background: #0d0f14; color: #d8dbe4; }
+#bt-panel .sp-folder b { color: #8fd19e; font-weight: 600; }
