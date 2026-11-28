@@ -25,6 +25,7 @@ export function createBattle({ party = [], allies = [], enemies = [], profile, s
   const fighters = [];
   const add = (sheet, side, persistent) => {
     const f = clone(sheet);
+    delete f.sprites; // stage art is looked up by the panel, never copied into the saved battle
     f.side = side;
     f.persistent = !!persistent;
     f.derived = derive(f, profile);

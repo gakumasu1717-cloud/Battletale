@@ -304,6 +304,23 @@ export function safePortrait(p) {
   return ok ? { src, pixel: !!(typeof p === 'object' && p.pixel) } : null;
 }
 
+/* Battle stage art: a standing picture plus optional attack / hit / down poses. Pictures are drawn facing left
+ * (toward the allies, as an enemy stands) unless facing is 'right'; allies are mirrored on the stage. */
+export const SPRITE_SLOTS = ['idle', 'attack', 'hit', 'down'];
+const spriteSrc = v => {
+  const src = String(typeof v === 'string' ? v : v?.src ?? '').trim();
+  if (/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(src)) return src.length <= 700000 ? src : null;
+  return /^(https:\/\/|\/)[^\s"'<>`()\\]+$/.test(src) ? src : null;
+};
+export function safeSprites(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const k of SPRITE_SLOTS) { const s = spriteSrc(raw[k]); if (s) out[k] = s; }
+  if (!out.idle) return null;
+  out.facing = raw.facing === 'right' ? 'right' : 'left';
+  return out;
+}
+
 /** Labels that end up in the panel: no markup characters, bounded length. */
 export const plain = (v, max = 40) => String(v ?? '').replace(/[<>"'`&\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -919,6 +936,7 @@ export function normalizeSheet(raw, profile, { side = 'enemy', seed = '' } = {})
     intel: r.intel != null ? clamp(Math.round(num(r.intel, 1)), 0, 2) : null,
     style: r.style ? String(r.style) : '',
     shape: r.shape ? String(r.shape) : '', gender: r.gender ? String(r.gender) : '', portrait: safePortrait(r.portrait),
+    ...(safeSprites(r.sprites) ? { sprites: safeSprites(r.sprites) } : {}),
     actions: clamp(Math.round(num(r.actions, threat === 'boss' ? 1 : 1)), 1, 3),
     trait: traitId(r.trait ?? r.role_passive ?? r.passiveTag),
     customPassive: safeCustomPassive(r.customPassive),

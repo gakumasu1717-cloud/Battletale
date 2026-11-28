@@ -2,7 +2,7 @@
 import { escapeHtml as h, pct, norm } from './util.js';
 import { STATUS, DERIVED_KO, DERIVED_USE, statRoles, formulaText, ELEMENT_KO, THREAT_KO, ITEM_KIND_KO, inferItem, skillLine, normalizeSkill, typeName, POKE_KO, typeIn, typesFor, toPoke, elementId, TIER_PRESETS, TRAITS, rulesToText } from './catalog.js';
 import { eventLines, pkLines, josa } from './narrate.js';
-import { scene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, tdot, skillCard, skillDetailLines, skillSheet, setColorContext, SWATCHES, swatchOf } from './pkui.js';
+import { scene, stageScene, menuGrid, barRow, animateBars, SHAPE_KO, inspectHtml, handHtml, orderHtml, TYPE_HEX, tdot, skillCard, skillDetailLines, skillSheet, setColorContext, SWATCHES, swatchOf } from './pkui.js';
 import { findFighter } from './engine.js';
 import { THREAT_LABEL } from './engine.js';
 import { msgKey, profileOf, MODES, modeOf, allowedModes, LIMITS } from './game.js';
@@ -46,7 +46,7 @@ export function mountPanel(callbacks) {
   const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
   panel.addEventListener('pointerdown', e => {
     // Long-press a fighter on the field (or a guard on the map) → details.
-    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .ur[data-v]');
+    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .ur[data-v], .su[data-v]');
     if (who) {
       cancelPress();
       pressTimer = setTimeout(() => { pressTimer = null; api.ui.inspect = who.dataset.v; longPressed = true; refreshPanel(); }, 420);
@@ -64,7 +64,7 @@ export function mountPanel(callbacks) {
   // Right-click (PC) = the same details a long-press opens on touch screens.
   panel.addEventListener('contextmenu', e => {
     const btn = e.target.closest?.('.pk-btn[data-act="pk:item"]');
-    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .pk-info[data-v], .ur[data-v]');
+    const who = e.target.closest?.('.pk-mon[data-v], .pz-tok[data-v], .pk-info[data-v], .ur[data-v], .su[data-v]');
     if (!btn && !who) return;
     e.preventDefault();
     if (btn) { const it = api.ui.menuItems?.[Number(btn.dataset.i)]; if (it && ['m:skill', 'm:basic'].includes(it.act)) api.ui.peek = Number(btn.dataset.i); }
@@ -195,7 +195,7 @@ export function refreshPanel() {
   const sd = p.querySelector('.sd-body'); if (sd) sd.scrollTop = keep;
   animateBars(p);
   // Popups and HP slides play once per turn, not on every redraw.
-  api.ui.fx = null; api.ui.anim = null; api.ui.atk = null;
+  api.ui.fx = null; api.ui.anim = null; api.ui.atk = null; api.ui.cam = null;
   api.ui.prevHp = null;
   scheduleAuto();
 }
@@ -205,7 +205,7 @@ export function refreshPanel() {
 let autoTimer = null, autoKey = '';
 const PAGE = 4;
 /** One tap / one auto tick: next page of this step's lines, else the next step, else the next intro lines. */
-function advanceTalk() {
+export function advanceTalk() {
   const ui = api.ui;
   if (ui.steps && (ui.stepPos ?? 0) < ui.steps.length) {
     const lines = ui.steps[ui.stepPos]?.lines ?? [];
@@ -233,8 +233,13 @@ function scheduleAuto() {
     autoKey = '';
     advanceTalk();
     refreshPanel();
-  }, ms * (1 + 0.35 * Math.max(0, lines - 1)));
+  }, Math.max(ms * (1 + 0.35 * Math.max(0, lines - 1)), stepping && stageOn() && (ui.linePos ?? 0) === 0 ? camMs() + 350 : 0));
 }
+
+/** The side-view stage with its camera (default), or the plain record sheet. */
+const stageOn = () => api.settings?.().battleView !== 'sheet';
+/** How long one camera pass takes: follows the message speed, never too fast to read. */
+const camMs = () => { const ms = Number(api.settings?.().autoPlay ?? 1300) || 1300; return Math.max(900, Math.min(1500, Math.round(ms * 0.95))); };
 
 /* ---------- Settings drawer (inside the panel) ---------- */
 const SETTINGS = [
@@ -666,7 +671,7 @@ function battleTab(s) {
   const ui = api.ui;
   ui.typeSystem = p.typeSystem;
   const threat = THREAT_LABEL[b.threat?.level];
-  const ctx = { ui, busy, inventory: s.inventory, settings: api.settings(), spLabel: p.spLabel, value: id => document.getElementById(id)?.value?.trim() ?? '' };
+  const ctx = { ui, busy, inventory: s.inventory, settings: api.settings(), spLabel: p.spLabel, value: id => document.getElementById(id)?.value?.trim() ?? '', art: F => api.stageArt?.(F), camMs: camMs() };
   const V = M.view(b.st, p, ctx);
   const terr = b.st.terrain ?? [];
   const STG_KO = { pow: '공격', mag: '특공', def: '방어', res: '특방', spd: '스피드', acc: '명중', eva: '회피', luk: '운' };
@@ -706,7 +711,7 @@ function battleTab(s) {
   }
   const modeSel = !b.history.length ? `<select data-act="switch-mode" class="pk-mode">${allowedModes(api.settings()).map(m => `<option value="${m}" ${m === b.mode ? 'selected' : ''}>${MODES[m].ko}</option>`).join('')}</select>` : '';
   const head = `<div class="pk-head"><span class="pk-title">${h(b.title || M.ko)}</span><span class="pk-turn">${b.st.turn}턴</span>
-    ${threat ? `<span class="bt-chip threat-${b.threat.level}">${threat}</span>` : ''}${b.spec?.difficulty && b.spec.difficulty !== 'normal' ? `<span class="bt-chip diff-${b.spec.difficulty}">${{ easy: '쉬움', hard: '어려움', nightmare: '악몽' }[b.spec.difficulty]}</span>` : ''}<button class="pk-more" data-act="stop" title="중단">중단</button></div>
+    ${threat ? `<span class="bt-chip threat-${b.threat.level}">${threat}</span>` : ''}${b.spec?.difficulty && b.spec.difficulty !== 'normal' ? `<span class="bt-chip diff-${b.spec.difficulty}">${{ easy: '쉬움', hard: '어려움', nightmare: '악몽' }[b.spec.difficulty]}</span>` : ''}<button class="pk-more" data-act="view-toggle" title="${stageOn() ? '표로 보기 (숫자 위주)' : '무대로 보기 (일러·카메라)'}">${stageOn() ? '표' : '무대'}</button><button class="pk-more" data-act="stop" title="중단">중단</button></div>
     ${terrChip || modeSel ? `<div class="pk-head2">${terrChip}${modeSel}</div>` : ''}`;
   const stepLines = stepping ? ui.steps[ui.stepPos].lines : [];
   const lp = ui.linePos ?? 0;
@@ -758,7 +763,7 @@ function battleTab(s) {
   V.place ??= b.place || '';
   // Cards layout: the message ticker sits between the enemy rows and the ally HUD.
   const inField = !api.ui.compact && !V.custom;
-  const stage = api.ui.compact ? mini : V.custom ?? scene(V, ctx, { box: showBox ? box : '' });
+  const stage = api.ui.compact ? mini : V.custom ?? (stageOn() ? stageScene : scene)(V, ctx, { box: showBox ? box : '' });
   const peekIt = ui.peek != null ? ui.menuItems?.[ui.peek] : null;
   const peekCard = peekIt && M.peek ? M.peek(b.st, peekIt, ctx) : null;
   const est = peekIt?.tags?.find(t => String(t.text ?? t).startsWith('≈'));
@@ -840,6 +845,31 @@ function computeFx(ui) {
     else if (e.t === 'broken') add(e.who, '체간 붕괴', 'crit');
   }
   ui.fx = fx; ui.anim = anim; ui.atk = atk;
+  ui.cam = camPlan(ui.lastEvents ?? [], ui.typeSystem);
+}
+
+/**
+ * Where the stage camera goes for one step: the one acting, then whoever it lands on (hit / miss / aid), and who
+ * falls. Steps with nobody acting (poison ticks, terrain) just look at whoever is affected.
+ */
+function camPlan(events, sys = 'world') {
+  const use = events.find(e => ['use', 'item', 'improv'].includes(e.t));
+  const actor = use?.who ?? null;
+  const pose = new Map();
+  const mark = (n, p) => { if (!n || n === actor) return; const cur = pose.get(n); if (cur === 'hit') return; if (p === 'hit' || !cur || (cur === 'aid' && p === 'miss')) pose.set(n, p); };
+  for (const e of events) {
+    if (e.t === 'hit') mark(e.target, 'hit');
+    else if (e.t === 'miss') mark(e.target, 'miss');
+    else if (e.t === 'dot') mark(e.who, 'hit');
+    else if (['heal', 'revive', 'cleanse'].includes(e.t) || (e.t === 'stage' && e.delta > 0)) mark(e.who, 'aid');
+    else if (e.t === 'status' || (e.t === 'stage' && e.delta < 0)) mark(e.who, use ? 'hit' : 'aid');
+  }
+  const ko = [...new Set(events.filter(e => e.t === 'down' && e.who).map(e => e.who))];
+  for (const n of ko) if (!pose.has(n) && n !== actor) pose.set(n, 'hit');
+  const targets = [...pose].map(([name, p]) => ({ name, pose: p })).slice(0, 8);
+  if (!actor && !targets.length) return null;
+  const t = use?.element && !['none', 'physical'].includes(use.element) ? typeIn(use.element, sys) : 'normal';
+  return { actor, targets, ko, color: TYPE_HEX[t] ?? '#e8e8e8' };
 }
 
 function resultScreen(s, b) {
@@ -887,6 +917,38 @@ function portraitControls(target, portrait) {
       ${portrait?.src ? `<button class="menu_button" data-act="pt-pixel" data-v="${h(target)}">${portrait.pixel ? '원본 느낌' : '도트 느낌'}</button><button class="menu_button" data-act="pt-clear" data-v="${h(target)}">✕</button>` : ''}
       <input type="text" class="text_pole" data-act="pt-url" data-v="${h(target)}" placeholder="또는 이미지 주소 (https://…)" value="${portrait?.src?.startsWith('http') ? h(portrait.src) : ''}">
     </div></div>`;
+}
+
+/** Battle stage art: a standing picture (required) and optional attack / hit / down poses, plus which way it faces. */
+const SPRITE_KO = { idle: '기본', attack: '공격', hit: '피격', down: '쓰러짐' };
+function spriteControls(target) {
+  const sp = api.spritesOf?.(target) ?? null;
+  const slot = k => {
+    const src = sp?.[k];
+    const off = k !== 'idle' && !sp?.idle;
+    return `<div class="sp-slot ${src ? 'has' : ''} ${off ? 'off' : ''}">
+      <label class="sp-prev" title="${off ? '기본 스탠딩을 먼저 넣어 주세요' : `${SPRITE_KO[k]} 그림 ${src ? '바꾸기' : '넣기'}`}">${src ? `<img src="${h(src)}" alt="" referrerpolicy="no-referrer" class="${sp.facing === 'right' ? 'flip' : ''}">` : '<span>＋</span>'}<input type="file" accept="image/png,image/webp,image/gif,image/jpeg" data-act="sp-file" data-v="${h(target)}" data-slot="${k}" hidden ${off ? 'disabled' : ''}></label>
+      <div class="sp-lab">${SPRITE_KO[k]}${k === 'idle' ? '<small>필수</small>' : ''}${src ? `<button class="bt-mini" data-act="sp-clear" data-v="${h(target)}" data-slot="${k}" title="지우기">✕</button>` : ''}</div></div>`;
+  };
+  return `<div class="sp-ctl"><div class="sp-head"><b>전투 일러</b><small>배경이 투명한 PNG·WebP · 적 자리(왼쪽을 보는 그림) 기준, 아군일 때는 자동으로 좌우가 뒤집혀요</small></div>
+    <div class="sp-slots">${['idle', 'attack', 'hit', 'down'].map(slot).join('')}</div>
+    ${sp?.idle ? `<div class="sp-face">그림이 보는 방향 <button class="menu_button ${sp.facing !== 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="left">← 왼쪽</button><button class="menu_button ${sp.facing === 'right' ? 'on' : ''}" data-act="sp-facing" data-v="${h(target)}" data-slot="right">오른쪽 →</button></div>` : ''}
+    <div class="sd-hint">기본만 넣어도 돼요. 공격·피격·쓰러짐이 없으면 기본 그림을 움직여서 보여 줘요.</div></div>`;
+}
+
+/** Stage art keeps its transparency and enough detail to be zoomed in on: up to 720px tall. */
+async function shrinkSprite(file) {
+  const url = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(file); });
+  const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = url; });
+  const fit = max => {
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const out = c.toDataURL('image/webp', 0.9);
+    return out.startsWith('data:image/webp') ? out : c.toDataURL('image/png');
+  };
+  return { full: fit(720), small: fit(420) };
 }
 
 /** Shrink an uploaded picture so it stays light in the settings file: 96px (or a 32px "dot" version). */
@@ -937,7 +999,7 @@ function profileCard(sh, p, { target, sub = '', btns = '', current = true }) {
     <div class="pc-head">${pic ? `<button class="pc-pic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 바꾸기">${pic}</button>` : ''}
       <div class="pc-id"><div class="pc-name"><b>${h(sh.name)}</b><span class="cx-tier">${h(sh.tier || '?')}</span>${typesFor(sh, sys).map(t => `${tdot(typeIn(t, sys), typeName(t, sys))}`).join('')}${altChip}${trait}${cpChip}${pic ? '' : `<button class="bt-mini pc-addpic ${open ? 'on' : ''}" data-act="pc-pic" data-v="${h(target)}" title="초상화 넣기">사진</button>`}</div>${sub ? `<div class="pc-sub">${sub}</div>` : ''}</div>
       ${btns}</div>
-    ${open ? portraitControls(target, sh.portrait) : ''}
+    ${open ? portraitControls(target, sh.portrait) + spriteControls(target) : ''}
     ${bar(current ? sh.hp : sh.maxHp, sh.maxHp, 'hp', p.hpLabel)}${sh.maxSp ? bar(current ? sh.sp : sh.maxSp, sh.maxSp, 'sp', p.spLabel) : ''}
     ${statGrid(sh.stats, p)}
   </div>`;
@@ -1367,6 +1429,9 @@ function onClick(e) {
     case 'pt-avatar': { const a = (api.avatars?.() ?? [])[Number(el.dataset.i)]; if (a) api.setPortrait(v, { src: a.src, pixel: false }); return; }
     case 'pt-pixel': return api.setPortrait(v, p0 => (p0 ? { ...p0, pixel: !p0.pixel } : null));
     case 'pt-clear': return api.setPortrait(v, null);
+    case 'sp-clear': { const k = el.dataset.slot; return api.setSprite(v, cur => (k === 'idle' ? null : { ...cur, [k]: undefined })); }
+    case 'view-toggle': return api.setSetting('battleView', stageOn() ? 'sheet' : 'stage');
+    case 'sp-facing': return api.setSprite(v, cur => ({ ...cur, facing: el.dataset.slot }));
     case 'cast-scan': return api.scanCast();
     case 'codex-reroll': return api.rerollCodex(v);
     case 'codex-quickdel': {
@@ -1523,6 +1588,12 @@ function onChange(e) {
     const f = el.files?.[0]; if (!f) return;
     if (f.size > 8e6) return api.toast('이미지가 너무 커요 (8MB 이하).', 'warning');
     shrinkImage(f, false).then(src => api.setPortrait(el.dataset.v, { src, pixel: false })).catch(() => api.toast('이미지를 읽지 못했어요.', 'error'));
+    return;
+  }
+  if (act === 'sp-file') {
+    const f = el.files?.[0]; if (!f) return;
+    if (f.size > 15e6) return api.toast('이미지가 너무 커요 (15MB 이하).', 'warning');
+    shrinkSprite(f).then(({ full, small }) => api.setSpriteImage(el.dataset.v, el.dataset.slot, full, small)).catch(() => api.toast('이미지를 읽지 못했어요.', 'error'));
     return;
   }
   if (act === 'm:actor') { api.ui.actor = el.value; refreshPanel(); }

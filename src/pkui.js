@@ -134,7 +134,7 @@ export function vf(f, { side, intel = 2, typeSystem = 'world', note = '', noteCl
     sp: f.maxSp > 0 && (side === 'ally' || !f.noSp) ? f.sp : null, maxSp: f.maxSp, spLabel, statuses: f.statuses ?? [], note, noteCls,
     down: !!(f.down || f.out), out: f.out, side, selected, posture, sub, threat: f.threat,
     row: f.row === 'back' ? 'back' : 'front', shape: shapeOf(f, { side, intel }), portrait: f.portrait?.src ? f.portrait : null, hidden: side === 'enemy' && intel === 0,
-    stages: f.stages ?? {}, typeSystem,
+    stages: f.stages ?? {}, typeSystem, isPlayer: !!f.isPlayer, codexId: f.codexId ?? null,
   };
 }
 
@@ -315,6 +315,95 @@ export function scene(V, ctx, { box = '' } = {}) {
       ${group(front, back.length ? '전열' : '', 'enemy')}${group(back, '후열', 'enemy')}
     </div>
     <div class="bf-sheet ally">${allies.length ? `<div class="bf-head"><span>아군</span></div>${allies.map(F => unitRow(F, ctx, 'ally')).join('')}` : ''}</div>${box}${V.banner ?? ''}`;
+}
+
+/* ---------- Battle stage: side view with a camera ----------
+ * Allies stand on the left facing right, enemies on the right facing left, front line nearest the middle.
+ * While a turn plays back, each step moves the camera: in on the one acting (attack pose), a cut to whoever
+ * it lands on (hit pose, damage), then back out. Pictures come from ctx.art(F) = {idle, attack?, hit?, down?, facing};
+ * a missing pose is acted out by moving the standing picture, and a character with no art stands as its portrait
+ * or emblem. Turn rules are untouched: this only draws what the steps already say. */
+function stageLayout(list, side) {
+  // Spread across the side's half, front line nearest the middle; neighbours alternate depth so they overlap less.
+  const n = list.length;
+  const ordered = [...list.filter(F => F.row !== 'back'), ...list.filter(F => F.row === 'back')];
+  const base = n <= 1 ? 66 : n === 2 ? 60 : n === 3 ? 54 : n === 4 ? 48 : n <= 6 ? 42 : 36;
+  const step = n <= 1 ? 0 : Math.min(14, 27 / (n - 1));
+  const out = {};
+  ordered.forEach((F, i) => {
+    const deep = n > 1 && i % 2 === 1;
+    const back = F.row === 'back';
+    const y = back ? (deep ? 66 : 70) : deep ? 74 : 80;
+    const dx = 11 + (n <= 1 ? 7 : 0) + i * step;
+    const hgt = base * (back ? 0.88 : 1) * (deep ? 0.94 : 1);
+    out[F.name] = { x: side === 'enemy' ? 50 + dx : 50 - dx, y, h: hgt, z: Math.round(y * 10) + i };
+  });
+  return out;
+}
+/** Camera transform that centres point (fx, fy) at zoom z without showing past the stage edges. */
+function camAt(fx, fy, z) {
+  const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  return { x: cl(50 - fx * z, 100 - 100 * z, 0).toFixed(2), y: cl(52 - fy * z, 100 - 100 * z, 0).toFixed(2), z: z.toFixed(2) };
+}
+function focusOn(names, pos) {
+  const pts = names.map(n => pos[n]).filter(Boolean);
+  if (!pts.length) return null;
+  const xs = pts.map(p => p.x), tops = pts.map(p => p.y - p.h), bots = pts.map(p => p.y);
+  const w = Math.max(...xs) - Math.min(...xs) + 16, hh = Math.max(...bots) - Math.min(...tops) + 10;
+  const z = Math.max(1.15, Math.min(1.85, 86 / w, 92 / hh));
+  return camAt((Math.max(...xs) + Math.min(...xs)) / 2, (Math.max(...bots) + Math.min(...tops)) / 2, z);
+}
+function stageUnit(F, ctx, side, p, cam) {
+  const art = ctx?.art?.(F) ?? null;
+  const t = F.types[0]?.id ?? 'normal';
+  const cs = cardState(F, ctx);
+  const role = cam?.actor === F.name ? 'p-atk' : '';
+  const hitPose = cam?.targets?.find(x => x.name === F.name)?.pose;
+  const ko = cam?.ko?.includes(F.name) ? 'p-ko' : '';
+  const flip = (side === 'ally') === ((art?.facing ?? 'left') === 'left');
+  const has = art ? ['attack', 'hit', 'down'].filter(k => art[k]).map(k => `has-${k}`).join(' ') : '';
+  const img = (k, cls = '') => `<img class="su-img ${k} ${cls}" src="${h(art[k])}" alt="" draggable="false" referrerpolicy="no-referrer">`;
+  const fig = art ? img('idle') + ['attack', 'hit', 'down'].filter(k => art[k]).map(k => img(k)).join('')
+    : F.portrait ? `<div class="su-card">${portraitImg(F.portrait, { hidden: F.hidden, cls: 'su-pt' })}</div>`
+    : `<div class="su-card emb"><svg viewBox="0 0 24 24" aria-hidden="true">${EMBLEM[F.shape] ?? EMBLEM.monster}</svg></div>`;
+  const pct = F.hpUnknown ? 100 : clamp(Math.round(F.hp / Math.max(1, F.maxHp) * 100), 0, 100);
+  const prev = ctx?.ui?.prevHp?.[F.name];
+  const from = F.hpUnknown || prev == null ? pct : prev;
+  const sts = statusText(F);
+  const state = STATE_KO(F);
+  const intent = side === 'enemy' && F.note && !F.down && !cam ? `<div class="su-intent ${F.noteCls ?? ''}" title="${h(F.noteTitle || F.note)}">${h(F.note)}</div>` : '';
+  // Popups land when the camera gets there: the actor's cost at once, damage on the cut.
+  const fx = ctx?.ui?.fx?.[F.name] ?? [];
+  const base = hitPose ? 0.52 : 0.12;
+  const pops = fx.length ? `<div class="bt-fx-wrap">${fx.slice(0, 4).map((x, i) => `<span class="bt-fx ${x.cls}" style="animation-delay:calc(var(--cd) * ${base} + ${i * 0.16}s)">${h(x.text)}</span>`).join('')}</div>` : '';
+  const slash = hitPose === 'hit' ? `<div class="su-slash" style="--c:${cam.color ?? '#fff'}"></div>` : hitPose === 'aid' ? '<div class="su-aid"></div>' : '';
+  return `<div class="su ${side} ${has} ${role} ${hitPose ? `p-${hitPose}` : ''} ${ko} ${cs.cls}" style="left:${p.x}%;top:${p.y}%;--h:${p.h};z-index:${p.z};--tc:${typeHex(t)}" ${!F.down || fx.length ? `data-act="pk:pick" data-v="${h(F.name)}"` : ''}>
+    <div class="su-shadow"></div>
+    <div class="su-fig"><div class="su-flip ${flip ? 'flip' : ''}">${fig}</div>${slash}</div>
+    <div class="su-plate"><div class="su-name"><b>${h(F.name)}</b>${F.threat === 'boss' ? '<em>보스</em>' : F.threat === 'elite' ? '<em>정예</em>' : ''}</div>
+      <div class="su-hp"><div class="ur-trail" style="width:${Math.max(from, pct)}%" data-to="${pct}"></div><div class="pk-hp-fill ${F.hpUnknown ? 'u' : hpCls(pct)}" style="width:${from}%" data-to="${pct}"></div></div>
+      ${F.sp != null && F.maxSp > 0 ? `<div class="su-sp"><div style="width:${clamp(Math.round(F.sp / Math.max(1, F.maxSp) * 100), 0, 100)}%"></div></div>` : ''}
+      ${state || sts ? `<div class="su-st">${state ? `<b>${state}</b> ` : ''}${h(sts)}</div>` : ''}${intent}</div>
+    ${pops}</div>`;
+}
+export function stageScene(V, ctx, { box = '' } = {}) {
+  const foes = V.foes ?? [], allies = V.allies ?? [];
+  const pos = { ...stageLayout(allies, 'ally'), ...stageLayout(foes, 'enemy') };
+  const cam = ctx?.ui?.cam ?? null;
+  let camVars = '', camCls = '';
+  if (cam) {
+    const a = cam.actor ? focusOn([cam.actor], pos) : null;
+    const tg = cam.targets?.length ? focusOn(cam.targets.map(x => x.name), pos) : null;
+    if (a && tg) { camCls = 'cam2'; camVars = `--ax:${a.x}%;--ay:${a.y}%;--az:${a.z};--tx:${tg.x}%;--ty:${tg.y}%;--tz:${tg.z}`; }
+    else if (a || tg) { const f = a ?? tg; camCls = 'cam1'; camVars = `--ax:${f.x}%;--ay:${f.y}%;--az:${f.z}`; }
+  }
+  const lead = foes.find(F => !F.down) ?? foes[0];
+  const moodId = lead?.types?.[0]?.id;
+  const units = [...allies.map(F => stageUnit(F, ctx, 'ally', pos[F.name], cam)), ...foes.map(F => stageUnit(F, ctx, 'enemy', pos[F.name], cam))].join('');
+  return `<div class="stg ${camCls}" style="--cd:${ctx?.camMs ?? 1300}ms;${moodId ? `--mt:${typeHex(moodId)};` : ''}">
+      <div class="stg-world" style="${camVars}"><div class="stg-back"></div><div class="stg-floor"></div>${units}</div>
+      <div class="stg-hud"><span>아군 ${allies.filter(F => !F.down).length}/${allies.length}</span>${V.place ? `<span class="stg-where">${h(V.place)}</span>` : ''}<span>적 ${foes.filter(F => !F.down).length}/${foes.length}</span></div>
+    </div>${box}${V.banner ?? ''}`;
 }
 
 /** Skill details in the panel's own style (bottom sheet), from a skillCard() object. */

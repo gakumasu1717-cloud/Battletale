@@ -1675,6 +1675,31 @@ const pkSheet = (o, side = 'enemy') => C.normalizeSheet({ hp: 500, sp: 200, stat
   assert.equal(calls.length, 1);
 });
 
+/* 74 */ await test('전투 무대: 일러는 시트에만 저장 · 아군은 좌우반전 · 공격자→피격자 카메라와 포즈', async () => {
+  const PKU = await import(here + 'pkui.js');
+  const art = { idle: '/user/images/BattleTale/a.webp', attack: '/user/images/BattleTale/b.webp', hit: 'javascript:alert(1)', facing: 'left' };
+  const sh = C.normalizeSheet({ name: '레온', hp: 300, skills: ['사격: 물리 80'], sprites: art }, PROFILE, { side: 'ally' });
+  assert.deepEqual(sh.sprites, { idle: art.idle, attack: art.attack, facing: 'left' }, 'unsafe sources are dropped');
+  assert.equal(C.safeSprites({ attack: art.attack }), null, 'a standing picture is required');
+  const me = hero(); me.sprites = sh.sprites;
+  const foe = C.normalizeSheet({ name: '검은 코트', tier: 'C', hp: 9000, stats: { END: 10 }, skills: ['가만히: 강화'], sprites: art }, PROFILE, { side: 'enemy' });
+  const b = E.createBattle({ party: [me], enemies: [foe], profile: PROFILE, seed: 'stage' });
+  assert.ok(b.fighters.every(f => !f.sprites), 'stage art is not copied into the saved battle');
+  const V = { allies: b.fighters.filter(f => f.side === 'ally').map(f => PKU.vf(f, { side: 'ally' })), foes: b.fighters.filter(f => f.side === 'enemy').map(f => PKU.vf(f, { side: 'enemy' })) };
+  const ui = { cam: { actor: '검은 코트', targets: [{ name: V.allies[0].name, pose: 'hit' }], ko: [], color: '#fff' }, fx: { [V.allies[0].name]: [{ text: '-30', cls: 'dmg' }] } };
+  const html = PKU.stageScene(V, { ui, art: () => sh.sprites, camMs: 1200 });
+  assert.match(html, /class="stg cam2"/);
+  const unit = name => html.split('<div class="su ').find(x => x.includes(`data-v="${name}"`)) ?? '';
+  assert.match(unit(V.allies[0].name), /su-flip flip/, 'allies are mirrored');
+  assert.doesNotMatch(unit('검은 코트'), /su-flip flip/, 'enemies keep the picture as drawn');
+  assert.match(unit('검은 코트'), /p-atk/); assert.match(unit(V.allies[0].name), /p-hit/);
+  assert.match(unit('검은 코트'), /su-img attack/);
+  assert.doesNotMatch(html, /javascript:/);
+  // without art: portrait or emblem, no camera when nothing is playing
+  const plain = PKU.stageScene(V, { ui: {} });
+  assert.doesNotMatch(plain, /cam[12]/); assert.match(plain, /su-card/);
+});
+
 for (const [mark, name, err] of results) console.log(`${mark} ${name}${err ? `\n    ${err}` : ''}`);
 const failed = results.filter(r => r[0] === '✖').length;
 console.log(failed ? `\n${failed}개 실패` : `\n전부 통과 (${results.length}개)`);

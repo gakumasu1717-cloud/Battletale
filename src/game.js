@@ -1,6 +1,6 @@
 // Game controller: everything between "chat happened" and "engine resolved".
 // Kept free of SillyTavern globals so it can be tested with plain objects.
-import { normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, requestedSkillCap, toPoke, typesFor, typeName } from './catalog.js';
+import { safeSprites, normalizeProfile, setTypeSystem, normalizeSheet, normalizeSkill, inferSkill, parseSkillLine, skillLine, DEFAULT_PROFILE, tierOf, elementId, auditSheet, requestedSkillCap, toPoke, typesFor, typeName } from './catalog.js';
 import { THREAT_LABEL, threatOf, createBattle } from './engine.js';
 import { parseBattleBody, parseChange, sheetFromStatFields, stripBlocks } from './parse.js';
 import { ruleMessages, setupMessages, briefText, sheetMessages, kitMessages, forgeMessages, planMessages, commandMessages, sheetText, turnPrompt, startPrompt, idlePrompt, worldPrompt, summaryPrompt, panelWaitPrompt } from './prompts.js';
@@ -278,6 +278,7 @@ export function applyPlayerSheet(s, deps, raw, { statFields = deps.statFields?.(
   sheet.id = 'player';
   sheet.isPlayer = true;
   if (s.player?.portrait && !sheet.portrait) sheet.portrait = s.player.portrait;
+  if (s.player?.sprites && !sheet.sprites) sheet.sprites = s.player.sprites;
   carryCoded(s.player, sheet);
   const audit = auditSheet(sheet, profile, { clampStats: !statFields, maxSkills });
   if (audit.notes.length) { deps.toast?.(`등급(${sheet.tier || '?'})에 맞게 조정: ${audit.notes.slice(0, 3).join(' · ')}${audit.notes.length > 3 ? ` 외 ${audit.notes.length - 3}건` : ''}`, 'info'); deps.trace?.('balance', `밸런스 조정 · ${sheet.name}`, audit.notes.join('\n')); }
@@ -295,7 +296,7 @@ const nk = x => norm(String(x ?? '').replace(/[(（\[][^)）\]]*[)）\]]/g, ''))
 const CODEX_VERSIONS = 5;
 /** What makes two sheets "different builds" (pictures and on/off switches do not count). */
 const sheetSig = sh => JSON.stringify([sh?.tier, sh?.maxHp, sh?.maxSp, sh?.stats, sh?.elements, sh?.ptypes, sh?.skills, sh?.trait, sh?.customPassive?.code ?? '']);
-const lightSheet = sh => { const c = clone(sh); delete c.portrait; return c; };
+const lightSheet = sh => { const c = clone(sh); delete c.portrait; delete c.sprites; return c; };
 /** The character dex over one world's book: active list, archive, kept versions. */
 export function codexBook(book, saveSettings = () => {}) {
   const all = () => Object.values(book()).sort((a, b) => a.name.localeCompare(b.name));
@@ -320,7 +321,7 @@ export function codexBook(book, saveSettings = () => {}) {
       const v = e?.versions?.[index];
       if (!v?.sheet) return null;
       const rest = e.versions.filter((_, i) => i !== index);
-      const sheet = { ...clone(v.sheet), codexId: id, ...(e.sheet?.portrait ? { portrait: e.sheet.portrait } : {}) };
+      const sheet = { ...clone(v.sheet), codexId: id, ...(e.sheet?.portrait ? { portrait: e.sheet.portrait } : {}), ...(e.sheet?.sprites ? { sprites: e.sheet.sprites } : {}) };
       book()[id] = { ...e, name: sheet.name ?? e.name, sheet, concept: v.concept || e.concept, updated: Date.now(),
         versions: [{ at: Date.now(), concept: e.concept ?? '', sheet: lightSheet(e.sheet) }, ...rest].slice(0, CODEX_VERSIONS) };
       saveSettings();
@@ -348,6 +349,7 @@ export function importedEntries(text) {
     const sheet = JSON.parse(JSON.stringify(sh));
     for (const k of ['codexId', 'side', 'id', '__proto__', 'constructor']) delete sheet[k];
     if (okPic(sheet.portrait)) sheet.portrait = { src: sheet.portrait.src, pixel: !!sheet.portrait.pixel }; else delete sheet.portrait;
+    const spr = safeSprites(sheet.sprites); if (spr) sheet.sprites = spr; else delete sheet.sprites;
     out.push({ name, concept: String(e.concept ?? '').slice(0, 400), role: String(e.role ?? '').replace(/[^a-z]/gi, '').slice(0, 12), archived: !!e.archived, sheet });
   }
   if (!out.length) throw new Error('불러올 캐릭터가 없어요.');

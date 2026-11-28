@@ -1,5 +1,5 @@
 // BattleTale — objective turn-based combat for any roleplay, in any chat.
-import { rulesFromText, normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, applyTierPreset, requestedSkillCap } from './src/catalog.js';
+import { rulesFromText, normalizeProfile, normalizeSheet, normalizeSkill, inferSkill, setTypeSystem, safePortrait, safeSprites, SPRITE_SLOTS, applyTierPreset, requestedSkillCap } from './src/catalog.js';
 import { hashStr, clone } from './src/util.js';
 import { findBlocks, stripBlocks, parseBattleBody, parseChange, readStatTag, safeTag, statedRankIn, detectStatTag } from './src/parse.js';
 import { auxReady, callAux, auxJson, listModels, gatherLore, matchLore, personEntries, characterText, personaInfo, recentScene, mentions, fitInput, rememberActivated, forgetActivated } from './src/assist.js';
@@ -26,7 +26,7 @@ const DEFAULTS = {
   length: 1, dealMul: 1, takeMul: 1, reviveAfter: true, autoSend: false, showCards: true, cardsOpen: false, showRolls: true, hideBlocks: true,
   depth: 0, attackName: '기본 공격', profileCache: {},
   timingMode: 'off', modes: { party: true, duel: true, stealth: true }, showThreat: true,
-  playMode: 'panel', autoPlay: '1300', fightGuard: true, stateWatch: 'auto', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary', previewBeforeStart: true,
+  playMode: 'panel', autoPlay: '1300', battleView: 'stage', fightGuard: true, stateWatch: 'auto', ruleSet: 'world', autoRegister: true, codex: {}, resultDetail: 'summary', previewBeforeStart: true,
 };
 
 const ctx = () => SillyTavern.getContext();
@@ -573,7 +573,9 @@ const panelApi = {
     return startFrom(index, { hint: '' });
   },
   command: putCommand,
-  modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
+  modeAct, prepDefense, sendResult, setSetting, avatars: avatarChoices, setPortrait, setSprite, setSpriteImage, spritesOf,
+  // Stage art for a fighter in battle: the player's, or its dex entry's (companions and named enemies).
+  stageArt: f => (f?.isPlayer ? state()?.player?.sprites : f?.codexId ? spritesOf(f.codexId) : null) ?? null, profiles: connectionProfiles, auxTest: auxTestRun, auxModels: auxModelList, trace: () => TRACE, clearTrace: () => { TRACE.length = 0; refreshPanel(); },
   tokenStats: () => ensureTokenStats(state()),
   clearTokenStats: async () => { const s = state(); if (!s) return; resetTokenStats(s); await saveState(); refreshPanel(); toast('이 채팅의 토큰 기록을 초기화했어요.'); },
   // Same encounter again from the pre-battle state (only before the result went to the story).
@@ -694,6 +696,7 @@ const panelApi = {
       if (aliases) raw.aliases = aliases;
       const old = prev ?? deps().codex.list().find(x => x.name === name);
       if (old?.sheet?.portrait && !raw.portrait) raw.portrait = old.sheet.portrait;
+      if (old?.sheet?.sprites && !raw.sprites) raw.sprites = old.sheet.sprites;
       const kitIdea = raw.kit;
       const e = registerCharacter(s, deps(), raw, { side: 'enemy', locked: old?.locked ?? false, maxSkills });
       // A text revision keeps the coded effects; a fresh build or a feedback rebuild gets a newly coded kit.
@@ -1303,6 +1306,54 @@ async function setPortrait(target, value) {
     for (const comp of s?.companions ?? []) if (comp.codexId === id) comp.portrait = p;
   }
   await saveState(); afterChange();
+}
+
+/**
+ * Put a picture into SillyTavern's own image folder (user/images/BattleTale) so the settings file only keeps a path.
+ * Returns the served path, or null when the server refused (the caller then keeps a smaller inline copy).
+ */
+async function uploadImage(dataUrl, name) {
+  const m = /^data:image\/(png|jpeg|webp|gif);base64,(.+)$/.exec(String(dataUrl ?? ''));
+  if (!m) return null;
+  try {
+    const headers = ctx().getRequestHeaders?.() ?? { 'Content-Type': 'application/json' };
+    const res = await fetch('/api/images/upload', { method: 'POST', headers, body: JSON.stringify({ image: m[2], format: m[1] === 'jpeg' ? 'jpg' : m[1], ch_name: 'BattleTale', filename: name }) });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const p = String(j?.path ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
+    return p ? `/${p}` : null;
+  } catch { return null; }
+}
+
+/** Every sheet that shows this character on the battle stage: the player, or a dex entry (+ its roster/companion copies). */
+async function setSprite(target, change) {
+  const s = state();
+  const apply = cur => safeSprites(change({ ...(cur ?? {}) }));
+  if (target === 'player') { if (!s?.player) return; const v = apply(s.player.sprites); if (v) s.player.sprites = v; else delete s.player.sprites; }
+  else if (String(target).startsWith('codex:')) {
+    const id = target.slice(6);
+    const c = deps().codex; const e = c.list().find(x => x.id === id); if (!e) return;
+    const v = apply(e.sheet.sprites);
+    const sheet = { ...e.sheet }; if (v) sheet.sprites = v; else delete sheet.sprites;
+    c.put({ ...e, sheet });
+  }
+  await saveState(); afterChange();
+}
+async function setSpriteImage(target, slot, dataUrl, smallUrl = dataUrl) {
+  if (!SPRITE_SLOTS.includes(slot)) return;
+  if (slot !== 'idle' && !spritesOf(target)?.idle) return toast('기본 스탠딩을 먼저 넣어 주세요.', 'warning');
+  const name = `bt_${hashStr(`${target}:${slot}:${Date.now()}`)}`;
+  const path = await uploadImage(dataUrl, name);
+  if (!path) dataUrl = smallUrl;
+  if (!path && dataUrl.length > 700000) return toast('이미지가 너무 커서 저장하지 못했어요. 더 작은 그림을 써 주세요.', 'warning');
+  if (!path) toast('서버 이미지 폴더에 올리지 못해서 설정 파일에 작게 저장했어요.', 'info');
+  return setSprite(target, cur => ({ ...cur, [slot]: path ?? dataUrl }));
+}
+function spritesOf(target) {
+  const s = state();
+  if (target === 'player') return s?.player?.sprites ?? null;
+  const id = String(target).startsWith('codex:') ? target.slice(6) : target;
+  return deps().codex.list().find(x => x.id === id)?.sheet?.sprites ?? null;
 }
 
 function connectionProfiles() {
